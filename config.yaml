@@ -1,0 +1,8 @@
+provider_uri: "~/.qlib/qlib_data/us_data"
+region: us
+exp_manager:
+    class: "MLflowExpManager"
+    module_path: "qlib.workflow.expm"
+    kwargs:
+        uri: "file:///app/mlruns"
+        default_exp_name: "Experiment"

@@ -1,0 +1,19 @@
+services:
+  qlib:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - qlib_data:/root/.qlib
+      - mlruns:/app/mlruns
+    ports:
+      - "8888"
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true
+
+volumes:
+  qlib_data:
+  mlruns:
