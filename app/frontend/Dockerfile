@@ -4,7 +4,8 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY app/frontend/package.json app/frontend/package-lock.json* ./
-RUN npm ci || npm install --legacy-peer-deps
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci || npm install --legacy-peer-deps
 
 # ─── build ──────────────────────────────────────────────────────
 FROM node:20-alpine AS build
@@ -18,7 +19,8 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY app/frontend/ ./
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache \
+    npm run build
 
 # ─── runtime ────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime

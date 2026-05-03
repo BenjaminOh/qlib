@@ -1,8 +1,41 @@
+# Python cruft
 __pycache__
 *.pyc
 *.pyo
 *.pyd
 .Python
-.env
-.git
+*.egg-info
+.pytest_cache
+.mypy_cache
 
+# Env / secrets
+.env
+.env.*
+!.env.prod.example
+
+# Git / OS
+.git
+.gitignore
+.DS_Store
+
+# Frontend artifacts (build context bloat — they're rebuilt inside Docker)
+app/frontend/node_modules
+app/frontend/.next
+app/frontend/out
+app/frontend/coverage
+
+# Heavy dirs unused at runtime (data, examples, tests, docs, ML artifacts)
+data/
+examples/
+tests/
+docs/
+mlruns/
+catboost_info/
+workspace/
+*.sqlite
+*.log
+
+# IDE / temp
+.vscode
+.idea
+*.swp

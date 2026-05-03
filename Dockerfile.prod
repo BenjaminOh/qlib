@@ -18,20 +18,27 @@ RUN apt-get update && \
 ARG SETUPTOOLS_SCM_PRETEND_VERSION=0.9.7
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
+# Layer ordering is tuned for cache hit rate on Jenkins:
+#   1) build prerequisites (almost never change) → cached forever
+#   2) FastAPI deps from requirements.txt (changes occasionally)
+#   3) qlib package + Cython compile (changes per commit, but pip wheel
+#      downloads are reused from the BuildKit cache mount)
+# `make prerequisite` runs the .pyx -> .cpp -> .so pipeline; direct
+# `cython --cplus` only does .pyx -> .cpp.
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel && \
+    pip install cython numpy
+
+COPY app/api/requirements.txt ./app/api/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r app/api/requirements.txt
+
 COPY pyproject.toml setup.py MANIFEST.in Makefile ./
 COPY qlib/ ./qlib/
 COPY scripts/ ./scripts/
-COPY app/api/requirements.txt ./app/api/requirements.txt
-
-# `make prerequisite` runs the .pyx -> .cpp -> .so pipeline (numpy include
-# path + setuptools build_ext --inplace). Direct `cython --cplus` only does
-# .pyx -> .cpp and the resulting Python imports fail with "No module named
-# qlib.data._libs.rolling".
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir cython numpy && \
-    make prerequisite && \
-    pip install --no-cache-dir . && \
-    pip install --no-cache-dir -r app/api/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    make prerequisite && pip install .
 
 
 # ─── Stage 2: runtime ───────────────────────────────────────────

@@ -91,14 +91,18 @@ if [ -n "${IMAGE_TAG}" ] && [ "${IMAGE_TAG}" != "local" ]; then
   echo "📥 Registry에서 이미지 pull (IMAGE_TAG=${IMAGE_TAG})..."
   docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} pull api web
 else
-  echo "📦 Docker 이미지 순차 빌드 중..."
-  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} build api
-  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} build web
+  echo "📦 Docker 이미지 병렬 빌드 중 (api + web)..."
+  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} build --parallel api web
 fi
 
 # redis is shared across slots (qlib_redis container, not per-color).
-# Bring it up first; idempotent if already running.
+# `container_name: qlib_redis` is fixed in compose; compose projects
+# (qlib-blue / qlib-green) differ. So when target color flips, the existing
+# qlib_redis container is owned by the OLD slot's project and the new slot's
+# `up -d redis` hits a name conflict. Solution: tear down qlib_redis first
+# (the host volume /home/qlib/data/redis preserves state across recreates).
 echo "🧱 redis 의존성 확인..."
+docker rm -f qlib_redis 2>/dev/null || true
 docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} up -d redis
 
 # Critical: ONLY ONE scheduler may run at a time (Celery beat singleton).
