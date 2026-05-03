@@ -157,7 +157,8 @@ services:
       context: .
       dockerfile: app/frontend/Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://qlib.tmanager.kr/api}
+        # NEXT_PUBLIC_API_URL is hostname-only — api.ts already prefixes /api/v1/...
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://qlib.tmanager.kr}
         BUILD_TIME: "${BUILD_TIME:-unknown}"
         GIT_COMMIT: "${GIT_COMMIT:-unknown}"
     container_name: qlib_web_${COLOR}
