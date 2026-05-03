@@ -7,13 +7,86 @@ services:
       - .:/app
       - qlib_data:/root/.qlib
       - mlruns:/app/mlruns
+      - pip_cache:/root/.cache/pip
     ports:
-      - "8888"
+      - "8888:8888"
+      - "5050:5000"
     environment:
       - PYTHONUNBUFFERED=1
     stdin_open: true
     tty: true
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: >
+      uvicorn app.api.main:app --host 0.0.0.0 --port 5001 --reload
+    volumes:
+      - .:/app
+      - qlib_data:/root/.qlib
+      - mlruns:/app/mlruns
+      - pip_cache:/root/.cache/pip
+    ports:
+      - "5001:5001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - QLIB_API_PROVIDER_URI=/root/.qlib/qlib_data/kr_data
+      - QLIB_API_CELERY_BROKER_URL=redis://redis:6379/0
+      - QLIB_API_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - QLIB_API_CORS_ORIGINS=["http://localhost:5002"]
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: >
+      celery -A app.api.workers.celery_app worker
+      --loglevel=info --concurrency=4 --pool=prefork
+    volumes:
+      - .:/app
+      - qlib_data:/root/.qlib
+      - mlruns:/app/mlruns
+      - pip_cache:/root/.cache/pip
+    environment:
+      - PYTHONUNBUFFERED=1
+      - QLIB_API_PROVIDER_URI=/root/.qlib/qlib_data/kr_data
+      - QLIB_API_CELERY_BROKER_URL=redis://redis:6379/0
+      - QLIB_API_CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    command: sh -c "npm install && npm run dev -- -p 5000"
+    volumes:
+      - ./app/frontend:/app/frontend
+      - frontend_node_modules:/app/frontend/node_modules
+    ports:
+      - "5002:5000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:5001
+
 volumes:
   qlib_data:
   mlruns:
+  pip_cache:
+  redis_data:
+  frontend_node_modules:

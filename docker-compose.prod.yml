@@ -1,0 +1,189 @@
+# Production compose for qlib (Blue/Green slots managed by deploy.sh).
+#
+# Three Python services share one image (Dockerfile.prod):
+#   - api      : FastAPI on :5001
+#   - worker   : Celery worker (no port, talks to redis)
+#   - scheduler: Celery beat (cron-like, drives 15:35 / 09:00 / 09:30 / 15:40 KST tasks)
+#
+# One Node service:
+#   - web      : Next.js standalone on :3000
+#
+# Shared dependencies are pulled from existing rocky-monitor containers:
+#   - redis: re-used or new instance — set REDIS_URL accordingly
+#   - postgres: optional. SQLite default (LIVE_DB_URL=sqlite:///...) works for paper trading.
+
+services:
+  # qlib 전용 redis (Celery broker + result backend).
+  # Blue/Green 슬롯이 같은 redis를 공유 — 배포 중에도 큐 상태 유지.
+  redis:
+    image: redis:7-alpine
+    container_name: qlib_redis
+    restart: unless-stopped
+    volumes:
+      - /home/qlib/data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    image: 127.0.0.1:5000/qlib-api:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      args:
+        BUILD_TIME: "${BUILD_TIME:-unknown}"
+        GIT_COMMIT: "${GIT_COMMIT:-unknown}"
+    container_name: qlib_api_${COLOR}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      QLIB_API_PROVIDER_URI: /root/.qlib/qlib_data/kr_data
+      QLIB_API_CELERY_BROKER_URL: ${REDIS_URL:-redis://qlib_redis:6379/0}
+      QLIB_API_CELERY_RESULT_BACKEND: ${REDIS_URL:-redis://qlib_redis:6379/0}
+      QLIB_API_CORS_ORIGINS: '${CORS_ORIGINS:-["https://qlib.tmanager.kr"]}'
+      QLIB_API_KIS_ENV: ${KIS_ENV:-paper}
+      QLIB_API_KIS_APP_KEY: ${KIS_APP_KEY:-}
+      QLIB_API_KIS_APP_SECRET: ${KIS_APP_SECRET:-}
+      QLIB_API_KIS_ACCOUNT_NO: ${KIS_ACCOUNT_NO:-}
+      QLIB_API_LIVE_DB_URL: ${LIVE_DB_URL:-sqlite:////app/db/live.sqlite}
+      TZ: Asia/Seoul
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "5001"]
+    volumes:
+      - /home/qlib/data/qlib:/root/.qlib
+      - /home/qlib/data/db:/app/db
+    ports:
+      - "${API_PORT}:5001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:5001/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  worker:
+    image: 127.0.0.1:5000/qlib-api:${IMAGE_TAG:-latest}  # same image
+    container_name: qlib_worker_${COLOR}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      QLIB_API_PROVIDER_URI: /root/.qlib/qlib_data/kr_data
+      QLIB_API_CELERY_BROKER_URL: ${REDIS_URL:-redis://qlib_redis:6379/0}
+      QLIB_API_CELERY_RESULT_BACKEND: ${REDIS_URL:-redis://qlib_redis:6379/0}
+      QLIB_API_KIS_ENV: ${KIS_ENV:-paper}
+      QLIB_API_KIS_APP_KEY: ${KIS_APP_KEY:-}
+      QLIB_API_KIS_APP_SECRET: ${KIS_APP_SECRET:-}
+      QLIB_API_KIS_ACCOUNT_NO: ${KIS_ACCOUNT_NO:-}
+      QLIB_API_LIVE_DB_URL: ${LIVE_DB_URL:-sqlite:////app/db/live.sqlite}
+      TZ: Asia/Seoul
+    command:
+      - celery
+      - -A
+      - app.api.workers.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=2
+      - --pool=prefork
+    volumes:
+      - /home/qlib/data/qlib:/root/.qlib
+      - /home/qlib/data/db:/app/db
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  scheduler:
+    # Beat must be a singleton to avoid double-firing the live tasks.
+    # We deploy Blue/Green for api+worker+web, but only ONE scheduler runs at
+    # any time (deploy.sh stops the old slot's scheduler before starting the new).
+    image: 127.0.0.1:5000/qlib-api:${IMAGE_TAG:-latest}
+    container_name: qlib_scheduler_${COLOR}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      QLIB_API_PROVIDER_URI: /root/.qlib/qlib_data/kr_data
+      QLIB_API_CELERY_BROKER_URL: ${REDIS_URL:-redis://qlib_redis:6379/0}
+      QLIB_API_CELERY_RESULT_BACKEND: ${REDIS_URL:-redis://qlib_redis:6379/0}
+      QLIB_API_LIVE_DB_URL: ${LIVE_DB_URL:-sqlite:////app/db/live.sqlite}
+      TZ: Asia/Seoul
+    command:
+      - celery
+      - -A
+      - app.api.workers.celery_app
+      - beat
+      - --loglevel=info
+      - --schedule=/app/db/celerybeat-schedule
+    volumes:
+      - /home/qlib/data/db:/app/db
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  web:
+    image: 127.0.0.1:5000/qlib-web:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: app/frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://qlib.tmanager.kr/api}
+        BUILD_TIME: "${BUILD_TIME:-unknown}"
+        GIT_COMMIT: "${GIT_COMMIT:-unknown}"
+    container_name: qlib_web_${COLOR}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      TZ: Asia/Seoul
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "${WEB_PORT}:3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -51,3 +51,20 @@ tags
 ./pretrain
 .idea/
 .aider*
+
+# user workspace (personal scripts/notebooks)
+workspace/
+!workspace/.gitkeep
+
+# ── qlib-trader local artifacts ───────────────────────────────
+.DS_Store
+catboost_info/
+docs/.bkit-memory.json
+docs/.pdca-status.json
+app/api/db/*.sqlite
+app/frontend/.next/
+app/frontend/node_modules/
+data/kr_csv/
+.env.blue
+.env.green
+.env.prod

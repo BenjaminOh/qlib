@@ -1,0 +1,89 @@
+"""Celery application configuration for background backtest jobs."""
+
+from celery import Celery
+from celery.signals import worker_process_init
+
+from ..config import settings
+
+celery_app = Celery(
+    "qlib_worker",
+    broker=settings.celery_broker_url,
+    backend=settings.celery_result_backend,
+    include=["app.api.workers.tasks"],
+)
+
+celery_app.conf.update(
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    task_track_started=True,
+    worker_max_tasks_per_child=5,  # recycle workers to free qlib memory
+    timezone="Asia/Seoul",  # crontab below uses KST
+    enable_utc=False,
+    # Concurrency is set on the worker CLI (--concurrency=N). Using prefork
+    # gives each child its own qlib config singleton, so multiple backtests
+    # can run in parallel without mutating shared state.
+)
+
+
+# ─── Live trading beat schedule (KST) ──────────────────────────────
+# Skip Sat/Sun via day_of_week='mon-fri'. Holiday handling is done inside
+# each task by checking the qlib calendar — if today isn't a trading day
+# the task no-ops cheaply.
+from celery.schedules import crontab  # noqa: E402
+
+celery_app.conf.beat_schedule = {
+    "live-signal-after-close": {
+        "task": "live_signal",
+        "schedule": crontab(hour=15, minute=35, day_of_week="mon-fri"),
+    },
+    "live-orders-at-open": {
+        "task": "live_orders",
+        "schedule": crontab(hour=9, minute=0, day_of_week="mon-fri"),
+    },
+    "live-sync-mid-morning": {
+        "task": "live_sync",
+        "schedule": crontab(hour=9, minute=30, day_of_week="mon-fri"),
+    },
+    "live-sync-after-close": {
+        "task": "live_sync",
+        "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
+    },
+}
+
+
+_STRATEGY_CLASSES = [
+    ("qlib.contrib.strategy.signal_strategy", "TopkDropoutStrategy"),
+    ("qlib.contrib.strategy.signal_strategy", "EnhancedIndexingStrategy"),
+    ("qlib.contrib.strategy.cost_control", "SoftTopkStrategy"),
+    ("qlib.contrib.strategy.rule_strategy", "TWAPStrategy"),
+    ("qlib.contrib.strategy.rule_strategy", "SBBStrategyEMA"),
+]
+_MODEL_CLASSES = [
+    ("qlib.contrib.model.gbdt", "LGBModel"),
+    ("qlib.contrib.model.xgboost", "XGBModel"),
+    ("qlib.contrib.model.catboost_model", "CatBoostModel"),
+    ("qlib.contrib.model.linear", "LinearModel"),
+]
+
+
+@worker_process_init.connect
+def init_qlib_in_worker(**kwargs):
+    """Initialize qlib and verify catalog classes resolve at boot time."""
+    from ..core.qlib_manager import ensure_qlib_initialized
+    ensure_qlib_initialized()
+
+    # Ensure the live-trading SQLite/Postgres tables exist before tasks run.
+    try:
+        from ..db import init_db
+        init_db()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[worker] live DB init failed: {exc}")
+
+    import importlib
+    for module_path, cls in _STRATEGY_CLASSES + _MODEL_CLASSES:
+        try:
+            module = importlib.import_module(module_path)
+            getattr(module, cls)
+        except Exception as exc:  # noqa: BLE001 - we want every miss surfaced
+            print(f"[worker] catalog import failed: {module_path}.{cls}: {exc}")

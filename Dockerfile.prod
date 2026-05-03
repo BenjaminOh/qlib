@@ -1,0 +1,72 @@
+# Multi-stage production image for the qlib API + Celery worker + Celery beat.
+# The same image is used by all three services; the docker-compose `command:`
+# field decides which process to run.
+#
+# Stage 1: build the Cython extensions and resolve all wheels.
+# Stage 2: slim runtime that only contains compiled .so files + site-packages.
+
+# ─── Stage 1: build ─────────────────────────────────────────────
+FROM python:3.11-slim AS build
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc g++ make build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+ARG SETUPTOOLS_SCM_PRETEND_VERSION=0.9.7
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+
+COPY pyproject.toml setup.py setup.cfg* MANIFEST.in* ./ 2>/dev/null || true
+COPY qlib/ ./qlib/
+COPY scripts/ ./scripts/
+COPY app/api/requirements.txt ./app/api/requirements.txt
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir cython numpy && \
+    cd qlib/data/_libs && \
+    cython --cplus rolling.pyx && cython --cplus expanding.pyx && \
+    cd /app && \
+    pip install --no-cache-dir . && \
+    pip install --no-cache-dir -r app/api/requirements.txt
+
+
+# ─── Stage 2: runtime ───────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Build args propagated for runtime introspection (matches likeweb/pm pattern).
+ARG BUILD_TIME=unknown
+ARG GIT_COMMIT=unknown
+ENV BUILD_TIME=${BUILD_TIME} \
+    GIT_COMMIT=${GIT_COMMIT} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Asia/Seoul
+
+# Minimal runtime libs (libgomp for LightGBM, libpq for PostgreSQL).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libgomp1 libpq5 curl ca-certificates tzdata && \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pull installed packages + compiled .so files from the build stage.
+COPY --from=build /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=build /usr/local/bin /usr/local/bin
+COPY --from=build /app/qlib /app/qlib
+COPY --from=build /app/scripts /app/scripts
+
+# Application code (only what's needed at runtime).
+COPY app/api ./app/api
+COPY app/__init__.py ./app/__init__.py 2>/dev/null || true
+
+# Stock-name mapping must travel with the image so live UI shows names.
+COPY app/api/core/kr_stock_names.json ./app/api/core/kr_stock_names.json
+
+EXPOSE 5001
+
+# Default command — overridden by docker-compose for the worker / beat services.
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "5001"]
