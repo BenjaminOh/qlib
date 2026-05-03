@@ -10,7 +10,7 @@ pipeline {
     agent none
 
     environment {
-        REPO_URL   = 'git@github.com:BenjaminOh/qlib.git'
+        REPO_URL   = 'https://github.com/BenjaminOh/qlib.git'
         APP_DIR    = '/home/qlib'
         REMOTE     = 'root@112.175.30.76'                        // rocky-monitor host
         REGISTRY   = '127.0.0.1:5000'
@@ -81,23 +81,24 @@ pipeline {
             steps {
                 script {
                     def branchName = env.GIT_BRANCHSTRIP
-                    sshagent(credentials: ['github-key-benjaminoh']) {
-                        sh """
-                            set -e
-                            if [ ! -d "${env.APP_DIR}/.git" ]; then
-                                echo "📂 최초 클론: ${env.APP_DIR}"
-                                mkdir -p "${env.APP_DIR}"
-                                git clone ${env.REPO_URL} "${env.APP_DIR}"
-                            fi
+                    // Public repo over HTTPS — no credential helper needed.
+                    sh """
+                        set -e
+                        if [ ! -d "${env.APP_DIR}/.git" ]; then
+                            echo "📂 최초 클론: ${env.APP_DIR}"
+                            mkdir -p "${env.APP_DIR}"
+                            git clone ${env.REPO_URL} "${env.APP_DIR}"
+                        fi
 
-                            cd ${env.APP_DIR}
-                            git fetch origin
-                            git reset --hard origin/${branchName}
-                            git clean -fd --exclude=qlib_data/ --exclude=db/
-                            chmod +x deploy.sh
-                            IMAGE_TAG=${BUILD_NUMBER} ./deploy.sh
-                        """
-                    }
+                        cd ${env.APP_DIR}
+                        # Make sure local origin is HTTPS too (in case it was cloned via SSH earlier)
+                        git remote set-url origin ${env.REPO_URL}
+                        git fetch origin
+                        git reset --hard origin/${branchName}
+                        git clean -fd --exclude=data/
+                        chmod +x deploy.sh
+                        IMAGE_TAG=${BUILD_NUMBER} ./deploy.sh
+                    """
                 }
             }
         }
