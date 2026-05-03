@@ -18,16 +18,18 @@ RUN apt-get update && \
 ARG SETUPTOOLS_SCM_PRETEND_VERSION=0.9.7
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
-COPY pyproject.toml setup.py MANIFEST.in ./
+COPY pyproject.toml setup.py MANIFEST.in Makefile ./
 COPY qlib/ ./qlib/
 COPY scripts/ ./scripts/
 COPY app/api/requirements.txt ./app/api/requirements.txt
 
+# `make prerequisite` runs the .pyx -> .cpp -> .so pipeline (numpy include
+# path + setuptools build_ext --inplace). Direct `cython --cplus` only does
+# .pyx -> .cpp and the resulting Python imports fail with "No module named
+# qlib.data._libs.rolling".
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir cython numpy && \
-    cd qlib/data/_libs && \
-    cython --cplus rolling.pyx && cython --cplus expanding.pyx && \
-    cd /app && \
+    make prerequisite && \
     pip install --no-cache-dir . && \
     pip install --no-cache-dir -r app/api/requirements.txt
 
