@@ -30,9 +30,11 @@ ENV NODE_ENV=production \
     TZ=Asia/Seoul
 
 # Standalone output bundles a minimal node_modules + server.js.
+# Our app has no /public assets, so we only ship the standalone runtime
+# and the static chunks. Add `COPY --from=build /app/public ./public`
+# in the future if static assets are introduced.
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public 2>/dev/null || true
 
 EXPOSE 3000
 CMD ["node", "server.js"]
