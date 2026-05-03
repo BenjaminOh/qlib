@@ -9,7 +9,7 @@
 | Git remote | `git@github.com:BenjaminOh/qlib.git` |
 | 라우팅 | `nginx-proxy → nginx-waf-blue` (rocky-monitor 기존 패턴 재사용) |
 | 포트 | Blue web `25022` / api `25023`, Green web `25024` / api `25025` (newsro 25011-12, mail-news 25021 직후 sequential) |
-| Registry | `127.0.0.1:5000/qlib-{api,web}` (build-agent 노드) |
+| Registry | (사용 안 함 — 호스트에서 직접 build) |
 | KIS | 미발급 → mock 모드로 시작 |
 
 권한 분담:
@@ -173,43 +173,37 @@ ssh -T git@github.com   # 인증 확인
 
 ---
 
-## 6. Jenkins 설정 (사용자 직접) — 10분
+## 6. Jenkins 설정 (사용자 직접) — 5분
 
-Jenkins UI (rocky-monitor:8080) 접속:
+이 서버는 **tennis-cms 패턴**을 그대로 따른다 — `agent any` + `deploy-key` SSH credential + 호스트 직접 build. Credential은 이미 등록돼 있으니 사용자는 Pipeline job만 만들면 끝.
 
-1. **Credentials**: 좌측 → Credentials → Global → Add
-   - Kind: SSH Username with private key
-   - ID: `github-key-benjaminoh`  ← Jenkinsfile에서 sshagent로 호출하는 값과 맞춰야 함
-   - Username: `git`
-   - Private Key: BenjaminOh 계정의 GitHub 등록 키
+Jenkins UI (http://112.175.30.76:8080 또는 https://jenkins.tmanager.kr) 접속:
 
-2. **Jenkinsfile의 credential 이름 맞추기** (Claude 처리):
-   - 현재 `'github-key-likeweb'` → `'github-key-benjaminoh'` 로 변경 필요
+1. **Credential 확인 (등록 안 되어 있으면 추가)**:
+   - 좌측 Credentials → Global → `deploy-key` 가 있는지 확인 (tennis-cms 가 같은 이름 사용 중)
+   - 없으면 Add: Kind = `SSH Username with private key`, ID = `deploy-key`, Username = `root`,
+     Private Key = `~/.ssh/id_ed25519` (rocky-monitor 의 root 키 또는 동등)
 
-3. **Pipeline 등록**: New Item → Pipeline
-   - Name: `qlib`
-   - Pipeline → Definition: Pipeline script from SCM
-   - SCM: Git, URL `git@github.com:BenjaminOh/qlib.git`, Credentials `github-key-benjaminoh`
-   - Branch: `*/main`
-   - Script Path: `Jenkinsfile`
+2. **Pipeline job 생성**:
+   - New Item → Name: `qlib` → Pipeline → OK
+   - Pipeline 섹션:
+     - Definition: **Pipeline script from SCM**
+     - SCM: Git, URL `https://github.com/BenjaminOh/qlib.git`
+     - Credentials: `- none -` (public repo)
+     - Branches to build: `*/main`
+     - Script Path: `Jenkinsfile`
    - Save
 
-4. **Build agent 라벨 확인**:
-   - Jenkinsfile은 `build-agent-135` 와 `build-agent` 라벨을 요구
-   - likeweb/pm 빌드와 동일 노드면 그대로
-   - 노드 라벨 다르면 Jenkinsfile 수정 필요 (Claude 처리)
-
-5. **첫 빌드**: "Build Now" 클릭
+3. **첫 빌드**: "Build Now" 클릭
 
 ---
 
 ## 7. 첫 배포 (Jenkins가 트리거)
 
-Jenkins가 다음을 자동 수행:
-1. Git pull (build-agent-135)
-2. `docker compose -f docker-compose.prod.yml build --parallel api web`
-3. `docker push 127.0.0.1:5000/qlib-{api,web}:{BUILD_NUMBER,latest}`
-4. SSH로 rocky-monitor → `cd /home/qlib && IMAGE_TAG=N ./deploy.sh`
+Jenkins가 수행:
+1. SSH Pipeline plugin → `172.17.0.1` (Docker bridge → host) 로 접속
+2. `cd /home/qlib && git fetch && git reset --hard origin/main && ./deploy.sh`
+3. `deploy.sh`가 `IMAGE_TAG` 미지정이라 자동으로 호스트에서 직접 build → 컨테이너 가동
 
 deploy.sh는:
 1. 활성 슬롯 감지 → 첫 배포는 Blue
@@ -285,6 +279,6 @@ docker compose -p qlib-blue -f docker-compose.prod.yml --env-file .env.blue \
 | **redis 부재** | Celery worker/beat 동작 불가 | docker-compose.prod.yml에 redis 서비스 1개 추가 (다음 turn) |
 | **scheduler singleton 1~3초 갭** | 평일 09:00·15:35 발주 시각에 배포는 위험 | deploy.sh에 시각 가드 추가 또는 운영 룰로 |
 | **Jenkins credential 이름** | `github-key-likeweb` → `github-key-benjaminoh` | Jenkinsfile 수정 |
-| **build-agent 라벨** | likeweb/pm용 라벨 그대로 사용 | 별 노드면 라벨 변경 |
+| **(해결됨)** | tennis-cms 패턴(`agent any` + `deploy-key`)으로 통일 |
 | **rollback 자동화 없음** | 헬스체크 실패 시 트래픽은 안 넘어가지만 컨테이너는 살아있음 | 수동 down |
 | **DB 백업 없음** | live.sqlite 손상 시 매매 이력 손실 | 야간 cron 추가 |
