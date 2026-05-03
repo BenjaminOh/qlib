@@ -4,9 +4,10 @@
 # the singleton-scheduler caveat.
 set -e
 
-if [ -f .env ]; then
-  set -a; source .env; set +a
-fi
+# .env is consumed by docker compose (env_file + ${VAR:-default} expansion),
+# not by this script. deploy.sh references no .env variable directly, so we
+# no longer source it — keeps the script robust against BOM/CRLF or any
+# unexpected first-line content in /home/qlib/.env.
 
 export PATH=$PATH:/usr/local/bin:/usr/bin
 export DOCKER_BUILDKIT=1
