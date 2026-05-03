@@ -18,7 +18,7 @@ RUN apt-get update && \
 ARG SETUPTOOLS_SCM_PRETEND_VERSION=0.9.7
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
-COPY pyproject.toml setup.py setup.cfg* MANIFEST.in* ./ 2>/dev/null || true
+COPY pyproject.toml setup.py MANIFEST.in ./
 COPY qlib/ ./qlib/
 COPY scripts/ ./scripts/
 COPY app/api/requirements.txt ./app/api/requirements.txt
@@ -61,7 +61,7 @@ COPY --from=build /app/scripts /app/scripts
 
 # Application code (only what's needed at runtime).
 COPY app/api ./app/api
-COPY app/__init__.py ./app/__init__.py 2>/dev/null || true
+COPY app/__init__.py ./app/__init__.py
 
 # Stock-name mapping must travel with the image so live UI shows names.
 COPY app/api/core/kr_stock_names.json ./app/api/core/kr_stock_names.json
