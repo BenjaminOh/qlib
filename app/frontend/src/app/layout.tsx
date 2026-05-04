@@ -44,6 +44,9 @@ export default function RootLayout({
               <Link href="/data" className="text-gray-600 hover:text-blue-600">
                 Market Data
               </Link>
+              <Link href="/guide" className="text-gray-600 hover:text-blue-600">
+                📖 매매 가이드
+              </Link>
             </div>
           </nav>
           <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>

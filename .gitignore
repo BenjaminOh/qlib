@@ -68,3 +68,6 @@ data/kr_csv/
 .env.blue
 .env.green
 .env.prod
+
+# nginx basic auth credentials (provisioned manually on host)
+infra/nginx/qlib.htpasswd
