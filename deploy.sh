@@ -158,6 +158,17 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${WAF_CONTAINER}$"; then
   exit 1
 fi
 
+# Sync nginx conf files from git source to nginx-waf mount path.
+# nginx-waf-blue mounts /root/deploy/nginx-waf/conf.d (not /home/qlib/infra/nginx),
+# and symlinks pointing into /home/qlib/... break inside the container because
+# that path isn't mounted in. So we copy the files instead — git pull updates
+# /home/qlib/infra/nginx/, and this step propagates the changes into the
+# nginx-waf-visible path before the reload below.
+echo "  📋 nginx conf 동기화 (git → nginx-waf 마운트)..."
+cp -f /home/qlib/infra/nginx/qlib.tmanager.kr.conf /root/deploy/nginx-waf/conf.d/qlib.tmanager.kr.conf
+cp -f /home/qlib/infra/nginx/qlib-url-blue.inc     /root/deploy/nginx-waf/conf.d/qlib-url-blue.inc
+cp -f /home/qlib/infra/nginx/qlib-url-green.inc    /root/deploy/nginx-waf/conf.d/qlib-url-green.inc
+
 # Atomic symlink swap inside the WAF container.
 docker exec ${WAF_CONTAINER} sh -c "ln -sfn ${WAF_CONF_DIR}/qlib-url-${TARGET_COLOR}.inc ${ACTIVE_INCLUDE}.tmp && mv -Tf ${ACTIVE_INCLUDE}.tmp ${ACTIVE_INCLUDE}"
 echo "  qlib-url.inc → qlib-url-${TARGET_COLOR}.inc"
