@@ -1,25 +1,39 @@
-"""Password hashing (bcrypt) + JWT signing/decoding (HS256)."""
+"""Password hashing (bcrypt) + JWT signing/decoding (HS256).
+
+Uses the bcrypt library directly (not passlib) because passlib 1.7.4 is
+incompatible with bcrypt 4.x+ — it misreads the version-detection API
+and raises spurious "password cannot be longer than 72 bytes" errors,
+even on short inputs. SHA-256 pre-hash sidesteps the real 72-byte limit
+that bcrypt enforces (long UTF-8 passwords with multi-byte glyphs would
+otherwise be rejected outright).
+"""
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from typing import Any
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
+from jose import jwt
 
 from ..config import settings
 
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _ALGO = "HS256"
 
 
+def _normalize(plain: str) -> bytes:
+    """SHA-256 pre-hash → 64 ASCII hex bytes, always under bcrypt's 72-byte cap."""
+    return sha256(plain.encode("utf-8")).hexdigest().encode("ascii")
+
+
 def bcrypt_hash(plain: str) -> str:
-    return _pwd_ctx.hash(plain)
+    return bcrypt.hashpw(_normalize(plain), bcrypt.gensalt()).decode("ascii")
 
 
 def bcrypt_verify(plain: str, hashed: str) -> bool:
     try:
-        return _pwd_ctx.verify(plain, hashed)
-    except Exception:  # noqa: BLE001 — passlib raises on malformed hash
+        return bcrypt.checkpw(_normalize(plain), hashed.encode("ascii"))
+    except (ValueError, TypeError):
+        # Malformed stored hash, encoding mismatch, etc. — treat as miss.
         return False
 
 
