@@ -122,7 +122,7 @@ def run_backtest(config: dict) -> dict:
             strategy=strategy_config,
             executor=executor_config,
             benchmark=benchmark,
-            account=config.get("account", 100_000_000),
+            account=config.get("account", 10_000_000),
             exchange_kwargs=exchange_kwargs,
         )
 

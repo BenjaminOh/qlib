@@ -36,7 +36,7 @@ const defaultConfig: BacktestRequest = {
   test_end: "2026-04-30",
   backtest_start: "2025-07-01",
   backtest_end: "2026-04-30",
-  account: 100_000_000,
+  account: 10_000_000,
   benchmark: null,
   freq: "day",
   exchange: {

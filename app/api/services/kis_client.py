@@ -196,8 +196,8 @@ class KISClient:
     def get_balance(self) -> AccountSnapshot:
         if self.is_mock:
             return AccountSnapshot(
-                cash=100_000_000.0,
-                total_eval=100_000_000.0,
+                cash=10_000_000.0,
+                total_eval=10_000_000.0,
                 holdings=[],
             )
         path = "/uapi/domestic-stock/v1/trading/inquire-balance"

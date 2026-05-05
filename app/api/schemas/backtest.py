@@ -46,7 +46,7 @@ class BacktestRequest(BaseModel):
     # Backtest
     backtest_start: str = "2023-07-01"
     backtest_end: str = "2024-12-31"
-    account: float = 100_000_000
+    account: float = 10_000_000
     benchmark: str | None = None
     freq: str = "day"
 
