@@ -6,11 +6,29 @@ import qlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .auth import auth_router
 from .config import settings
 from .routers import backtest, data, live
 from .schemas.common import HealthResponse
 
 _qlib_initialized = False
+
+
+def _seed_admin_user() -> None:
+    """Create the admin account on first startup. Idempotent."""
+    from .auth.security import bcrypt_hash
+    from .db import SessionLocal, User
+
+    with SessionLocal() as db:
+        existing = db.query(User).filter_by(username=settings.admin_username).first()
+        if existing:
+            return
+        db.add(User(
+            username=settings.admin_username,
+            password_hash=bcrypt_hash(settings.admin_password),
+        ))
+        db.commit()
+        print(f"[api] seeded admin user: {settings.admin_username}")
 
 
 @asynccontextmanager
@@ -24,6 +42,11 @@ async def lifespan(app: FastAPI):
         init_db()
     except Exception as exc:  # noqa: BLE001
         print(f"[api] live DB init failed: {exc}")
+    # Seed admin user (idempotent — only runs first time)
+    try:
+        _seed_admin_user()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[api] admin seed failed: {exc}")
     yield
 
 
@@ -42,6 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router, prefix="/api/v1")  # /login, /logout, /me — no auth required for /login
 app.include_router(data.router, prefix="/api/v1")
 app.include_router(backtest.router, prefix="/api/v1")
 app.include_router(live.router, prefix="/api/v1")

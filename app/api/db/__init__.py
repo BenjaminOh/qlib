@@ -5,7 +5,7 @@ the live UI need. Backtest results stay in Celery/Redis, not here.
 """
 
 from .session import Base, SessionLocal, engine, init_db
-from .models import Signal, Order, Fill, PositionSnapshot, DailyPnL
+from .models import DailyPnL, Fill, Order, PositionSnapshot, Signal, User
 
 __all__ = [
     "Base",
@@ -17,4 +17,5 @@ __all__ = [
     "Fill",
     "PositionSnapshot",
     "DailyPnL",
+    "User",
 ]

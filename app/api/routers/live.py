@@ -10,16 +10,17 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import desc
 
+from ..auth import get_current_user
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal, init_db,
 )
 from ..services.kis_client import get_kis_client
 
-router = APIRouter(prefix="/live", tags=["live"])
+router = APIRouter(prefix="/live", tags=["live"], dependencies=[Depends(get_current_user)])
 
 
 # ─── Schemas ────────────────────────────────────────────────────────

@@ -29,5 +29,15 @@ class Settings(BaseSettings):
     # Live trading database
     live_db_url: str = "sqlite:///./app/api/db/live.sqlite"
 
+    # Auth — JWT-based admin login. JWT secret MUST be overridden in production
+    # (default is a sentinel; rotating it invalidates all existing sessions).
+    # Admin user is seeded on first startup from these credentials if the users
+    # table is empty (idempotent — subsequent startups are no-ops).
+    jwt_secret: str = "CHANGE_ME_IN_PROD"
+    admin_username: str = "admin"
+    admin_password: str = "CHANGE_ME_IN_PROD"
+    session_cookie_name: str = "qlib_session"
+    session_max_age_seconds: int = 86400  # 24h
+
 
 settings = Settings()

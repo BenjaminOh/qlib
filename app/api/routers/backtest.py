@@ -6,7 +6,9 @@ import uuid
 from datetime import datetime, timezone
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from ..auth import get_current_user
 
 from ..schemas.backtest import (
     BacktestJobResponse,
@@ -29,7 +31,7 @@ from ..schemas.backtest import (
 from ..workers.celery_app import celery_app
 from ..workers.tasks import run_backtest_task
 
-router = APIRouter(prefix="/backtests", tags=["backtests"])
+router = APIRouter(prefix="/backtests", tags=["backtests"], dependencies=[Depends(get_current_user)])
 
 # In-memory job/group registries (swap to Redis/DB for production)
 _job_registry: dict[str, dict] = {}

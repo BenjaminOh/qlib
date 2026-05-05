@@ -3,8 +3,18 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001";
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     ...options,
   });
+  if (res.status === 401) {
+    // Session expired or never authenticated — bounce to login. Preserve the
+    // current location as `?next=` so we land back here after re-auth.
+    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      const next = window.location.pathname + window.location.search;
+      window.location.href = `/login?next=${encodeURIComponent(next)}`;
+    }
+    throw new Error("Authentication required");
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(body.detail || `API error ${res.status}`);

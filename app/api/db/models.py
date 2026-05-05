@@ -15,6 +15,16 @@ from sqlalchemy.orm import relationship
 from .session import Base
 
 
+class User(Base):
+    """Admin login account. Single-user model — multi-user / RBAC is out of scope."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(64), nullable=False, unique=True, index=True)
+    password_hash = Column(String(120), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Signal(Base):
     """Top-K model output captured every trading day after 15:30 close."""
     __tablename__ = "signals"

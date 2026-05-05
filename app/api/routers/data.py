@@ -1,7 +1,8 @@
 """Market data endpoints — wraps qlib.data.D APIs."""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..auth import get_current_user
 from ..core.kr_market import KR_MARKETS
 from ..schemas.data import (
     CalendarResponse,
@@ -12,7 +13,7 @@ from ..schemas.data import (
 )
 from ..services import data_service
 
-router = APIRouter(prefix="/data", tags=["data"])
+router = APIRouter(prefix="/data", tags=["data"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/calendar", response_model=CalendarResponse)
