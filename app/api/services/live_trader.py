@@ -12,6 +12,7 @@ SQLite/PostgreSQL store from `app.api.db`.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import traceback
 from datetime import date, datetime
@@ -20,6 +21,8 @@ from typing import Iterable
 
 import pandas as pd
 from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
 
 from ..config import settings
 from ..core import kr_universes
@@ -88,7 +91,32 @@ def generate_daily_signal(today: date | None = None) -> dict:
     model.fit(dataset)
     pred = model.predict(dataset)
 
+    # Diagnostics: surface what the model produced before picks extraction
+    log.info(
+        "generate_daily_signal: pred type=%s shape=%s index_levels=%s today=%s",
+        type(pred).__name__,
+        getattr(pred, "shape", None),
+        getattr(getattr(pred, "index", None), "nlevels", None),
+        today.isoformat(),
+    )
+    log.info(
+        "generate_daily_signal: segments train=(%s..%s) valid=(%s..%s) test=(%s..%s)",
+        "2023-04-01", train_end.isoformat(),
+        valid_start.isoformat(), valid_end.isoformat(),
+        valid_end.isoformat(), today.isoformat(),
+    )
+    if hasattr(pred, "index") and hasattr(pred.index, "get_level_values"):
+        try:
+            dts = pred.index.get_level_values(0)
+            log.info(
+                "generate_daily_signal: pred date range min=%s max=%s unique=%d",
+                dts.min(), dts.max(), len(set(dts)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("generate_daily_signal: pred index introspection failed: %s", exc)
+
     picks = _extract_recommended_picks(pred, LIVE_CONFIG) or []
+    log.info("generate_daily_signal: picks count=%d for today=%s", len(picks), today)
 
     with SessionLocal() as db:
         # Idempotent: nuke today's previous picks before re-inserting

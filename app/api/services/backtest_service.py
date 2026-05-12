@@ -1,9 +1,12 @@
 """Orchestrates qlib backtest execution — called from Celery tasks."""
 
 import json
+import logging
 import math
 import traceback
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -279,22 +282,34 @@ def _extract_recommended_picks(pred, config: dict) -> list | None:
 
     These are what the strategy *would* hold the next session if you kept
     running it in production.
+
+    Logs at every early-return / failure point. Previously the entire body
+    was wrapped in `except: return None`, which silently produced picks=0
+    in the live signal pipeline whenever anything went wrong.
     """
     try:
         if pred is None:
+            log.warning("_extract_recommended_picks: pred is None")
             return None
         # pred is a Series with MultiIndex (datetime, instrument).
         # Some models return a DataFrame with a single 'score' column.
         if hasattr(pred, "columns"):
             if len(pred.columns) == 0:
+                log.warning("_extract_recommended_picks: pred has empty columns")
                 return None
             score = pred.iloc[:, 0]
         else:
             score = pred
         if score.empty:
+            log.warning("_extract_recommended_picks: score Series is empty")
             return None
         last_dt = score.index.get_level_values(0).max()
+        log.info(
+            "_extract_recommended_picks: last_dt=%s total_rows=%d",
+            last_dt, len(score),
+        )
         snap = score.xs(last_dt, level=0).sort_values(ascending=False)
+        log.info("_extract_recommended_picks: snap size at last_dt=%d", len(snap))
         topk = int(config.get("strategy_kwargs", {}).get("topk") or 10)
         head = snap.head(topk)
         return [
@@ -307,7 +322,8 @@ def _extract_recommended_picks(pred, config: dict) -> list | None:
             }
             for i, (code, val) in enumerate(head.items())
         ]
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.exception("_extract_recommended_picks failed: %s", exc)
         return None
 
 
