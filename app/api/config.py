@@ -39,5 +39,14 @@ class Settings(BaseSettings):
     session_cookie_name: str = "qlib_session"
     session_max_age_seconds: int = 86400  # 24h
 
+    # Login brute-force protection — IP-based sliding-window counter in Redis.
+    # Two tiers: a sustained-fail threshold for normal brute-force, plus a
+    # higher burst threshold for credential-stuffing that hits many usernames.
+    login_fail_threshold: int = 5
+    login_fail_window_sec: int = 300       # 5 min counter TTL
+    login_lockout_sec: int = 900           # 15 min lockout after fail_threshold
+    login_ip_burst_threshold: int = 20
+    login_ip_burst_lockout_sec: int = 3600  # 1 hour lockout after burst_threshold
+
 
 settings = Settings()
