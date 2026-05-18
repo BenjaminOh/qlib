@@ -115,6 +115,15 @@ def generate_daily_signal(today: date | None = None) -> dict:
         except Exception as exc:  # noqa: BLE001
             log.warning("generate_daily_signal: pred index introspection failed: %s", exc)
 
+    # Fail-fast: an empty prediction means picks=0 would silently overwrite
+    # prior signals. Let Celery surface the failure instead.
+    if not hasattr(pred, "shape") or len(pred) == 0:
+        raise RuntimeError(
+            f"live_signal: empty prediction for today={today.isoformat()} "
+            f"(test segment {valid_end.isoformat()}..{today.isoformat()}); "
+            "check kr_data freshness and trading-day windows"
+        )
+
     picks = _extract_recommended_picks(pred, LIVE_CONFIG) or []
     log.info("generate_daily_signal: picks count=%d for today=%s", len(picks), today)
 
@@ -306,19 +315,60 @@ def _persist_order(db: Session, trade_date: date, code: str, side: str,
 
 
 def _last_trading_day(today: date | None = None) -> date:
+    """Most recent KRX trading day on or before `today`.
+
+    Uses qlib's calendar (which encodes actual holidays); falls back to a
+    weekday-only check if the calendar isn't available.
+    """
     today = today or date.today()
-    # Mon-Fri. Doesn't account for KRX holidays — caller can override during backfill.
+    try:
+        from qlib.data import D
+        cal = D.calendar(end_time=today.isoformat())
+        if len(cal) > 0:
+            return pd.Timestamp(cal[-1]).date()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "_last_trading_day: qlib calendar unavailable; falling back to weekday check",
+            exc_info=True,
+        )
     while today.weekday() >= 5:
-        today = pd.Timestamp(today).date() - pd.Timedelta(days=1).to_pytimedelta()
+        today = today - pd.Timedelta(days=1).to_pytimedelta()
     return today
 
 
+def _prev_trading_day(d: date) -> date:
+    """The trading day strictly before `d`. Weekend-only fallback if the
+    qlib calendar isn't loaded.
+    """
+    try:
+        from qlib.data import D
+        cal = D.calendar(end_time=d.isoformat())
+        prior = [pd.Timestamp(c).date() for c in cal if pd.Timestamp(c).date() < d]
+        if prior:
+            return prior[-1]
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "_prev_trading_day: qlib calendar unavailable; falling back to weekday check",
+            exc_info=True,
+        )
+    prev = d - pd.Timedelta(days=1).to_pytimedelta()
+    while prev.weekday() >= 5:
+        prev = prev - pd.Timedelta(days=1).to_pytimedelta()
+    return prev
+
+
 def _walk_forward_windows(today: date) -> tuple[date, date, date]:
-    """Same shape as our H6 walk-forward — train cuts off ~3 months before today."""
+    """Same shape as our H6 walk-forward — train cuts off ~3 months before today.
+
+    `valid_end` is snapped to the **trading day strictly before `today`** so that
+    the test segment `(valid_end, today)` always spans at least one trading day.
+    Before this snap, a Monday `today` produced `valid_end = Sunday`, which fed
+    an empty test slice into the model and silently emitted `picks=0`.
+    """
     today_ts = pd.Timestamp(today)
     train_end = (today_ts - pd.DateOffset(months=3)).date()
     valid_start = (today_ts - pd.DateOffset(months=2, days=29)).date()
-    valid_end = (today_ts - pd.Timedelta(days=1)).date()
+    valid_end = _prev_trading_day(today)
     return train_end, valid_start, valid_end
 
 
