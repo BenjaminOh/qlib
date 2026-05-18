@@ -37,6 +37,7 @@ celery_app.conf.beat_schedule = {
         "task": "live_signal",
         "schedule": crontab(hour=15, minute=35, day_of_week="mon-fri"),
     },
+    # Open strategy: KIS real orders at the opening auction.
     "live-orders-at-open": {
         "task": "live_orders",
         "schedule": crontab(hour=9, minute=0, day_of_week="mon-fri"),
@@ -47,6 +48,17 @@ celery_app.conf.beat_schedule = {
     },
     "live-sync-after-close": {
         "task": "live_sync",
+        "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
+    },
+    # Close strategy: simulated DB fills at the call-auction window.
+    # Same Signal(as_of=today) the open strategy used at 09:00 — variable
+    # under test is execution timing (open vs close), not the signal itself.
+    "live-orders-at-close": {
+        "task": "live_orders_close",
+        "schedule": crontab(hour=15, minute=20, day_of_week="mon-fri"),
+    },
+    "live-sync-close-after-close": {
+        "task": "live_sync_close",
         "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
     },
 }
