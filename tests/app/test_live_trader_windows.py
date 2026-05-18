@@ -53,3 +53,17 @@ def test_walk_forward_windows_monday_picks_prior_friday():
 def test_last_trading_day_weekend_returns_friday():
     # Sunday 2026-05-17 → Friday 2026-05-15
     assert live_trader._last_trading_day(date(2026, 5, 17)) == date(2026, 5, 15)
+
+
+def test_next_trading_day_friday_returns_monday():
+    # 2026-05-15 Fri -> 2026-05-18 Mon
+    assert live_trader._next_trading_day(date(2026, 5, 15)) == date(2026, 5, 18)
+
+
+def test_next_trading_day_monday_returns_tuesday():
+    assert live_trader._next_trading_day(date(2026, 5, 18)) == date(2026, 5, 19)
+
+
+def test_next_trading_day_saturday_returns_monday():
+    # Sat 2026-05-16 -> Mon 2026-05-18
+    assert live_trader._next_trading_day(date(2026, 5, 16)) == date(2026, 5, 18)

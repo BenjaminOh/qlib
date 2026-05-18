@@ -60,6 +60,10 @@ def generate_daily_signal(today: date | None = None) -> dict:
     """
     init_db()
     today = today or _last_trading_day()
+    # The signal generated tonight is consumed by submit_daily_orders at the
+    # NEXT trading session's open. Tag it with that target date so the morning
+    # query (`Signal.as_of == today`) matches.
+    signal_for = _next_trading_day(today)
     train_end, valid_start, valid_end = _walk_forward_windows(today)
 
     from qlib.utils import init_instance_by_config
@@ -125,14 +129,17 @@ def generate_daily_signal(today: date | None = None) -> dict:
         )
 
     picks = _extract_recommended_picks(pred, LIVE_CONFIG) or []
-    log.info("generate_daily_signal: picks count=%d for today=%s", len(picks), today)
+    log.info(
+        "generate_daily_signal: picks count=%d today=%s signal_for=%s",
+        len(picks), today, signal_for,
+    )
 
     with SessionLocal() as db:
-        # Idempotent: nuke today's previous picks before re-inserting
-        db.query(Signal).filter(Signal.as_of == today).delete()
+        # Idempotent: nuke any prior picks targeting the same trade date.
+        db.query(Signal).filter(Signal.as_of == signal_for).delete()
         for p in picks:
             db.add(Signal(
-                as_of=today,
+                as_of=signal_for,
                 rank=p["rank"],
                 code=p["code"],
                 name=p.get("name") or _stock_name(p["code"]),
@@ -142,7 +149,11 @@ def generate_daily_signal(today: date | None = None) -> dict:
             ))
         db.commit()
 
-    return {"as_of": today.isoformat(), "picks": len(picks)}
+    return {
+        "as_of": signal_for.isoformat(),
+        "generated_on": today.isoformat(),
+        "picks": len(picks),
+    }
 
 
 # ─── Order submission (09:00 KST) ───────────────────────────────────
@@ -355,6 +366,30 @@ def _prev_trading_day(d: date) -> date:
     while prev.weekday() >= 5:
         prev = prev - pd.Timedelta(days=1).to_pytimedelta()
     return prev
+
+
+def _next_trading_day(d: date) -> date:
+    """The trading day strictly after `d`. Weekend-only fallback if the
+    qlib calendar isn't loaded or doesn't yet contain the future window.
+    """
+    try:
+        from qlib.data import D
+        cal = D.calendar(
+            start_time=d.isoformat(),
+            end_time=(pd.Timestamp(d) + pd.Timedelta(days=14)).date().isoformat(),
+        )
+        future = [pd.Timestamp(c).date() for c in cal if pd.Timestamp(c).date() > d]
+        if future:
+            return future[0]
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "_next_trading_day: qlib calendar unavailable; falling back to weekday check",
+            exc_info=True,
+        )
+    nxt = d + pd.Timedelta(days=1).to_pytimedelta()
+    while nxt.weekday() >= 5:
+        nxt = nxt + pd.Timedelta(days=1).to_pytimedelta()
+    return nxt
 
 
 def _walk_forward_windows(today: date) -> tuple[date, date, date]:
