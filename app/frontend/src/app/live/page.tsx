@@ -42,9 +42,11 @@ export default function LiveDashboardPage() {
   const b = balance.data;
   const today = pnl.data?.rows?.[pnl.data.rows.length - 1];
   const seedCash = pnl.data?.seed_cash;
-  // Cumulative return is measured against the configured seed cash, not the
-  // first PnL row — see EquityChart for the same baseline.
-  const cumulative = b && seedCash ? b.total_eval / seedCash - 1 : null;
+  // Cumulative card reflects the OPEN strategy (KIS real paper account) since
+  // that's what `b` (live balance) corresponds to. Close strategy is plotted
+  // on the chart alongside but tracked separately in the DB.
+  const seedOpen = seedCash?.open;
+  const cumulative = b && seedOpen ? b.total_eval / seedOpen - 1 : null;
 
   const modeColor =
     b?.mode === "real"
@@ -109,7 +111,7 @@ export default function LiveDashboardPage() {
       <section className="bg-white rounded-lg border border-gray-200 p-5">
         <h2 className="text-lg font-semibold mb-1">💹 누적 수익률 곡선</h2>
         <p className="text-xs text-gray-500 mb-3">
-          시드 자본 {seedCash ? fmtKRW(seedCash) : "…"} 대비 평가금액 변동. 30초마다 자동 갱신.
+          각 전략의 시드 대비 평가금액 변동 — open {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"}. 30초마다 자동 갱신.
         </p>
         <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
       </section>

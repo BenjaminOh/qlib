@@ -7,17 +7,30 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
 import { DailyPnLRow } from "@/lib/api";
+
+const STRATEGY_COLORS: Record<string, string> = {
+  open: "#10b981",   // emerald — KIS real paper account
+  close: "#6366f1",  // indigo — DB-only simulated portfolio
+};
+
+const STRATEGY_LABELS: Record<string, string> = {
+  open: "시초가 매수 (open)",
+  close: "종가 매수 (close, 시뮬)",
+};
+
+type WideRow = { date: string } & Record<string, number | string | undefined>;
 
 export default function EquityChart({
   rows,
   seedCash,
 }: {
   rows: DailyPnLRow[];
-  seedCash?: number;
+  seedCash?: Record<string, number>;
 }) {
   if (!rows || rows.length === 0) {
     return (
@@ -26,13 +39,27 @@ export default function EquityChart({
       </div>
     );
   }
-  // Normalize against the configured seed cash so the curve shows true return
-  // from inception, not from whatever the first snapshot happened to capture.
-  const initial = seedCash || rows[0]?.starting_equity || 1;
-  const data = rows.map((r) => ({
-    date: r.trade_date,
-    equity: +(((r.ending_equity / initial) - 1) * 100).toFixed(2),
-  }));
+
+  // Group rows by strategy and normalize each line against its own seed cash.
+  // Open and close run on different starting balances (real KIS paper vs
+  // DB-only simulated), so a shared baseline would distort one of the lines.
+  const strategies = Array.from(new Set(rows.map((r) => r.strategy)));
+  const dates = Array.from(new Set(rows.map((r) => r.trade_date))).sort();
+  const byKey = new Map<string, DailyPnLRow>();
+  for (const r of rows) byKey.set(`${r.trade_date}|${r.strategy}`, r);
+
+  const data: WideRow[] = dates.map((date) => {
+    const wide: WideRow = { date };
+    for (const s of strategies) {
+      const r = byKey.get(`${date}|${s}`);
+      const seed = seedCash?.[s];
+      if (r && seed) {
+        wide[s] = +(((r.ending_equity / seed) - 1) * 100).toFixed(2);
+      }
+    }
+    return wide;
+  });
+
   return (
     <ResponsiveContainer width="100%" height={320}>
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
@@ -45,9 +72,26 @@ export default function EquityChart({
           minTickGap={28}
         />
         <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}%`} />
-        <Tooltip formatter={(v: string) => `${v}%`} labelFormatter={(l: string) => `📅 ${l}`} />
+        <Tooltip
+          formatter={(v: number, name: string) => [`${v}%`, STRATEGY_LABELS[name] || name]}
+          labelFormatter={(l: string) => `📅 ${l}`}
+        />
+        <Legend
+          formatter={(value: string) => STRATEGY_LABELS[value] || value}
+          wrapperStyle={{ fontSize: 12 }}
+        />
         <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
-        <Line type="monotone" dataKey="equity" stroke="#10b981" dot={false} strokeWidth={2} />
+        {strategies.map((s) => (
+          <Line
+            key={s}
+            type="monotone"
+            dataKey={s}
+            stroke={STRATEGY_COLORS[s] || "#888"}
+            dot={false}
+            strokeWidth={2}
+            connectNulls
+          />
+        ))}
       </LineChart>
     </ResponsiveContainer>
   );

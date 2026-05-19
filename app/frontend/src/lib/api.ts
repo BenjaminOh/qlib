@@ -290,6 +290,7 @@ export interface LiveOrdersResponse {
 
 export interface DailyPnLRow {
   trade_date: string;
+  strategy: string;
   starting_equity: number;
   ending_equity: number;
   realised_pnl: number;
@@ -299,7 +300,7 @@ export interface DailyPnLRow {
 
 export interface DailyPnLResponse {
   rows: DailyPnLRow[];
-  seed_cash: number;
+  seed_cash: Record<string, number>;
 }
 
 export interface PositionSnapshotRow {

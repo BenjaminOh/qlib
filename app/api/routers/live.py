@@ -79,6 +79,7 @@ class LiveOrdersResponse(BaseModel):
 
 class DailyPnLRow(BaseModel):
     trade_date: date
+    strategy: str
     starting_equity: float
     ending_equity: float
     realised_pnl: float
@@ -88,7 +89,10 @@ class DailyPnLRow(BaseModel):
 
 class DailyPnLResponse(BaseModel):
     rows: list[DailyPnLRow]
-    seed_cash: float
+    # Per-strategy seed cash. open and close run on different starting
+    # balances (real KIS paper vs DB-only simulated), so the chart must
+    # normalise each line against its own seed.
+    seed_cash: dict[str, float]
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────
@@ -173,9 +177,13 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                   .order_by(DailyPnL.trade_date.asc())
                   .all())
         return DailyPnLResponse(
-            seed_cash=settings.live_seed_cash,
+            seed_cash={
+                "open": settings.live_seed_cash_open,
+                "close": settings.live_seed_cash_close,
+            },
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,
+                strategy=r.strategy,
                 starting_equity=r.starting_equity,
                 ending_equity=r.ending_equity,
                 realised_pnl=r.realised_pnl,

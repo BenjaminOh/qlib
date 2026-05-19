@@ -36,6 +36,14 @@ from .kis_client import (
 )
 
 
+def _seed_for(strategy: str) -> float:
+    """Per-strategy seed cash — picks the right config setting for the chart
+    baseline and the simulated cash starting point."""
+    if strategy == STRATEGY_CLOSE:
+        return settings.live_seed_cash_close
+    return settings.live_seed_cash_open
+
+
 # Same model/strategy as the user's validated backtest — Phase A targets
 # ARR/IR parity with H6 walk-forward by reusing that exact configuration.
 LIVE_CONFIG = {
@@ -319,10 +327,11 @@ def sync_account(client: KISClient | None = None,
                           PositionSnapshot.strategy == strategy)
                   .order_by(PositionSnapshot.snapshot_date.desc())
                   .first())
-        # First-ever sync's starting_equity must be the seed (not today's
-        # KIS-reported total) so the equity chart normalises against the user's
-        # actual capital rather than baking pre-existing positions into baseline.
-        starting = prev.total_eval if prev else settings.live_seed_cash
+        # First-ever sync's starting_equity must be the strategy's seed (not
+        # today's KIS-reported total) so the equity chart normalises against
+        # the user's actual capital rather than baking pre-existing positions
+        # into the baseline. open and close strategies have different seeds.
+        starting = prev.total_eval if prev else _seed_for(strategy)
         unrealised = sum(h.pnl for h in snapshot.holdings)
         realised = (db.query(Fill)
                       .join(Order)
@@ -406,12 +415,16 @@ def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
 
 
 def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
-                       seed_cash: float = settings.live_seed_cash) -> AccountSnapshot:
+                       seed_cash: float | None = None) -> AccountSnapshot:
     """Reconstruct cash + holdings for a paper strategy from its Fill history.
 
     Cash = seed − sum(buy.qty × buy.price) + sum(sell.qty × sell.price)
     Holdings per code: net buy − sell qty; average price weighted by buy fills.
+    `seed_cash=None` falls back to the strategy-specific config setting so
+    callers don't have to thread the right number through every call site.
     """
+    if seed_cash is None:
+        seed_cash = _seed_for(strategy)
     rows = (db.query(Fill, Order)
               .join(Order, Fill.order_id == Order.id)
               .filter(Fill.strategy == strategy)
