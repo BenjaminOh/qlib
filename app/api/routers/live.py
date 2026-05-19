@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 
 from ..auth import get_current_user
+from ..config import settings
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal, init_db,
 )
@@ -87,6 +88,7 @@ class DailyPnLRow(BaseModel):
 
 class DailyPnLResponse(BaseModel):
     rows: list[DailyPnLRow]
+    seed_cash: float
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────
@@ -170,14 +172,17 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                   .filter(DailyPnL.trade_date >= cutoff)
                   .order_by(DailyPnL.trade_date.asc())
                   .all())
-        return DailyPnLResponse(rows=[DailyPnLRow(
-            trade_date=r.trade_date,
-            starting_equity=r.starting_equity,
-            ending_equity=r.ending_equity,
-            realised_pnl=r.realised_pnl,
-            unrealised_pnl=r.unrealised_pnl,
-            fees=r.fees,
-        ) for r in rows])
+        return DailyPnLResponse(
+            seed_cash=settings.live_seed_cash,
+            rows=[DailyPnLRow(
+                trade_date=r.trade_date,
+                starting_equity=r.starting_equity,
+                ending_equity=r.ending_equity,
+                realised_pnl=r.realised_pnl,
+                unrealised_pnl=r.unrealised_pnl,
+                fees=r.fees,
+            ) for r in rows],
+        )
 
 
 @router.get("/positions/history")

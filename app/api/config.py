@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     kis_account_product: str = "01"  # 종합매매 default
     # Live trading database
     live_db_url: str = "sqlite:///./app/api/db/live.sqlite"
+    # Seed cash for the equity curve baseline + close-strategy paper portfolio.
+    # The chart normalizes ending_equity against this value, so changing it
+    # shifts the historical curve. Match whatever cash you initially loaded
+    # into the KIS paper account (1천만원 default — same as backtest seed).
+    live_seed_cash: float = 10_000_000.0
 
     # Auth — JWT-based admin login. JWT secret MUST be overridden in production
     # (default is a sentinel; rotating it invalidates all existing sessions).

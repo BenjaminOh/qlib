@@ -36,12 +36,6 @@ from .kis_client import (
 )
 
 
-# Seed cash for the close-strategy paper portfolio. Mirrors the open
-# strategy's KIS paper account seed (1천만원) so PnL comparisons start from
-# the same dollar base.
-CLOSE_SEED_CASH = 10_000_000.0
-
-
 # Same model/strategy as the user's validated backtest — Phase A targets
 # ARR/IR parity with H6 walk-forward by reusing that exact configuration.
 LIVE_CONFIG = {
@@ -325,7 +319,10 @@ def sync_account(client: KISClient | None = None,
                           PositionSnapshot.strategy == strategy)
                   .order_by(PositionSnapshot.snapshot_date.desc())
                   .first())
-        starting = prev.total_eval if prev else snapshot.total_eval
+        # First-ever sync's starting_equity must be the seed (not today's
+        # KIS-reported total) so the equity chart normalises against the user's
+        # actual capital rather than baking pre-existing positions into baseline.
+        starting = prev.total_eval if prev else settings.live_seed_cash
         unrealised = sum(h.pnl for h in snapshot.holdings)
         realised = (db.query(Fill)
                       .join(Order)
@@ -409,7 +406,7 @@ def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
 
 
 def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
-                       seed_cash: float = CLOSE_SEED_CASH) -> AccountSnapshot:
+                       seed_cash: float = settings.live_seed_cash) -> AccountSnapshot:
     """Reconstruct cash + holdings for a paper strategy from its Fill history.
 
     Cash = seed − sum(buy.qty × buy.price) + sum(sell.qty × sell.price)

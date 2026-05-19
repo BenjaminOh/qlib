@@ -41,8 +41,10 @@ export default function LiveDashboardPage() {
 
   const b = balance.data;
   const today = pnl.data?.rows?.[pnl.data.rows.length - 1];
-  const startEquity = pnl.data?.rows?.[0]?.starting_equity;
-  const cumulative = b && startEquity ? b.total_eval / startEquity - 1 : null;
+  const seedCash = pnl.data?.seed_cash;
+  // Cumulative return is measured against the configured seed cash, not the
+  // first PnL row — see EquityChart for the same baseline.
+  const cumulative = b && seedCash ? b.total_eval / seedCash - 1 : null;
 
   const modeColor =
     b?.mode === "real"
@@ -106,8 +108,10 @@ export default function LiveDashboardPage() {
       {/* Equity chart */}
       <section className="bg-white rounded-lg border border-gray-200 p-5">
         <h2 className="text-lg font-semibold mb-1">💹 누적 수익률 곡선</h2>
-        <p className="text-xs text-gray-500 mb-3">시작 자본을 0%로 정규화. 30초마다 자동 갱신.</p>
-        <EquityChart rows={pnl.data?.rows || []} />
+        <p className="text-xs text-gray-500 mb-3">
+          시드 자본 {seedCash ? fmtKRW(seedCash) : "…"} 대비 평가금액 변동. 30초마다 자동 갱신.
+        </p>
+        <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
       </section>
 
       {/* Holdings */}
@@ -115,6 +119,7 @@ export default function LiveDashboardPage() {
         <h2 className="text-lg font-semibold mb-1">📦 현재 보유 종목</h2>
         <p className="text-xs text-gray-500 mb-3">
           {b ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}` : "…"}
+          {" · 평균단가/현재가는 KIS 모의투자 API 기준이라 실제 KRX 시세와 다를 수 있습니다."}
         </p>
         <HoldingsTable holdings={b?.holdings || []} />
       </section>

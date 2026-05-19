@@ -299,6 +299,7 @@ export interface DailyPnLRow {
 
 export interface DailyPnLResponse {
   rows: DailyPnLRow[];
+  seed_cash: number;
 }
 
 export interface PositionSnapshotRow {

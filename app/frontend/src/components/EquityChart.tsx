@@ -12,7 +12,13 @@ import {
 } from "recharts";
 import { DailyPnLRow } from "@/lib/api";
 
-export default function EquityChart({ rows }: { rows: DailyPnLRow[] }) {
+export default function EquityChart({
+  rows,
+  seedCash,
+}: {
+  rows: DailyPnLRow[];
+  seedCash?: number;
+}) {
   if (!rows || rows.length === 0) {
     return (
       <div className="text-center text-gray-400 py-12 text-sm">
@@ -20,7 +26,9 @@ export default function EquityChart({ rows }: { rows: DailyPnLRow[] }) {
       </div>
     );
   }
-  const initial = rows[0]?.starting_equity || 1;
+  // Normalize against the configured seed cash so the curve shows true return
+  // from inception, not from whatever the first snapshot happened to capture.
+  const initial = seedCash || rows[0]?.starting_equity || 1;
   const data = rows.map((r) => ({
     date: r.trade_date,
     equity: +(((r.ending_equity / initial) - 1) * 100).toFixed(2),
