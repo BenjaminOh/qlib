@@ -48,6 +48,13 @@ export default function LiveDashboardPage() {
   const seedOpen = seedCash?.open;
   const cumulative = b && seedOpen ? b.total_eval / seedOpen - 1 : null;
 
+  // "투입자본 수익률" — return on actually deployed capital (excludes idle cash).
+  // Answers "what did the stocks I bought do?" rather than "what did my whole
+  // portfolio do?". For a mostly-cash portfolio these diverge sharply.
+  const deployed = b?.holdings.reduce((acc, h) => acc + h.qty * h.avg_price, 0) || 0;
+  const evaluation = b?.holdings.reduce((acc, h) => acc + h.eval_value, 0) || 0;
+  const deployedRoi = deployed > 0 ? evaluation / deployed - 1 : null;
+
   const modeColor =
     b?.mode === "real"
       ? "bg-red-100 text-red-700"
@@ -85,7 +92,7 @@ export default function LiveDashboardPage() {
       )}
 
       {/* Headline cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Card label="총 평가금액" value={b ? fmtKRW(b.total_eval) : "…"} hint={b ? `예수금 ${fmtKRW(b.cash)}` : ""} />
         <Card
           label="당일 실현 손익"
@@ -103,7 +110,13 @@ export default function LiveDashboardPage() {
           label="누적 수익률"
           value={cumulative != null ? fmtPct(cumulative) : "—"}
           color={cumulative != null ? (cumulative >= 0 ? "good" : "bad") : "neutral"}
-          hint="시작 자본 대비"
+          hint="시드 자본 대비"
+        />
+        <Card
+          label="투입자본 수익률"
+          value={deployedRoi != null ? fmtPct(deployedRoi) : "—"}
+          color={deployedRoi != null ? (deployedRoi >= 0 ? "good" : "bad") : "neutral"}
+          hint={deployed > 0 ? `투입 ${fmtKRW(deployed)} 기준` : "현재 보유 0"}
         />
       </div>
 
@@ -123,7 +136,7 @@ export default function LiveDashboardPage() {
           {b ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}` : "…"}
           {" · 평균단가/현재가는 KIS 모의투자 API 기준이라 실제 KRX 시세와 다를 수 있습니다."}
         </p>
-        <HoldingsTable holdings={b?.holdings || []} />
+        <HoldingsTable holdings={b?.holdings || []} totalEval={b?.total_eval} />
       </section>
 
       {/* Latest signals */}

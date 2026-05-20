@@ -9,7 +9,13 @@ const fmtKRW = (v: number) => {
 };
 const fmtPct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
-export default function HoldingsTable({ holdings }: { holdings: LiveHolding[] }) {
+export default function HoldingsTable({
+  holdings,
+  totalEval,
+}: {
+  holdings: LiveHolding[];
+  totalEval?: number;
+}) {
   if (!holdings || holdings.length === 0) {
     return (
       <div className="text-center text-gray-400 py-8 text-sm">현재 보유 종목 없음</div>
@@ -27,11 +33,15 @@ export default function HoldingsTable({ holdings }: { holdings: LiveHolding[] })
             <th className="text-right px-3 py-2 font-medium">평가금액</th>
             <th className="text-right px-3 py-2 font-medium">평가손익</th>
             <th className="text-right px-3 py-2 font-medium">수익률</th>
+            <th className="text-right px-3 py-2 font-medium" title="이 종목의 손익이 전체 평가금액에서 차지하는 비율">
+              포트폴리오 기여도
+            </th>
           </tr>
         </thead>
         <tbody>
           {holdings.map((h) => {
             const c = h.pnl >= 0 ? "text-emerald-700" : "text-red-700";
+            const contribution = totalEval && totalEval > 0 ? h.pnl / totalEval : null;
             return (
               <tr key={h.code} className="border-t border-gray-100">
                 <td className="px-3 py-2">
@@ -46,6 +56,9 @@ export default function HoldingsTable({ holdings }: { holdings: LiveHolding[] })
                 <td className="px-3 py-2 text-right font-mono">{fmtKRW(h.eval_value)}</td>
                 <td className={`px-3 py-2 text-right font-mono ${c}`}>{fmtKRW(h.pnl)}</td>
                 <td className={`px-3 py-2 text-right font-mono ${c}`}>{fmtPct(h.pnl_pct)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${c}`}>
+                  {contribution != null ? `${(contribution * 100).toFixed(2)}%p` : "—"}
+                </td>
               </tr>
             );
           })}

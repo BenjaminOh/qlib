@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 import traceback
 from datetime import date, datetime
 from pathlib import Path
@@ -46,6 +47,11 @@ def _seed_for(strategy: str) -> float:
 
 # Same model/strategy as the user's validated backtest — Phase A targets
 # ARR/IR parity with H6 walk-forward by reusing that exact configuration.
+# KIS Open API throttles ~1 request per second per account (EGW00201 on burst).
+# Sleep between consecutive place_order / get_balance calls to stay under that.
+KIS_THROTTLE_SECONDS = 0.35
+
+
 LIVE_CONFIG = {
     "strategy_class": "TopkDropoutStrategy",
     "strategy_module": "qlib.contrib.strategy.signal_strategy",
@@ -185,7 +191,12 @@ def submit_daily_orders(today: date | None = None,
     buy the top-N that aren't currently held. N is capped by `n_drop`.
     """
     init_db()
-    today = today or _last_trading_day()
+    # Signals are stored with as_of=next_trading_day(last_trading_day) in
+    # generate_daily_signal; lookup must mirror that key. Using bare
+    # _last_trading_day() here was off by one trading day — 09:00 firing on
+    # 5/20 read today=5/19 from the calendar and missed the signals saved for
+    # as_of=5/20.
+    today = today or _next_trading_day(_last_trading_day())
 
     with SessionLocal() as db:
         signals = (db.query(Signal)
@@ -227,14 +238,19 @@ def submit_daily_orders(today: date | None = None,
                 res = client.place_order(code, "SELL", holding.qty, price=None)
                 _persist_order(db, today, code, "SELL", holding.qty, None, res,
                                strategy=strategy)
+                if not res.ok:
+                    log.warning("live_orders: SELL REJECTED code=%s qty=%d error=%s",
+                                code, holding.qty, res.error)
                 submitted += int(res.ok)
                 rejected += int(not res.ok)
+                time.sleep(KIS_THROTTLE_SECONDS)
 
         # Refresh cash after sells
         if simulated:
             snapshot_after = _simulated_balance(db, strategy=strategy)
         else:
             snapshot_after = client.get_balance()
+            time.sleep(KIS_THROTTLE_SECONDS)
         cash = snapshot_after.cash
         if to_buy_codes:
             per_code_budget = cash / max(len(to_buy_codes), 1)
@@ -259,10 +275,30 @@ def submit_daily_orders(today: date | None = None,
                     res = client.place_order(code, "BUY", qty, price=None)
                     _persist_order(db, today, code, "BUY", qty, None, res,
                                    strategy=strategy)
+                    if not res.ok:
+                        log.warning("live_orders: BUY REJECTED code=%s qty=%d error=%s",
+                                    code, qty, res.error)
                     submitted += int(res.ok)
                     rejected += int(not res.ok)
+                    time.sleep(KIS_THROTTLE_SECONDS)
 
         db.commit()
+
+        # Surface a one-line summary if anything was rejected — operators don't
+        # have to grep through individual order rows to find the last KIS error.
+        if rejected > 0 and not simulated:
+            last_err_row = (db.query(Order)
+                              .filter(Order.trade_date == today,
+                                      Order.strategy == strategy,
+                                      Order.status == "REJECTED")
+                              .order_by(Order.submitted_at.desc())
+                              .first())
+            last_err = last_err_row.error if last_err_row else None
+            log.warning(
+                "live_orders: strategy=%s submitted=%d rejected=%d last_error=%s",
+                strategy, submitted, rejected, last_err,
+            )
+
         return {
             "status": "ok",
             "as_of": today.isoformat(),
