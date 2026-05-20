@@ -60,3 +60,19 @@ def live_sync_close_task(self) -> dict:
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
     return sync_account(strategy="close")
+
+
+@celery_app.task(
+    bind=True,
+    name="refresh_kr_data",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=3,
+)
+def refresh_kr_data_task(self) -> dict:
+    """15:45 KST — incrementally extend kr_data so tomorrow's live_signal sees today's bars."""
+    from ..services.kr_data_refresh import refresh_kr_data
+    self.update_state(state="RUNNING")
+    return refresh_kr_data()

@@ -61,6 +61,13 @@ celery_app.conf.beat_schedule = {
         "task": "live_sync_close",
         "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
     },
+    # Incrementally extend qlib kr_data after the close-day sync wraps. Runs
+    # *before* the next live_signal (next day 15:35) so the model sees today's
+    # bars. dump_update mode preserves prior history.
+    "kr-data-daily-refresh": {
+        "task": "refresh_kr_data",
+        "schedule": crontab(hour=15, minute=45, day_of_week="mon-fri"),
+    },
 }
 
 
