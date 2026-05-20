@@ -54,6 +54,24 @@ echo "🚀 배포 시작: $TARGET_COLOR (web:${WEB_PORT} / api:${API_PORT})"
 log_deploy "========== 배포 시작: $TARGET_COLOR (web:${WEB_PORT} / api:${API_PORT}) =========="
 
 # ─────────────────────────────────────────────────────────────
+# 1.5. Pre-deploy SQLite snapshot
+#   live.sqlite is on a host bind-mount (/home/qlib/data/db) — container
+#   teardown never touches it, but a stray QLIB_API_LIVE_DB_RESET or a bad
+#   ALTER could. Snapshot before anything else so rollback is always trivial.
+#   Keep the last 14 backups, prune older.
+# ─────────────────────────────────────────────────────────────
+DB_DIR=/home/qlib/data/db
+if [ -f "${DB_DIR}/live.sqlite" ]; then
+  TS=$(date +%Y%m%d_%H%M%S)
+  cp -a "${DB_DIR}/live.sqlite" "${DB_DIR}/live.sqlite.bak.${TS}"
+  echo "💾 SQLite 스냅샷: ${DB_DIR}/live.sqlite.bak.${TS}"
+  log_deploy "💾 SQLite 스냅샷: live.sqlite.bak.${TS}"
+  ls -1t "${DB_DIR}"/live.sqlite.bak.* 2>/dev/null | tail -n +15 | xargs -r rm -f
+else
+  echo "ℹ️  ${DB_DIR}/live.sqlite 없음 — 스냅샷 건너뜀 (최초 배포 또는 Postgres 모드)"
+fi
+
+# ─────────────────────────────────────────────────────────────
 # 2. Tear down stale target slot (defense in depth)
 # ─────────────────────────────────────────────────────────────
 echo "🧹 기존 ${TARGET_COLOR} 컨테이너 정리 (redis는 유지)..."
