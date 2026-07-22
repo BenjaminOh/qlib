@@ -33,9 +33,14 @@ celery_app.conf.update(
 from celery.schedules import crontab  # noqa: E402
 
 celery_app.conf.beat_schedule = {
-    "live-signal-after-close": {
+    # FALLBACK slot only — the primary trigger is the chain at the end of
+    # refresh_kr_data (15:45), so signal training always sees today's bars.
+    # The old independent 15:35 slot ran BEFORE the refresh and trained on a
+    # calendar ending yesterday (as_of drift → chronic no_signal at 09:00).
+    # Idempotent per as_of, so double-firing with the chain is harmless.
+    "live-signal-fallback": {
         "task": "live_signal",
-        "schedule": crontab(hour=15, minute=35, day_of_week="mon-fri"),
+        "schedule": crontab(hour=16, minute=20, day_of_week="mon-fri"),
     },
     # Open strategy: KIS real orders at the opening auction.
     "live-orders-at-open": {
@@ -61,8 +66,8 @@ celery_app.conf.beat_schedule = {
         "task": "live_sync_close",
         "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
     },
-    # Incrementally extend qlib kr_data after the close-day sync wraps. Runs
-    # *before* the next live_signal (next day 15:35) so the model sees today's
+    # Incrementally extend qlib kr_data after the close-day sync wraps, then
+    # chain live_signal (see refresh_kr_data_task) so the model sees today's
     # bars. dump_update mode preserves prior history.
     "kr-data-daily-refresh": {
         "task": "refresh_kr_data",

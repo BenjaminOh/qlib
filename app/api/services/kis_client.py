@@ -19,6 +19,7 @@ up and validated end-to-end before KIS credentials exist.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import threading
 import time
@@ -29,6 +30,8 @@ from typing import Any
 import requests
 
 from ..config import settings
+
+log = logging.getLogger(__name__)
 
 
 # ─── Endpoint hosts ─────────────────────────────────────────────────
@@ -151,22 +154,79 @@ class KISClient:
 
     # ─── Auth ──────────────────────────────────────────────────
 
+    @property
+    def _redis_token_key(self) -> str:
+        return f"kis:token:{self.env}:{self.cano}"
+
+    def _redis(self):
+        """Best-effort redis client — None if unavailable (never raises)."""
+        try:
+            import redis  # type: ignore[import-not-found]
+            return redis.from_url(settings.celery_broker_url)
+        except Exception:  # noqa: BLE001
+            return None
+
     def _ensure_token(self) -> str:
+        """Return a valid access token, shared across worker processes via redis.
+
+        KIS invalidates the previous token whenever a new one is issued and
+        rate-limits issuance (~1/min). With prefork workers recycled every few
+        tasks, per-process tokens caused constant re-issue churn — the freshly
+        issued token in one child invalidated the cached token in another,
+        surfacing as intermittent 401/500 on inquire-balance. A shared redis
+        cache makes issuance rare (once per expiry) and consistent.
+        """
         if self.is_mock:
             return "MOCK_TOKEN"
         with self._lock:
             now = time.time()
             if self._token and self._token_expires_at - now > 600:  # >10min left
                 return self._token
+            r_client = self._redis()
+            if r_client is not None:
+                try:
+                    cached = r_client.get(self._redis_token_key)
+                    if cached:
+                        d = json.loads(cached)
+                        if d.get("expires_at", 0) - now > 600:
+                            self._token = d["access_token"]
+                            self._token_expires_at = d["expires_at"]
+                            return self._token
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("KIS token redis read failed: %s", exc)
             url = f"{self.host}/oauth2/tokenP"
             payload = {"grant_type": "client_credentials",
                        "appkey": self.app_key, "appsecret": self.app_secret}
             r = requests.post(url, json=payload, timeout=10)
+            if r.status_code != 200:
+                log.error("KIS token issue failed: %s %s", r.status_code, r.text[:300])
             r.raise_for_status()
             d = r.json()
             self._token = d["access_token"]
             self._token_expires_at = now + int(d.get("expires_in", 86400))
+            if r_client is not None:
+                try:
+                    r_client.set(
+                        self._redis_token_key,
+                        json.dumps({"access_token": self._token,
+                                    "expires_at": self._token_expires_at}),
+                        ex=int(d.get("expires_in", 86400)),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("KIS token redis write failed: %s", exc)
             return self._token
+
+    def _drop_token(self) -> None:
+        """Invalidate the cached token (local + redis) so the next call re-auths."""
+        with self._lock:
+            self._token = None
+            self._token_expires_at = 0.0
+        r_client = self._redis()
+        if r_client is not None:
+            try:
+                r_client.delete(self._redis_token_key)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _hashkey(self, body: dict) -> str:
         if self.is_mock:
@@ -214,9 +274,28 @@ class KISClient:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
-        r = requests.get(self.host + path, headers=self._headers(self.tr_set["balance"]),
-                         params=params, timeout=15)
-        r.raise_for_status()
+        # KIS paper env intermittently 500s (also on auth churn). Re-auth once
+        # and retry with backoff before surfacing — the daily sync must not
+        # die on a transient server hiccup.
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            r = requests.get(self.host + path, headers=self._headers(self.tr_set["balance"]),
+                             params=params, timeout=15)
+            if r.status_code == 200:
+                break
+            log.warning(
+                "KIS get_balance HTTP %s (attempt %d/3): %s",
+                r.status_code, attempt + 1, r.text[:300],
+            )
+            if r.status_code in (401, 500):
+                self._drop_token()  # token may have been invalidated elsewhere
+            try:
+                r.raise_for_status()
+            except requests.HTTPError as exc:
+                last_exc = exc
+            time.sleep(2 * (attempt + 1))
+        else:
+            raise last_exc if last_exc else RuntimeError("KIS get_balance failed")
         d = r.json()
         holdings = []
         for row in d.get("output1", []) or []:

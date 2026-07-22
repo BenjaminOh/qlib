@@ -18,9 +18,22 @@ def run_backtest_task(self, config: dict) -> dict:
 # ─── Live trading (KIS) ─────────────────────────────────────────────
 
 
-@celery_app.task(bind=True, name="live_signal")
+@celery_app.task(
+    bind=True,
+    name="live_signal",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=2,
+)
 def live_signal_task(self) -> dict:
-    """15:35 KST — train/score → persist top-K Signal rows for tomorrow's open."""
+    """Post-close — train/score → persist top-K Signal rows for tomorrow's open.
+
+    Primary trigger: chained from refresh_kr_data (so it always trains on a
+    calendar that includes today). The 16:20 beat entry is a fallback and is
+    safe to double-fire — signal writes are idempotent per as_of.
+    """
     from ..services.live_trader import generate_daily_signal
     self.update_state(state="RUNNING")
     return generate_daily_signal()
@@ -72,7 +85,16 @@ def live_sync_close_task(self) -> dict:
     max_retries=3,
 )
 def refresh_kr_data_task(self) -> dict:
-    """15:45 KST — incrementally extend kr_data so tomorrow's live_signal sees today's bars."""
+    """15:45 KST — incrementally extend kr_data so tomorrow's live_signal sees today's bars.
+
+    On a successful refresh that actually appended calendar days, chain the
+    signal generation immediately — this guarantees live_signal always runs
+    AFTER today's bars landed (the old independent 15:35 slot trained on a
+    calendar ending yesterday, and its as_of drifted from the 09:00 reader).
+    """
     from ..services.kr_data_refresh import refresh_kr_data
     self.update_state(state="RUNNING")
-    return refresh_kr_data()
+    result = refresh_kr_data()
+    if result.get("status") == "ok" and result.get("new_calendar_days", 0) > 0:
+        live_signal_task.delay()
+    return result

@@ -67,7 +67,23 @@ LIVE_CONFIG = {
 }
 
 
-# ─── Signal generation (15:35 KST) ──────────────────────────────────
+def _reset_qlib_caches() -> None:
+    """Drop qlib's in-process calendar/instrument/feature memcache.
+
+    Long-lived worker children cache the calendar from *before* the daily
+    refresh_kr_data appended today's row, so date math (`_last_trading_day`,
+    `_next_trading_day`) silently runs one day behind and the writer/reader
+    `as_of` contract drifts. Call this at the top of every task entry point
+    that derives dates from the calendar.
+    """
+    try:
+        from qlib.data.cache import H
+        H.clear()
+    except Exception:  # noqa: BLE001 — qlib may not be initialized yet
+        pass
+
+
+# ─── Signal generation (post-close, chained after refresh_kr_data) ──
 
 
 def generate_daily_signal(today: date | None = None) -> dict:
@@ -76,7 +92,18 @@ def generate_daily_signal(today: date | None = None) -> dict:
     Returns a summary dict for the calling task to log.
     """
     init_db()
+    _reset_qlib_caches()
     today = today or _last_trading_day()
+    # Freshness guard: if kr_data is grossly stale (e.g. the refresh cron has
+    # been failing), refuse to write signals keyed to an old trade date —
+    # raising lets Celery retry/alert instead of silently training on old bars.
+    staleness = (date.today() - today).days
+    if staleness > 5:
+        raise RuntimeError(
+            f"live_signal: kr_data last trading day {today.isoformat()} is "
+            f"{staleness} days behind {date.today().isoformat()} — refusing to "
+            "generate signals from stale data; check refresh_kr_data"
+        )
     # The signal generated tonight is consumed by submit_daily_orders at the
     # NEXT trading session's open. Tag it with that target date so the morning
     # query (`Signal.as_of == today`) matches.
@@ -191,11 +218,13 @@ def submit_daily_orders(today: date | None = None,
     buy the top-N that aren't currently held. N is capped by `n_drop`.
     """
     init_db()
+    _reset_qlib_caches()
     # Signals are stored with as_of=next_trading_day(last_trading_day) in
     # generate_daily_signal; lookup must mirror that key. Using bare
     # _last_trading_day() here was off by one trading day — 09:00 firing on
     # 5/20 read today=5/19 from the calendar and missed the signals saved for
-    # as_of=5/20.
+    # as_of=5/20. The cache reset above keeps both sides computing from the
+    # same on-disk calendar (a stale in-process cache re-introduced the skew).
     today = today or _next_trading_day(_last_trading_day())
 
     with SessionLocal() as db:
@@ -324,6 +353,7 @@ def sync_account(client: KISClient | None = None,
     strategy='close' → reconstructs from simulated Fills in the DB
     """
     init_db()
+    _reset_qlib_caches()
     trade_date = trade_date or _last_trading_day()
     if strategy == STRATEGY_CLOSE:
         with SessionLocal() as db:
