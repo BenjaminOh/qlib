@@ -101,7 +101,11 @@ def fetch_market_data(codes: list[str], start: str, end: str, output_dir: Path, 
             print("SKIP (no data)")
             continue
 
-        df["symbol"] = code
+        # No symbol column on purpose: pandas re-reads numeric KR codes as
+        # ints ("000150" -> 150), which made dump_bin's dump_update treat
+        # every stock as new (garbage `features/150/` dirs, no appends to
+        # the real code). dump_bin falls back to the CSV FILENAME for the
+        # symbol, and the filename preserves the zero-padded code.
         df = df.reset_index()
         csv_path = output_dir / f"{code}.csv"
         df.to_csv(csv_path, index=False)
