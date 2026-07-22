@@ -46,6 +46,9 @@ services:
       - .env
     environment:
       QLIB_API_PROVIDER_URI: /root/.qlib/qlib_data/kr_data
+      # mlflow >=3.x refuses the ./mlruns file store without this opt-out;
+      # qlib's recorder still uses the file backend.
+      MLFLOW_ALLOW_FILE_STORE: "true"
       QLIB_API_CELERY_BROKER_URL: ${REDIS_URL:-redis://qlib_redis:6379/0}
       QLIB_API_CELERY_RESULT_BACKEND: ${REDIS_URL:-redis://qlib_redis:6379/0}
       QLIB_API_CORS_ORIGINS: '${CORS_ORIGINS:-["https://qlib.tmanager.kr"]}'
@@ -86,6 +89,9 @@ services:
       - .env
     environment:
       QLIB_API_PROVIDER_URI: /root/.qlib/qlib_data/kr_data
+      # mlflow >=3.x refuses the ./mlruns file store without this opt-out;
+      # qlib's recorder still uses the file backend.
+      MLFLOW_ALLOW_FILE_STORE: "true"
       QLIB_API_CELERY_BROKER_URL: ${REDIS_URL:-redis://qlib_redis:6379/0}
       QLIB_API_CELERY_RESULT_BACKEND: ${REDIS_URL:-redis://qlib_redis:6379/0}
       QLIB_API_KIS_ENV: ${KIS_ENV:-paper}
@@ -127,6 +133,9 @@ services:
       - .env
     environment:
       QLIB_API_PROVIDER_URI: /root/.qlib/qlib_data/kr_data
+      # mlflow >=3.x refuses the ./mlruns file store without this opt-out;
+      # qlib's recorder still uses the file backend.
+      MLFLOW_ALLOW_FILE_STORE: "true"
       QLIB_API_CELERY_BROKER_URL: ${REDIS_URL:-redis://qlib_redis:6379/0}
       QLIB_API_CELERY_RESULT_BACKEND: ${REDIS_URL:-redis://qlib_redis:6379/0}
       QLIB_API_LIVE_DB_URL: ${LIVE_DB_URL:-sqlite:////app/db/live.sqlite}
