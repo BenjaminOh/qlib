@@ -120,7 +120,10 @@ def _fetch_universe(start: date, end: date, csv_dir: Path) -> tuple[int, int]:
     skipped = len(codes) - fetched
 
     market_codes = {m: c for m, c in MARKETS.items()}
-    generate_instruments_files(market_codes, csv_dir, QLIB_DIR)
+    # merge=True: extend membership end-dates only. A plain regenerate from the
+    # 2-day incremental CSVs used to clobber every span down to the fetch
+    # window, emptying train/valid slices for the next live_signal.
+    generate_instruments_files(market_codes, csv_dir, QLIB_DIR, merge=True)
     return fetched, skipped
 
 

@@ -201,6 +201,9 @@ class DumpDataBase:
                 self.INSTRUMENTS_START_FIELD,
                 self.INSTRUMENTS_END_FIELD,
             ],
+            # KR codes like "069500" must stay strings — int inference drops the
+            # leading zero and later crashes save_instruments' str-only handling.
+            dtype={self.symbol_field_name: str},
         )
 
         return df
@@ -218,7 +221,8 @@ class DumpDataBase:
             _df_fields = [self.symbol_field_name, self.INSTRUMENTS_START_FIELD, self.INSTRUMENTS_END_FIELD]
             instruments_data = instruments_data.loc[:, _df_fields]
             instruments_data[self.symbol_field_name] = instruments_data[self.symbol_field_name].apply(
-                lambda x: fname_to_code(x.lower()).upper()
+                # str(x): defensive — numeric-looking codes may arrive as ints.
+                lambda x: fname_to_code(str(x).lower()).upper()
             )
             instruments_data.to_csv(instruments_path, header=False, sep=self.INSTRUMENTS_SEP, index=False)
         else:

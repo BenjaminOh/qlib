@@ -119,38 +119,66 @@ def generate_instruments_files(
     market_codes: dict[str, list[str]],
     csv_dir: Path,
     qlib_dir: Path,
+    merge: bool = False,
 ) -> None:
     """Write `all.txt` plus one `<market>.txt` per market.
 
     `all.txt` is the union of every market we fetched (so qlib's calendar
     spans every code we have data for); each market file lists only its own
     constituents, letting backtests filter by `kospi200` / `kosdaq150`.
+
+    merge=True (incremental refresh path): membership ranges in the existing
+    instruments files are PRESERVED and only extended by the fetched CSVs —
+    start = min(existing, fetched), end = max(existing, fetched); codes with
+    no CSV today keep their existing span. Without this, a 2-day incremental
+    fetch used to clobber every stock's membership down to that 2-day window,
+    which made train/valid dataset slices empty and killed live_signal daily.
     """
     instruments_dir = qlib_dir / "instruments"
     instruments_dir.mkdir(parents=True, exist_ok=True)
 
-    def _entries(codes: list[str]) -> list[str]:
+    def _existing_spans(path: Path) -> dict[str, tuple[str, str]]:
+        if not (merge and path.exists()):
+            return {}
+        spans: dict[str, tuple[str, str]] = {}
+        for line in path.read_text().strip().splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) == 3:
+                spans[parts[0]] = (parts[1], parts[2])
+        return spans
+
+    def _entries(codes: list[str], existing: dict[str, tuple[str, str]]) -> list[str]:
         out = []
-        for code in sorted(set(codes)):
+        for code in sorted(set(codes) | set(existing)):
             csv_path = csv_dir / f"{code}.csv"
-            if not csv_path.exists():
+            fetched: tuple[str, str] | None = None
+            if csv_path.exists():
+                df = pd.read_csv(csv_path)
+                if not df.empty and "date" in df.columns:
+                    fetched = (str(df["date"].min()), str(df["date"].max()))
+            old = existing.get(code)
+            if fetched and old:
+                # ISO dates compare correctly as strings.
+                span = (min(old[0], fetched[0]), max(old[1], fetched[1]))
+            elif fetched:
+                span = fetched
+            elif old:
+                span = old
+            else:
                 continue
-            df = pd.read_csv(csv_path)
-            if df.empty or "date" not in df.columns:
-                continue
-            out.append(f"{code}\t{df['date'].min()}\t{df['date'].max()}")
+            out.append(f"{code}\t{span[0]}\t{span[1]}")
         return out
 
     all_codes: list[str] = []
     for codes in market_codes.values():
         all_codes.extend(codes)
     all_path = instruments_dir / "all.txt"
-    all_path.write_text("\n".join(_entries(all_codes)) + "\n")
+    all_path.write_text("\n".join(_entries(all_codes, _existing_spans(all_path))) + "\n")
     print(f"Generated {all_path}")
 
     for market, codes in market_codes.items():
         market_path = instruments_dir / f"{market}.txt"
-        market_path.write_text("\n".join(_entries(codes)) + "\n")
+        market_path.write_text("\n".join(_entries(codes, _existing_spans(market_path))) + "\n")
         print(f"Generated {market_path}")
 
 
