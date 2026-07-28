@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import EquityChart from "@/components/EquityChart";
 import HoldingsTable from "@/components/HoldingsTable";
 import OrdersTable from "@/components/OrdersTable";
+import SignalPicksTable from "@/components/SignalPicksTable";
 
 const fmtKRW = (v: number) => {
   if (v == null) return "—";
@@ -149,48 +150,16 @@ export default function LiveDashboardPage() {
         </div>
         {!signals.data?.picks.length ? (
           <p className="text-sm text-emerald-800/70">
-            아직 시그널이 생성되지 않았습니다. 평일 15:35 KST에 자동으로 갱신됩니다.
+            아직 시그널이 생성되지 않았습니다. 평일 장 마감 후(15:45 데이터 갱신 → 신호 생성)
+            자동으로 갱신됩니다.
           </p>
         ) : (
-          <div className="overflow-x-auto bg-white rounded-md border border-emerald-100">
-            <table className="w-full text-sm">
-              <thead className="bg-emerald-50 text-emerald-900">
-                <tr>
-                  <th className="text-left px-3 py-2 font-medium">순위</th>
-                  <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
-                  <th className="text-right px-3 py-2 font-medium">알파 점수</th>
-                  <th className="text-left px-3 py-2 font-medium">조회</th>
-                </tr>
-              </thead>
-              <tbody>
-                {signals.data.picks.map((p) => (
-                  <tr key={p.code} className="border-t border-emerald-50">
-                    <td className="px-3 py-2 font-semibold text-emerald-700">#{p.rank}</td>
-                    <td className="px-3 py-2">
-                      <span className="text-gray-900">{p.name ?? p.code}</span>
-                      {p.name && p.name !== p.code && (
-                        <span className="font-mono text-xs text-gray-500 ml-2">({p.code})</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono">
-                      {p.score == null ? "—" : p.score.toFixed(6)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <a
-                        href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline text-xs"
-                      >
-                        네이버 금융 ↗
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SignalPicksTable picks={signals.data.picks} />
         )}
+        <p className="text-[11px] text-emerald-800/60 mt-2">
+          행을 클릭하면 모델이 그 종목 점수에 반영한 상위 지표(기여도)를 볼 수 있습니다.
+          매매 규칙 전체는 <a href="/guide" className="underline">가이드</a> 참고.
+        </p>
       </section>
 
       {/* Recent orders */}

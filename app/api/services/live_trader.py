@@ -178,10 +178,19 @@ def generate_daily_signal(today: date | None = None) -> dict:
         len(picks), today, signal_for,
     )
 
+    # Why-explanations for the dashboard — best effort, never blocks signals.
+    reasons: dict[str, dict] = {}
+    try:
+        from .signal_reasons import build_reasons
+        reasons = build_reasons([p["code"] for p in picks], model=model, dataset=dataset)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("generate_daily_signal: build_reasons failed: %s", exc)
+
     with SessionLocal() as db:
         # Idempotent: nuke any prior picks targeting the same trade date.
         db.query(Signal).filter(Signal.as_of == signal_for).delete()
         for p in picks:
+            reason = reasons.get(p["code"])
             db.add(Signal(
                 as_of=signal_for,
                 rank=p["rank"],
@@ -190,6 +199,7 @@ def generate_daily_signal(today: date | None = None) -> dict:
                 score=p.get("score"),
                 model_class=LIVE_CONFIG["model_class"],
                 strategy_class=LIVE_CONFIG["strategy_class"],
+                reasons_json=json.dumps(reason, ensure_ascii=False) if reason else None,
             ))
         db.commit()
 

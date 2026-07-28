@@ -18,6 +18,54 @@ export default function GuidePage() {
         </p>
       </header>
 
+      {/* 0. 라이브 자동매매 동작 방식 */}
+      <section className="bg-emerald-50/50 border border-emerald-200 rounded-lg p-6 not-prose">
+        <h2 className="text-2xl font-bold text-emerald-900 mb-2">
+          ⚡ 라이브 자동매매 — 실제 동작 방식
+        </h2>
+        <p className="text-gray-700 mb-5 text-sm">
+          아래는 현재 <strong>KIS 모의투자 계좌</strong>에서 매 거래일 자동으로 실행되는 규칙입니다.
+          (아래 1~6장은 이 규칙의 바탕이 되는 모델·백테스트 방법론 설명)
+        </p>
+
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">📅 하루 일정 (KST)</h3>
+        <table className="min-w-full border border-gray-200 bg-white mb-6 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-3 py-2 text-left font-semibold border-b">시각</th>
+              <th className="px-3 py-2 text-left font-semibold border-b">동작</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td className="px-3 py-2 border-b font-mono">09:00</td><td className="px-3 py-2 border-b">전일 신호 기준 <strong>실제 주문</strong>(open 전략) — 매도 먼저, 그다음 매수 (시장가)</td></tr>
+            <tr><td className="px-3 py-2 border-b font-mono">09:30</td><td className="px-3 py-2 border-b">계좌 동기화 — 잔고·보유종목 스냅샷 기록</td></tr>
+            <tr><td className="px-3 py-2 border-b font-mono">15:20</td><td className="px-3 py-2 border-b">close 전략 — 같은 신호를 <strong>종가 체결로 시뮬레이션</strong> (실행 타이밍 A/B 실험)</td></tr>
+            <tr><td className="px-3 py-2 border-b font-mono">15:40</td><td className="px-3 py-2 border-b">양 전략 계좌 동기화 · 일일 손익 확정</td></tr>
+            <tr><td className="px-3 py-2 border-b font-mono">15:45</td><td className="px-3 py-2 border-b">주가 데이터 갱신 → 성공 시 <strong>다음 거래일 신호 자동 생성</strong> (모델 재학습)</td></tr>
+          </tbody>
+        </table>
+
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">🛒 매수 규칙</h3>
+        <ul className="list-disc pl-6 text-gray-700 space-y-1 text-sm mb-6">
+          <li>모델 점수 <strong>상위 10개(top-K)</strong>가 목표 포트폴리오 — 미보유 종목 중 순위 높은 것부터 <strong>하루 최대 2종목</strong>만 신규 매수 (회전율 억제)</li>
+          <li>종목당 매수액 = <strong>총자산 ÷ 10</strong> (슬롯 예산, 균등 비중 목표) — 빈 계좌에서 약 5거래일에 걸쳐 10종목으로 채워짐</li>
+          <li><strong>고가주 필터</strong>: 1주 가격이 슬롯 예산을 넘는 종목(예: 소액 계좌에서 주당 100만원 초과)은 제외하고 다음 순위가 대체</li>
+          <li>주문은 09:00 개장 동시호가 <strong>시장가</strong>, 수량은 전일 종가 기준 계산</li>
+        </ul>
+
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">💸 매도 규칙</h3>
+        <ul className="list-disc pl-6 text-gray-700 space-y-1 text-sm mb-4">
+          <li>매도 트리거는 단 하나 — <strong>보유 종목이 그날 신호 top-10에서 빠졌을 때</strong> (하루 최대 2종목, 전량 시장가 매도)</li>
+          <li>순위 이탈 매도는 성격이 3가지로 나뉨: ① 급등 후 모멘텀 소진(익절성) ② 다른 종목이 더 좋아져 밀림(교체) ③ 하락+전망 악화(손절성)</li>
+          <li><strong>손절매·익절·현금비중 관리 없음</strong> — 급락해도 top-10에 남아 있으면 계속 보유. 리스크 관리는 10종목 분산과 매일 재평가에만 의존</li>
+        </ul>
+        <p className="text-xs text-gray-500">
+          ※ 대시보드 추천 종목의 "매수 근거"는 직관 지표 요약(모멘텀·거래량·이평 괴리)이고,
+          행을 펼치면 모델이 실제 점수에 반영한 상위 지표(LightGBM 기여도)를 보여줍니다.
+          점수가 하위권에서 동률이면 모델이 그 구간을 변별하지 못했다는 뜻입니다.
+        </p>
+      </section>
+
       {/* 1. 유니버스 */}
       <section>
         <h2 className="text-2xl font-bold text-gray-900 mb-4">

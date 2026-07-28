@@ -47,6 +47,10 @@ class Signal(Base):
     score = Column(Float, nullable=True)
     model_class = Column(String(64), nullable=False)
     strategy_class = Column(String(64), nullable=False)
+    # Why this pick — JSON: {"summary": str, "metrics": {...},
+    # "top_features": [{"name","desc","contrib"}]}. Populated best-effort by
+    # signal_reasons.build_reasons; display-only, never required by trading.
+    reasons_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("ix_signals_asof_rank", "as_of", "rank"),)

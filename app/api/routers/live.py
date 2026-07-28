@@ -52,6 +52,8 @@ class LiveSignalRow(BaseModel):
     name: str | None = None
     score: float | None = None
     as_of: date
+    # Why this pick: {"summary", "metrics", "top_features"} — see signal_reasons.
+    reasons: dict | None = None
 
 
 class LiveSignalsResponse(BaseModel):
@@ -135,10 +137,19 @@ def get_latest_signals():
                   .filter(Signal.as_of == as_of)
                   .order_by(Signal.rank.asc())
                   .all())
+        def _reasons(r):
+            if not r.reasons_json:
+                return None
+            try:
+                return json.loads(r.reasons_json)
+            except Exception:  # noqa: BLE001
+                return None
+
         return LiveSignalsResponse(
             as_of=as_of,
             picks=[LiveSignalRow(rank=r.rank, code=r.code, name=r.name,
-                                  score=r.score, as_of=r.as_of) for r in rows],
+                                  score=r.score, as_of=r.as_of,
+                                  reasons=_reasons(r)) for r in rows],
         )
 
 

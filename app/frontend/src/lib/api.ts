@@ -257,12 +257,32 @@ export interface LiveBalanceResponse {
   mode: "real" | "paper" | "mock";
 }
 
+export interface SignalReasonFeature {
+  name: string;
+  desc: string;
+  contrib: number;
+}
+
+export interface SignalReasons {
+  summary: string;
+  metrics: {
+    ret5?: number | null;
+    ret20?: number | null;
+    ret60?: number | null;
+    ma20_gap?: number | null;
+    high60_pos?: number | null;
+    vol_ratio?: number | null;
+  };
+  top_features: SignalReasonFeature[];
+}
+
 export interface LiveSignalRow {
   rank: number;
   code: string;
   name: string | null;
   score: number | null;
   as_of: string;
+  reasons: SignalReasons | null;
 }
 
 export interface LiveSignalsResponse {
