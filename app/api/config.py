@@ -29,11 +29,15 @@ class Settings(BaseSettings):
     # Live trading database
     live_db_url: str = "sqlite:///./app/api/db/live.sqlite"
     # Per-strategy seed cash for the equity curve baseline.
-    # - open  : matches the actual KIS paper account starting balance (1억 default)
+    # - open  : MUST match the KIS paper account's granted virtual funds.
+    #           Paper accounts expire and get re-issued with a new grant —
+    #           update this (or the QLIB_API_LIVE_SEED_CASH_OPEN env) every
+    #           time the account is renewed. 2026-07-28 renewal granted 1천만
+    #           (the old account had 1억, which made the ROI card read -90%).
     # - close : matches the DB-only simulated portfolio seed (1천만 default)
     # If the chart shows wildly off percentages, the seed here doesn't match
     # what ended up in starting/ending_equity rows — set the env override.
-    live_seed_cash_open: float = 100_000_000.0
+    live_seed_cash_open: float = 10_000_000.0
     live_seed_cash_close: float = 10_000_000.0
 
     # Auth — JWT-based admin login. JWT secret MUST be overridden in production
