@@ -203,6 +203,43 @@ def generate_daily_signal(today: date | None = None) -> dict:
 # ─── Order submission (09:00 KST) ───────────────────────────────────
 
 
+def _select_affordable_buys(candidates: list[str],
+                            slot_budget: float,
+                            n_drop: int,
+                            price_fn=None) -> tuple[list[tuple[str, float]], list[str]]:
+    """Pick up to n_drop buy candidates in rank order, skipping stocks whose
+    single-share price exceeds the target per-stock slot budget
+    (= total equity / topk — the weight one stock is *supposed* to hold).
+
+    With a small account (1천만 seed, topk=10 → slot ≈ 100만) a stock like
+    Samsung Biologics (155만/주) can never be held at its target weight: it
+    either swallows half the portfolio during the initial ramp or floors to
+    qty=0 and silently wastes the day's buy slot. Filtering up front lets the
+    next-ranked affordable stock take the slot instead.
+
+    Returns (selected [(code, last_close)], skipped_expensive [codes]).
+    """
+    price_fn = price_fn or _last_close
+    selected: list[tuple[str, float]] = []
+    skipped: list[str] = []
+    for code in candidates:
+        if len(selected) >= n_drop:
+            break
+        px = price_fn(code)
+        if not px or px <= 0:
+            log.warning("_select_affordable_buys: no price for %s — skipped", code)
+            continue
+        if px > slot_budget:
+            log.info(
+                "_select_affordable_buys: %s price %.0f > slot budget %.0f — "
+                "skipped, next rank takes the slot", code, px, slot_budget,
+            )
+            skipped.append(code)
+            continue
+        selected.append((code, px))
+    return selected, skipped
+
+
 def submit_daily_orders(today: date | None = None,
                          client: KISClient | None = None,
                          *,
@@ -246,7 +283,9 @@ def submit_daily_orders(today: date | None = None,
         n_drop = LIVE_CONFIG["strategy_kwargs"]["n_drop"]
 
         to_sell_codes = [c for c in held_codes if c not in set(target_codes)][:n_drop]
-        to_buy_codes = [c for c in target_codes if c not in held_codes][:n_drop]
+        # Buy candidates keep full rank order — affordability filtering below
+        # (after sells refresh the cash) decides which n_drop actually get bought.
+        buy_candidates = [c for c in target_codes if c not in held_codes]
 
         submitted = 0
         rejected = 0
@@ -281,18 +320,18 @@ def submit_daily_orders(today: date | None = None,
             snapshot_after = client.get_balance()
             time.sleep(KIS_THROTTLE_SECONDS)
         cash = snapshot_after.cash
-        if to_buy_codes:
-            per_code_budget = cash / max(len(to_buy_codes), 1)
-            for code in to_buy_codes:
-                px = _last_close(code)
-                if px is None or px <= 0:
-                    if not simulated:
-                        _persist_order(db, today, code, "BUY", 0, None,
-                                       OrderResult(ok=False, order_id=None, code=code, side="BUY",
-                                                   qty=0, price=None, raw={}, error="no price"),
-                                       strategy=strategy)
-                        rejected += 1
-                    continue
+        # Target per-stock slot: the weight one position is supposed to hold
+        # in the finished top-K portfolio. Used both to filter unaffordable
+        # stocks and to cap the per-day buy size — without the cap, day one
+        # of an empty account dumped ALL cash into the first n_drop picks
+        # (2 x 500만 whales) and later days bought dust with the leftovers.
+        topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
+        total_equity = max(snapshot_after.total_eval, cash)
+        slot_budget = total_equity / max(topk, 1)
+        to_buy, skipped_expensive = _select_affordable_buys(buy_candidates, slot_budget, n_drop)
+        if to_buy:
+            per_code_budget = min(cash / max(len(to_buy), 1), slot_budget)
+            for code, px in to_buy:
                 qty = max(int(per_code_budget // px), 0)
                 if qty <= 0:
                     continue
@@ -334,7 +373,8 @@ def submit_daily_orders(today: date | None = None,
             "strategy": strategy,
             "simulated": simulated,
             "sells": len(to_sell_codes),
-            "buys": len(to_buy_codes),
+            "buys": len(to_buy),
+            "skipped_expensive": skipped_expensive,
             "submitted": submitted,
             "rejected": rejected,
         }
