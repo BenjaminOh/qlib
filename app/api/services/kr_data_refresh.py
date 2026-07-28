@@ -84,9 +84,19 @@ def refresh_kr_data(today: date | None = None, qlib_dir: Path = QLIB_DIR) -> dic
             "likely network failure or all tickers rate-limited"
         )
 
+    # ORDER MATTERS: dump_update decides what to append by comparing CSV dates
+    # against each stock's end date in instruments/all.txt. Extending the
+    # instruments files BEFORE the dump (the old order) made every stock look
+    # already-current, so the dump appended nothing while the calendar kept
+    # growing — feature bins froze and live_signal died on empty predictions.
     ok = _run_dump_update(CSV_STAGING, qlib_dir)
     if not ok:
         raise RuntimeError("refresh_kr_data: dump_bin.py dump_update returned non-zero")
+
+    # Only AFTER the dump has appended may the market membership files
+    # (kospi200.txt etc. — dump_update itself only rewrites all.txt) be
+    # extended to the fetched range.
+    _update_instruments_files(CSV_STAGING)
 
     new_last = get_qlib_last_date(qlib_dir)
     new_calendar_days = (new_last - last_date).days if new_last else 0
@@ -105,26 +115,40 @@ def refresh_kr_data(today: date | None = None, qlib_dir: Path = QLIB_DIR) -> dic
 
 
 def _fetch_universe(start: date, end: date, csv_dir: Path) -> tuple[int, int]:
-    """Wipe csv_dir then re-fetch the universe via scripts.kr_data_fetch helpers."""
+    """Wipe csv_dir then re-fetch the universe via scripts.kr_data_fetch helpers.
+
+    Fetch ONLY — instruments files must not be touched here, or dump_update
+    (which runs later and compares against them) sees every stock as current
+    and appends nothing. See _update_instruments_files.
+    """
     if csv_dir.exists():
         shutil.rmtree(csv_dir)
     csv_dir.mkdir(parents=True, exist_ok=True)
 
     # Lazy import keeps yfinance off the API import path (only worker pulls it in).
     sys.path.insert(0, "/app")
-    from scripts.kr_data_fetch import fetch_market_data, generate_instruments_files  # noqa: E402
+    from scripts.kr_data_fetch import fetch_market_data  # noqa: E402
     from app.api.core.kr_universes import MARKETS  # noqa: E402
 
     codes = MARKETS["kr_all"]
     fetched = fetch_market_data(codes, start.isoformat(), end.isoformat(), csv_dir, delay=0.15)
     skipped = len(codes) - fetched
+    return fetched, skipped
+
+
+def _update_instruments_files(csv_dir: Path) -> None:
+    """Extend membership spans AFTER dump_update appended the feature rows.
+
+    merge=True: extend membership end-dates only. A plain regenerate from the
+    2-day incremental CSVs used to clobber every span down to the fetch
+    window, emptying train/valid slices for the next live_signal.
+    """
+    sys.path.insert(0, "/app")
+    from scripts.kr_data_fetch import generate_instruments_files  # noqa: E402
+    from app.api.core.kr_universes import MARKETS  # noqa: E402
 
     market_codes = {m: c for m, c in MARKETS.items()}
-    # merge=True: extend membership end-dates only. A plain regenerate from the
-    # 2-day incremental CSVs used to clobber every span down to the fetch
-    # window, emptying train/valid slices for the next live_signal.
     generate_instruments_files(market_codes, csv_dir, QLIB_DIR, merge=True)
-    return fetched, skipped
 
 
 def _run_dump_update(csv_dir: Path, qlib_dir: Path) -> bool:
