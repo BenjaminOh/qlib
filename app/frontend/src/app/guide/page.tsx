@@ -23,9 +23,14 @@ export default function GuidePage() {
         <h2 className="text-2xl font-bold text-emerald-900 mb-2">
           ⚡ 라이브 자동매매 — 실제 동작 방식
         </h2>
-        <p className="text-gray-700 mb-5 text-sm">
+        <p className="text-gray-700 mb-2 text-sm">
           아래는 현재 <strong>KIS 모의투자 계좌</strong>에서 매 거래일 자동으로 실행되는 규칙입니다.
           (아래 1~6장은 이 규칙의 바탕이 되는 모델·백테스트 방법론 설명)
+        </p>
+        <p className="mb-5 text-sm">
+          <a href="/guide/strategy" className="text-blue-600 underline font-medium">
+            → 매수 기준 전체를 단계별·실전 예시로 풀어낸 &ldquo;전략 설명서&rdquo; 보기
+          </a>
         </p>
 
         <h3 className="text-lg font-semibold text-gray-900 mb-2">📅 하루 일정 (KST)</h3>

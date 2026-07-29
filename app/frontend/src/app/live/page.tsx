@@ -158,7 +158,8 @@ export default function LiveDashboardPage() {
         )}
         <p className="text-[11px] text-emerald-800/60 mt-2">
           행을 클릭하면 모델이 그 종목 점수에 반영한 상위 지표(기여도)를 볼 수 있습니다.
-          매매 규칙 전체는 <a href="/guide" className="underline">가이드</a> 참고.
+          어떤 기준으로 매수가 결정되는지는 <a href="/guide/strategy" className="underline font-medium">전략 설명서</a>,
+          일일 스케줄·방법론은 <a href="/guide" className="underline">가이드</a> 참고.
         </p>
       </section>
 

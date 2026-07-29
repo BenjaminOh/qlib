@@ -58,6 +58,9 @@ export default function RootLayout({
                 <Link href="/guide" className="text-gray-600 hover:text-blue-600">
                   📖 매매 가이드
                 </Link>
+                <Link href="/guide/strategy" className="text-gray-600 hover:text-blue-600">
+                  📐 전략 설명서
+                </Link>
                 <button
                   onClick={handleLogout}
                   className="ml-auto text-sm text-gray-500 hover:text-red-600"
