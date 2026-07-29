@@ -137,26 +137,63 @@ class StockTradeRow(BaseModel):
     strategy: str
     side: str
     qty: int
-    price: float | None = None
     status: str
     error: str | None = None
+    # Execution price. Real market orders have no recorded fill price yet
+    # (no fill reconciliation), so this falls back to that day's OPEN from
+    # kr_data with price_est=True.
+    exec_price: float | None = None
+    price_est: bool = False
+    # Position state AFTER this event (running reconstruction):
+    cum_qty: int | None = None
+    avg_price: float | None = None
+    # Valuation as of that day's close:
+    day_close: float | None = None
+    ret_pct: float | None = None    # (close - avg) / avg
+    pnl_amt: float | None = None    # (close - avg) * cum_qty
+    realized_pnl: float | None = None  # sells only: (sell - avg) * qty
     # Decision basis captured at order time: {"action","basis","summary",
     # "metrics","top_features"} — buys carry that day's signal reasons,
     # sells carry the top-K-exit snapshot.
     reasons: dict | None = None
 
 
+def _price_series(code: str) -> dict[str, tuple[float | None, float | None]]:
+    """{iso_date: (open, close)} from the qlib store — best effort."""
+    try:
+        from ..core.qlib_manager import ensure_qlib_initialized
+        ensure_qlib_initialized()
+        from qlib.data import D
+        df = D.features([code], ["$open", "$close"], freq="day")
+        if df is None or df.empty:
+            return {}
+        df = df.droplevel("instrument")
+        return {
+            ts.strftime("%Y-%m-%d"): (
+                float(row["$open"]) if row["$open"] == row["$open"] else None,
+                float(row["$close"]) if row["$close"] == row["$close"] else None,
+            )
+            for ts, row in df.iterrows()
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 @router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
-def get_stock_trades(code: str):
-    """Per-stock trade history with the decision basis of each order."""
+def get_stock_trades(code: str, strategy: str = Query("open")):
+    """Chronological per-stock trade history with running position state,
+    point-in-time valuation and the decision basis of each order."""
     init_db()
+    prices = _price_series(code)
     with SessionLocal() as db:
         rows = (db.query(Order)
-                  .filter(Order.code == code)
-                  .order_by(desc(Order.trade_date), desc(Order.id))
-                  .limit(100)
+                  .filter(Order.code == code, Order.strategy == strategy)
+                  .order_by(Order.trade_date.asc(), Order.id.asc())
+                  .limit(200)
                   .all())
-        out = []
+        out: list[StockTradeRow] = []
+        pos_qty = 0
+        pos_cost = 0.0
         for r in rows:
             reasons = None
             if r.reasons_json:
@@ -164,11 +201,36 @@ def get_stock_trades(code: str):
                     reasons = json.loads(r.reasons_json)
                 except Exception:  # noqa: BLE001
                     pass
-            out.append(StockTradeRow(
+            d_iso = r.trade_date.isoformat()
+            day_open, day_close = prices.get(d_iso, (None, None))
+
+            item = StockTradeRow(
                 trade_date=r.trade_date, strategy=r.strategy, side=r.side,
-                qty=r.qty, price=r.price, status=r.status, error=r.error,
-                reasons=reasons,
-            ))
+                qty=r.qty, status=r.status, error=r.error, reasons=reasons,
+            )
+            executed = r.status in ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
+            if executed:
+                px = r.price
+                item.price_est = px is None
+                if px is None:
+                    px = day_open or day_close
+                item.exec_price = px
+                if px is not None:
+                    if r.side == "BUY":
+                        pos_qty += r.qty
+                        pos_cost += r.qty * px
+                    else:  # SELL
+                        avg_before = (pos_cost / pos_qty) if pos_qty else 0.0
+                        item.realized_pnl = (px - avg_before) * min(r.qty, pos_qty)
+                        pos_cost -= avg_before * min(r.qty, pos_qty)
+                        pos_qty = max(pos_qty - r.qty, 0)
+                item.cum_qty = pos_qty
+                item.avg_price = (pos_cost / pos_qty) if pos_qty else None
+                item.day_close = day_close
+                if day_close is not None and item.avg_price:
+                    item.ret_pct = day_close / item.avg_price - 1
+                    item.pnl_amt = (day_close - item.avg_price) * pos_qty
+            out.append(item)
         return out
 
 

@@ -15,6 +15,7 @@ const fmtKRW = (v: number) => {
 const fmtPct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
 function TradeHistory({ code }: { code: string }) {
+  const [detail, setDetail] = useState<number | null>(null);
   const trades = useQuery({
     queryKey: ["stock-trades", code],
     queryFn: () => api.getStockTrades(code),
@@ -25,58 +26,110 @@ function TradeHistory({ code }: { code: string }) {
   if (!trades.data?.length)
     return <p className="text-xs text-gray-400 py-2">기록된 매매 이력이 없습니다.</p>;
 
+  const pctCls = (v: number | null) =>
+    v == null ? "text-gray-400" : v >= 0 ? "text-emerald-700" : "text-red-700";
+
   return (
-    <div className="space-y-3 py-1">
-      {trades.data.map((t: StockTrade, i: number) => {
-        const isBuy = t.side === "BUY";
-        const failed = t.status === "REJECTED";
-        return (
-          <div key={i} className="border-l-2 pl-3 border-gray-200">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-mono text-gray-500">{t.trade_date}</span>
-              <span className={`font-semibold ${isBuy ? "text-red-600" : "text-blue-600"}`}>
-                {isBuy ? "매수" : "매도"} {t.qty.toLocaleString()}주
-              </span>
-              <span className="text-gray-400">
-                {t.price != null ? `@${t.price.toLocaleString()}` : "시장가"}
-              </span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                failed
-                  ? "bg-red-50 text-red-600 border-red-200"
-                  : t.status === "SIMULATED"
-                    ? "bg-gray-50 text-gray-500 border-gray-200"
-                    : "bg-emerald-50 text-emerald-700 border-emerald-200"
-              }`}>
-                {t.status}{t.strategy === "close" ? " (시뮬)" : ""}
-              </span>
-            </div>
-            {failed && t.error && (
-              <p className="text-[11px] text-red-500 mt-0.5">거부 사유: {t.error}</p>
-            )}
-            {t.reasons ? (
-              <div className="mt-1">
-                <p className="text-xs text-gray-800 mb-1">
-                  <span className={`font-medium ${isBuy ? "text-red-700" : "text-blue-700"}`}>
-                    {t.reasons.basis ?? (isBuy ? "매수" : "매도")}
-                  </span>
-                  {t.reasons.summary ? ` — ${t.reasons.summary}` : ""}
-                </p>
-                {t.reasons.metrics && <MetricBadges m={t.reasons.metrics} />}
-                {t.reasons.top_features?.length > 0 && (
-                  <div className="mt-1.5">
-                    <p className="text-[10px] text-gray-400 mb-1">당시 모델 기여 지표 Top {t.reasons.top_features.length}</p>
-                    <FeatureContribList features={t.reasons.top_features} />
-                  </div>
+    <div className="overflow-x-auto py-1">
+      <table className="w-full text-xs">
+        <thead className="text-gray-500">
+          <tr className="border-b border-gray-200">
+            <th className="text-left px-2 py-1.5 font-medium">일자</th>
+            <th className="text-left px-2 py-1.5 font-medium">구분</th>
+            <th className="text-right px-2 py-1.5 font-medium">단가</th>
+            <th className="text-right px-2 py-1.5 font-medium">평균단가</th>
+            <th className="text-right px-2 py-1.5 font-medium">보유</th>
+            <th className="text-right px-2 py-1.5 font-medium" title="그 시점 종가 기준">수익률</th>
+            <th className="text-right px-2 py-1.5 font-medium" title="그 시점 종가 기준">수익금</th>
+            <th className="text-left px-2 py-1.5 font-medium">판단 근거</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trades.data.map((t: StockTrade, i: number) => {
+            const isBuy = t.side === "BUY";
+            const failed = t.status === "REJECTED";
+            const expanded = detail === i;
+            const hasDetail = !!t.reasons && ((t.reasons.metrics && Object.keys(t.reasons.metrics).length > 0) || (t.reasons.top_features?.length ?? 0) > 0);
+            return (
+              <>
+                <tr
+                  key={i}
+                  className={`border-b border-gray-100 ${failed ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer hover:bg-white" : ""}`}
+                  onClick={() => hasDetail && setDetail(expanded ? null : i)}
+                >
+                  <td className="px-2 py-1.5 font-mono whitespace-nowrap">{t.trade_date}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={`font-semibold ${isBuy ? "text-red-600" : "text-blue-600"}`}>
+                      {isBuy ? "매수" : "매도"} {t.qty.toLocaleString()}주
+                    </span>
+                    {failed && <span className="text-red-500 ml-1">거부</span>}
+                    {t.strategy === "close" && <span className="text-gray-400 ml-1">(시뮬)</span>}
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono whitespace-nowrap">
+                    {failed ? "—" : t.exec_price != null ? (
+                      <>
+                        {t.exec_price.toLocaleString()}
+                        {t.price_est && <span className="text-gray-400" title="시장가 주문 — 당일 시가로 추정">*</span>}
+                      </>
+                    ) : "—"}
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono">
+                    {t.avg_price != null ? Math.round(t.avg_price).toLocaleString() : "—"}
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono">
+                    {t.cum_qty != null ? `${t.cum_qty.toLocaleString()}주` : "—"}
+                  </td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${pctCls(t.ret_pct)}`}>
+                    {t.ret_pct != null ? `${(t.ret_pct * 100).toFixed(2)}%` : "—"}
+                  </td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${pctCls(t.realized_pnl ?? t.pnl_amt)}`}>
+                    {t.realized_pnl != null
+                      ? `${t.realized_pnl >= 0 ? "+" : ""}${Math.round(t.realized_pnl).toLocaleString()} 실현`
+                      : t.pnl_amt != null
+                        ? `${t.pnl_amt >= 0 ? "+" : ""}${Math.round(t.pnl_amt).toLocaleString()}`
+                        : "—"}
+                  </td>
+                  <td className="px-2 py-1.5 max-w-[340px]">
+                    {failed ? (
+                      <span className="text-red-500">{t.error}</span>
+                    ) : t.reasons ? (
+                      <span className="text-gray-800">
+                        <span className={`font-medium ${isBuy ? "text-red-700" : "text-blue-700"}`}>
+                          {t.reasons.basis ?? ""}
+                        </span>
+                        {t.reasons.summary ? ` — ${t.reasons.summary}` : ""}
+                        {hasDetail && (
+                          <span className="text-emerald-600 ml-1">{expanded ? "▲" : "▼"}</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">미기록</span>
+                    )}
+                  </td>
+                </tr>
+                {expanded && t.reasons && (
+                  <tr key={`${i}-d`} className="bg-white">
+                    <td colSpan={8} className="px-3 py-2">
+                      {t.reasons.metrics && <MetricBadges m={t.reasons.metrics} />}
+                      {(t.reasons.top_features?.length ?? 0) > 0 && (
+                        <div className="mt-1.5">
+                          <p className="text-[10px] text-gray-400 mb-1">
+                            당시 모델 기여 지표 Top {t.reasons.top_features.length}
+                          </p>
+                          <FeatureContribList features={t.reasons.top_features} />
+                        </div>
+                      )}
+                    </td>
+                  </tr>
                 )}
-              </div>
-            ) : (
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                판단 기준 미기록 (근거 저장 도입 이전 주문)
-              </p>
-            )}
-          </div>
-        );
-      })}
+              </>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="text-[10px] text-gray-400 mt-1">
+        * 시장가 주문은 체결가 미수신으로 당일 시가 기준 추정치 · 수익률/수익금은 각 시점의 종가 기준
+      </p>
     </div>
   );
 }

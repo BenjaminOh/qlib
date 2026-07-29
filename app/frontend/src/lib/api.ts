@@ -250,9 +250,16 @@ export interface StockTrade {
   strategy: string;
   side: "BUY" | "SELL";
   qty: number;
-  price: number | null;
   status: string;
   error: string | null;
+  exec_price: number | null;
+  price_est: boolean;
+  cum_qty: number | null;
+  avg_price: number | null;
+  day_close: number | null;
+  ret_pct: number | null;
+  pnl_amt: number | null;
+  realized_pnl: number | null;
   reasons: StockTradeReasons | null;
 }
 
