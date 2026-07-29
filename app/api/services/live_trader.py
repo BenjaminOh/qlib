@@ -60,7 +60,14 @@ LIVE_CONFIG = {
     "strategy_kwargs": {"topk": 10, "n_drop": 2},
     "model_class": "LGBModel",
     "model_module": "qlib.contrib.model.gbdt",
-    "model_kwargs": {},
+    # Stability fix (2026-07-29, diagnostic-backed): the default learning
+    # rate converged in ONE tree on noisy days (best_iteration=1 → every
+    # stock got the same constant score and picks fell back to code order;
+    # 2 of the last 4 days degenerated). lr=0.005 with 200-round patience
+    # trained 63-216 trees with 8-10 distinct top-10 scores on all four
+    # days. See scripts/diagnose_training_stability.py and the
+    # scenario-matrix design doc for the full experiment table.
+    "model_kwargs": {"learning_rate": 0.005, "early_stopping_rounds": 200},
     "handler_class": "Alpha158",
     "handler_module": "qlib.contrib.data.handler",
     "handler_kwargs": {},
@@ -180,6 +187,19 @@ def generate_daily_signal(today: date | None = None) -> dict:
         len(picks), today, signal_for,
     )
 
+    # Degeneration guard: all-equal scores mean the model learned nothing
+    # today and the "ranking" is just code order. Signals are still stored
+    # (the record is factual) but the flag is surfaced in the task result /
+    # logs so monitoring can catch a relapse of the constant-score bug.
+    unique_scores = len({round(p.get("score") or 0.0, 8) for p in picks})
+    degenerate = len(picks) >= 5 and unique_scores < 5
+    if degenerate:
+        log.warning(
+            "generate_daily_signal: DEGENERATE signal — %d picks share only "
+            "%d distinct scores (model best_iteration likely collapsed)",
+            len(picks), unique_scores,
+        )
+
     # Why-explanations for the dashboard — best effort, never blocks signals.
     reasons: dict[str, dict] = {}
     try:
@@ -209,6 +229,8 @@ def generate_daily_signal(today: date | None = None) -> dict:
         "as_of": signal_for.isoformat(),
         "generated_on": today.isoformat(),
         "picks": len(picks),
+        "unique_scores": unique_scores,
+        "degenerate": degenerate,
     }
 
 
