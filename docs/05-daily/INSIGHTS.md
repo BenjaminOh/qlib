@@ -20,6 +20,12 @@
   요지: instruments 클로버·토큰 경합·int 종목코드·피처 동결·mlflow 드리프트·수정주가 이음새·
   instruments 선연장 순서 결함 — 전부 수정 배포됨.
 
+- **[2026-07-29] 서버 진단 시 `/var/lib/docker` 전체 du 금지** — 오버레이 수백만 파일 스캔이
+  1시간 I/O를 점유해 진행 중 빌드를 심각하게 지연시킴(자책 사례). `docker system df`/`docker buildx du`로 대체.
+- **[2026-07-29] 빌드 30-40분의 구조 원인**: ① scripts/가 Cython 컴파일 레이어에 결합(7f9e1ec2로 분리)
+  ② 디스크 83%에서 buildkit 캐시 evict ③ 이미지 export I/O. 캐시 42GB 정리로 68%까지 회복.
+  주기 점검 항목: 디스크 75% 초과 시 `docker buildx prune --keep-storage 8gb` 제안할 것.
+
 ## 2. 모델·신호 지식
 
 - **[2026-07-29] 학습 퇴화 원인 확정**: 기본 학습률(0.1)이 노이즈 큰 날 트리 1개로 조기 수렴 →
