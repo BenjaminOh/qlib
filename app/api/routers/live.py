@@ -52,6 +52,9 @@ class LiveSignalRow(BaseModel):
     name: str | None = None
     score: float | None = None
     as_of: date
+    # Latest close in the qlib store — the price the next morning's buy
+    # quantity is computed from (slot budget // last_close).
+    last_close: float | None = None
     # Why this pick: {"summary", "metrics", "top_features"} — see signal_reasons.
     reasons: dict | None = None
 
@@ -273,10 +276,18 @@ def get_latest_signals():
             except Exception:  # noqa: BLE001
                 return None
 
+        def _close(code: str) -> float | None:
+            try:
+                from ..services.live_trader import _last_close
+                return _last_close(code)
+            except Exception:  # noqa: BLE001
+                return None
+
         return LiveSignalsResponse(
             as_of=as_of,
             picks=[LiveSignalRow(rank=r.rank, code=r.code, name=r.name,
                                   score=r.score, as_of=r.as_of,
+                                  last_close=_close(r.code),
                                   reasons=_reasons(r)) for r in rows],
         )
 

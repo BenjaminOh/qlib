@@ -307,6 +307,7 @@ export interface LiveSignalRow {
   name: string | null;
   score: number | null;
   as_of: string;
+  last_close: number | null;
   reasons: SignalReasons | null;
 }
 

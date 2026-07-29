@@ -14,6 +14,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
           <tr>
             <th className="text-left px-3 py-2 font-medium">순위</th>
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
+            <th className="text-right px-3 py-2 font-medium" title="신호 기준 최근 종가 — 매수 수량 계산에 쓰이는 가격">종가</th>
             <th className="text-left px-3 py-2 font-medium">매수 근거</th>
             <th className="text-right px-3 py-2 font-medium">알파 점수</th>
             <th className="text-left px-3 py-2 font-medium">조회</th>
@@ -36,6 +37,9 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                     {p.name && p.name !== p.code && (
                       <span className="font-mono text-xs text-gray-500 ml-2">({p.code})</span>
                     )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap align-top">
+                    {p.last_close != null ? `${p.last_close.toLocaleString()}원` : "—"}
                   </td>
                   <td className="px-3 py-2">
                     {p.reasons ? (
@@ -72,7 +76,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                 {expanded && p.reasons && p.reasons.top_features.length > 0 && (
                   <tr key={`${p.code}-detail`} className="bg-emerald-50/30">
                     <td />
-                    <td colSpan={4} className="px-3 py-2">
+                    <td colSpan={5} className="px-3 py-2">
                       <p className="text-[11px] text-gray-500 mb-1.5">
                         모델(LightGBM)이 이 종목 점수에 가장 크게 반영한 지표 Top {p.reasons.top_features.length}
                         — 양수(+)는 점수를 올린 요인, 음수(−)는 낮춘 요인
