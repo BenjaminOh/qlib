@@ -75,6 +75,11 @@ class Order(Base):
     # written immediately from the kr_data last close.
     status = Column(String(16), nullable=False, default="SUBMITTED")  # SUBMITTED/REJECTED/FILLED/PARTIAL/CANCELLED/SIMULATED
     error = Column(Text, nullable=True)
+    # Decision basis CAPTURED AT ORDER TIME — {"action","basis","summary",
+    # "metrics","top_features"}. Sells can't be reconstructed later (the sell
+    # trigger is the stock VANISHING from that day's signal), so this snapshot
+    # is the only record of why. Display-only.
+    reasons_json = Column(Text, nullable=True)
     raw_response = Column(Text, nullable=True)
 
     fills = relationship("Fill", back_populates="order", cascade="all, delete-orphan")

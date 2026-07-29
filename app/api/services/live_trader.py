@@ -306,18 +306,20 @@ def submit_daily_orders(today: date | None = None,
             holding = next((h for h in snapshot.holdings if h.code == code), None)
             if not holding or holding.qty <= 0:
                 continue
+            sell_why = _sell_reasons(code)
             if simulated:
                 px = _last_close(code) or holding.eval_price or holding.avg_price
                 if not px or px <= 0:
                     continue
                 realised = (px - holding.avg_price) * holding.qty
                 _persist_simulated_fill(db, today, code, "SELL", holding.qty, px,
-                                        strategy=strategy, pnl=realised)
+                                        strategy=strategy, pnl=realised,
+                                        reasons=sell_why)
                 submitted += 1
             else:
                 res = client.place_order(code, "SELL", holding.qty, price=None)
                 _persist_order(db, today, code, "SELL", holding.qty, None, res,
-                               strategy=strategy)
+                               strategy=strategy, reasons=sell_why)
                 if not res.ok:
                     log.warning("live_orders: SELL REJECTED code=%s qty=%d error=%s",
                                 code, holding.qty, res.error)
@@ -347,14 +349,15 @@ def submit_daily_orders(today: date | None = None,
                 qty = max(int(per_code_budget // px), 0)
                 if qty <= 0:
                     continue
+                buy_why = _buy_reasons(db, today, code)
                 if simulated:
                     _persist_simulated_fill(db, today, code, "BUY", qty, px,
-                                            strategy=strategy)
+                                            strategy=strategy, reasons=buy_why)
                     submitted += 1
                 else:
                     res = client.place_order(code, "BUY", qty, price=None)
                     _persist_order(db, today, code, "BUY", qty, None, res,
-                                   strategy=strategy)
+                                   strategy=strategy, reasons=buy_why)
                     if not res.ok:
                         log.warning("live_orders: BUY REJECTED code=%s qty=%d error=%s",
                                     code, qty, res.error)
@@ -493,7 +496,8 @@ def sync_account(client: KISClient | None = None,
 
 def _persist_order(db: Session, trade_date: date, code: str, side: str,
                    qty: int, price: float | None, res: OrderResult,
-                   *, strategy: str = STRATEGY_OPEN) -> Order:
+                   *, strategy: str = STRATEGY_OPEN,
+                   reasons: dict | None = None) -> Order:
     o = Order(
         trade_date=trade_date,
         strategy=strategy,
@@ -507,20 +511,58 @@ def _persist_order(db: Session, trade_date: date, code: str, side: str,
         status="SUBMITTED" if res.ok else "REJECTED",
         error=res.error,
         raw_response=json.dumps(res.raw, ensure_ascii=False)[:4000],
+        reasons_json=json.dumps(reasons, ensure_ascii=False) if reasons else None,
     )
     db.add(o)
     db.flush()  # populate o.id for Fill FK
     return o
 
 
+def _buy_reasons(db: Session, as_of: date, code: str) -> dict | None:
+    """Decision basis for a buy = that day's signal reasons + entry rank."""
+    try:
+        sig = (db.query(Signal)
+                 .filter(Signal.as_of == as_of, Signal.code == code)
+                 .first())
+        if sig is None:
+            return None
+        base = json.loads(sig.reasons_json) if sig.reasons_json else {}
+        return {"action": "buy", "basis": f"신호 {sig.rank}위 진입", **base}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_buy_reasons failed for %s: %s", code, exc)
+        return None
+
+
+def _sell_reasons(code: str) -> dict | None:
+    """Decision basis for a sell — the stock DROPPED OUT of today's top-K,
+    so there is no signal row to point at; capture an at-sale metrics
+    snapshot instead. Best effort, never blocks the order flow."""
+    try:
+        from .signal_reasons import build_intuitive_metrics, summarize
+        m = build_intuitive_metrics([code]).get(code, {})
+        return {
+            "action": "sell",
+            "basis": "당일 신호 top-10 이탈 (보유 유지 근거 소멸)",
+            "summary": summarize(m),
+            "metrics": m,
+            "top_features": [],
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_sell_reasons failed for %s: %s", code, exc)
+        return {"action": "sell", "basis": "당일 신호 top-10 이탈 (보유 유지 근거 소멸)",
+                "summary": "", "metrics": {}, "top_features": []}
+
+
 def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
                             qty: int, price: float, strategy: str = STRATEGY_CLOSE,
-                            pnl: float | None = None) -> None:
+                            pnl: float | None = None,
+                            reasons: dict | None = None) -> None:
     """Write a paper Order+Fill pair for the close strategy. No KIS round-trip."""
     res = OrderResult(ok=True, order_id=f"SIM-{int(datetime.utcnow().timestamp()*1000)}",
                       code=code, side=side, qty=qty, price=price,
                       raw={"simulated": True}, error=None)
-    o = _persist_order(db, trade_date, code, side, qty, price, res, strategy=strategy)
+    o = _persist_order(db, trade_date, code, side, qty, price, res, strategy=strategy,
+                       reasons=reasons)
     o.status = "SIMULATED"
     db.add(Fill(
         order_id=o.id,
@@ -577,7 +619,8 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
         ev_value = p["qty"] * last_px
         pnl = ev_value - p["cost"]
         pnl_pct = (pnl / p["cost"]) if p["cost"] else 0.0
-        holdings.append(Holding(code=code, qty=p["qty"], avg_price=avg,
+        holdings.append(Holding(code=code, name=_stock_name(code),
+                                qty=p["qty"], avg_price=avg,
                                 eval_price=last_px, eval_value=ev_value,
                                 pnl=pnl, pnl_pct=pnl_pct))
         total_eval += ev_value

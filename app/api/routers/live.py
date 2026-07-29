@@ -111,7 +111,7 @@ def get_balance():
         total_eval=snap.total_eval,
         holdings=[LiveHolding(
             code=h.code,
-            name=None,  # filled by frontend from kr_stock_names mapping if needed
+            name=h.name or _stock_name_safe(h.code),
             qty=h.qty,
             avg_price=h.avg_price,
             eval_price=h.eval_price,
@@ -122,6 +122,54 @@ def get_balance():
         fetched_at=datetime.utcnow(),
         mode=("mock" if client.is_mock else client.env),
     )
+
+
+def _stock_name_safe(code: str) -> str | None:
+    try:
+        from ..services.live_trader import _stock_name
+        return _stock_name(code)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class StockTradeRow(BaseModel):
+    trade_date: date
+    strategy: str
+    side: str
+    qty: int
+    price: float | None = None
+    status: str
+    error: str | None = None
+    # Decision basis captured at order time: {"action","basis","summary",
+    # "metrics","top_features"} — buys carry that day's signal reasons,
+    # sells carry the top-K-exit snapshot.
+    reasons: dict | None = None
+
+
+@router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
+def get_stock_trades(code: str):
+    """Per-stock trade history with the decision basis of each order."""
+    init_db()
+    with SessionLocal() as db:
+        rows = (db.query(Order)
+                  .filter(Order.code == code)
+                  .order_by(desc(Order.trade_date), desc(Order.id))
+                  .limit(100)
+                  .all())
+        out = []
+        for r in rows:
+            reasons = None
+            if r.reasons_json:
+                try:
+                    reasons = json.loads(r.reasons_json)
+                except Exception:  # noqa: BLE001
+                    pass
+            out.append(StockTradeRow(
+                trade_date=r.trade_date, strategy=r.strategy, side=r.side,
+                qty=r.qty, price=r.price, status=r.status, error=r.error,
+                reasons=reasons,
+            ))
+        return out
 
 
 @router.get("/signals", response_model=LiveSignalsResponse)

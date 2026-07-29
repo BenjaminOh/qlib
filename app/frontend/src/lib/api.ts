@@ -228,6 +228,8 @@ export const api = {
   // ── Live trading ───────────────────────────────────────────
   getLiveBalance: () => fetchApi<LiveBalanceResponse>("/api/v1/live/balance"),
   getLiveSignals: () => fetchApi<LiveSignalsResponse>("/api/v1/live/signals"),
+  getStockTrades: (code: string) =>
+    fetchApi<StockTrade[]>(`/api/v1/live/stock/${code}/trades`),
   getLiveOrders: (limit = 100) =>
     fetchApi<LiveOrdersResponse>(`/api/v1/live/orders?limit=${limit}`),
   getLiveDailyPnL: (days = 180) =>
@@ -237,6 +239,22 @@ export const api = {
 };
 
 // ─── Live trading types ──────────────────────────────────────
+
+export interface StockTradeReasons extends SignalReasons {
+  action?: "buy" | "sell";
+  basis?: string;
+}
+
+export interface StockTrade {
+  trade_date: string;
+  strategy: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number | null;
+  status: string;
+  error: string | null;
+  reasons: StockTradeReasons | null;
+}
 
 export interface LiveHolding {
   code: string;

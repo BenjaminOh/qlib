@@ -71,6 +71,7 @@ class Holding:
     eval_value: float
     pnl: float
     pnl_pct: float
+    name: str | None = None  # KIS prdt_name (실계좌) / _stock_name (시뮬)
 
 
 @dataclass
@@ -334,6 +335,7 @@ class KISClient:
             pnl = float(row.get("evlu_pfls_amt") or 0)
             pnl_pct = float(row.get("evlu_pfls_rt") or 0) / 100.0
             holdings.append(Holding(code=str(row.get("pdno")),
+                                     name=row.get("prdt_name") or None,
                                      qty=qty, avg_price=avg,
                                      eval_price=ep, eval_value=ev,
                                      pnl=pnl, pnl_pct=pnl_pct))
