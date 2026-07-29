@@ -185,6 +185,21 @@ def get_stock_trades(code: str, strategy: str = Query("open")):
     point-in-time valuation and the decision basis of each order."""
     init_db()
     prices = _price_series(code)
+    # Intraday fallback: today's bars only land in kr_data at the 15:45
+    # refresh, so same-day rows would show no exec price / valuation all
+    # trading day. For the open strategy use the KIS holding instead —
+    # avg_price is the REAL average fill, eval_price the live quote.
+    kis_avg: float | None = None
+    kis_now: float | None = None
+    if strategy == "open":
+        try:
+            snap = get_kis_client().get_balance()
+            h = next((h for h in snap.holdings if h.code == code), None)
+            if h is not None:
+                kis_avg = h.avg_price or None
+                kis_now = h.eval_price or None
+        except Exception:  # noqa: BLE001
+            pass
     with SessionLocal() as db:
         rows = (db.query(Order)
                   .filter(Order.code == code, Order.strategy == strategy)
@@ -203,6 +218,9 @@ def get_stock_trades(code: str, strategy: str = Query("open")):
                     pass
             d_iso = r.trade_date.isoformat()
             day_open, day_close = prices.get(d_iso, (None, None))
+            if day_open is None and day_close is None:
+                # Store has no bar for this date yet (intraday) — KIS fallback.
+                day_open, day_close = kis_avg, kis_now
 
             item = StockTradeRow(
                 trade_date=r.trade_date, strategy=r.strategy, side=r.side,
