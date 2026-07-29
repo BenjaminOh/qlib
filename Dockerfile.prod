@@ -36,9 +36,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY pyproject.toml setup.py MANIFEST.in Makefile ./
 COPY qlib/ ./qlib/
-COPY scripts/ ./scripts/
 RUN --mount=type=cache,target=/root/.cache/pip \
     make prerequisite && pip install .
+
+# scripts/ is deliberately COPIED AFTER the pyqlib install layer: it is not
+# packaged (MANIFEST.in ships qlib/* only) and it changes far more often than
+# the qlib core. Coupling it to the layer above forced a full Cython
+# compile + wheel build (~5+ min) on every scripts-only change — the main
+# reason deploys took 30-40 minutes.
+COPY scripts/ ./scripts/
 
 
 # ─── Stage 2: runtime ───────────────────────────────────────────

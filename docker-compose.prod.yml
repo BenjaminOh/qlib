@@ -187,11 +187,14 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
+      # Generous timings: the shared host regularly spikes (other tenants'
+      # builds/batches) and the 5s exec-probe timed out for hours while the
+      # app itself served fine — red status was pure noise.
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
-      interval: 30s
-      timeout: 5s
+      interval: 60s
+      timeout: 15s
       retries: 5
-      start_period: 30s
+      start_period: 120s
     logging:
       driver: json-file
       options:
