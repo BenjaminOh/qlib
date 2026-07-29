@@ -198,6 +198,32 @@ class KISClient:
             payload = {"grant_type": "client_credentials",
                        "appkey": self.app_key, "appsecret": self.app_secret}
             r = requests.post(url, json=payload, timeout=10)
+            if r.status_code in (403, 429):
+                # EGW00133: issuance is rate-limited to 1/min. When two
+                # processes race (e.g. the 09:00 order task vs a dashboard
+                # balance poll right after a deploy wiped redis), the loser
+                # lands here — but the WINNER stored its token in redis
+                # moments ago. Re-read the cache before giving up; only then
+                # wait out the rate-limit window and re-issue once.
+                # (2026-07-29: this exact race killed the day's buy orders.)
+                log.warning("KIS token issue throttled (%s) — re-reading shared cache",
+                            r.status_code)
+                for wait_s in (5, 65):
+                    time.sleep(wait_s)
+                    if r_client is not None:
+                        try:
+                            cached = r_client.get(self._redis_token_key)
+                            if cached:
+                                d = json.loads(cached)
+                                if d.get("expires_at", 0) - time.time() > 600:
+                                    self._token = d["access_token"]
+                                    self._token_expires_at = d["expires_at"]
+                                    return self._token
+                        except Exception as exc:  # noqa: BLE001
+                            log.warning("KIS token redis re-read failed: %s", exc)
+                    r = requests.post(url, json=payload, timeout=10)
+                    if r.status_code == 200:
+                        break
             if r.status_code != 200:
                 log.error("KIS token issue failed: %s %s", r.status_code, r.text[:300])
             r.raise_for_status()

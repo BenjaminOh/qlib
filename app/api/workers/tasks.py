@@ -47,9 +47,23 @@ def live_orders_task(self) -> dict:
     return submit_daily_orders(strategy="open", simulated=False)
 
 
-@celery_app.task(bind=True, name="live_sync")
+@celery_app.task(
+    bind=True,
+    name="live_sync",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=3,
+)
 def live_sync_task(self) -> dict:
-    """09:30 + 15:40 KST — open strategy: pull KIS balance, snapshot, PnL."""
+    """09:30 + 15:40 KST — open strategy: pull KIS balance, snapshot, PnL.
+
+    Balance reads are idempotent, so retrying on transient KIS errors is
+    safe. live_orders deliberately has NO autoretry — order submission is
+    not idempotent (a retry after a partial run would double-buy); its
+    failure modes are handled inside the token layer instead.
+    """
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
     return sync_account(strategy="open")

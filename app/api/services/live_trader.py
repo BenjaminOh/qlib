@@ -47,9 +47,11 @@ def _seed_for(strategy: str) -> float:
 
 # Same model/strategy as the user's validated backtest — Phase A targets
 # ARR/IR parity with H6 walk-forward by reusing that exact configuration.
-# KIS Open API throttles ~1 request per second per account (EGW00201 on burst).
-# Sleep between consecutive place_order / get_balance calls to stay under that.
-KIS_THROTTLE_SECONDS = 0.35
+# KIS enforces 1 TRANSACTION per second per account, and one place_order is
+# actually TWO api calls (hashkey + order). 0.35s between orders got the
+# second order rejected with "1 초당 거래건수를 초과" (2026-07-29) — keep
+# comfortably above 1s.
+KIS_THROTTLE_SECONDS = 1.2
 
 
 LIVE_CONFIG = {
