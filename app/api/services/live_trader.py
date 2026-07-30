@@ -53,6 +53,10 @@ def _seed_for(strategy: str) -> float:
 # comfortably above 1s.
 KIS_THROTTLE_SECONDS = 1.2
 
+# How many signal ranks to PERSIST daily (trading still uses topk below).
+# Needed so sell reasons can state where an exited stock ranked today.
+SIGNAL_STORE_TOP_N = 30
+
 
 LIVE_CONFIG = {
     "strategy_class": "TopkDropoutStrategy",
@@ -181,7 +185,14 @@ def generate_daily_signal(today: date | None = None) -> dict:
             "check kr_data freshness and trading-day windows"
         )
 
-    picks = _extract_recommended_picks(pred, LIVE_CONFIG) or []
+    # Store the top-30 ranks (not just the tradable top-10): the ONLY sell
+    # trigger is "dropped out of the signal", so explaining a sell requires
+    # knowing where the stock LANDED today ("전일 3위 → 금일 21위" vs
+    # "30위권 밖"). Orders and the dashboard still consume rank <= topk.
+    store_cfg = {**LIVE_CONFIG,
+                 "strategy_kwargs": {**LIVE_CONFIG["strategy_kwargs"],
+                                      "topk": SIGNAL_STORE_TOP_N}}
+    picks = _extract_recommended_picks(pred, store_cfg) or []
     log.info(
         "generate_daily_signal: picks count=%d today=%s signal_for=%s",
         len(picks), today, signal_for,
@@ -191,8 +202,10 @@ def generate_daily_signal(today: date | None = None) -> dict:
     # today and the "ranking" is just code order. Signals are still stored
     # (the record is factual) but the flag is surfaced in the task result /
     # logs so monitoring can catch a relapse of the constant-score bug.
-    unique_scores = len({round(p.get("score") or 0.0, 8) for p in picks})
-    degenerate = len(picks) >= 5 and unique_scores < 5
+    topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
+    top_picks = [p for p in picks if p["rank"] <= topk]
+    unique_scores = len({round(p.get("score") or 0.0, 8) for p in top_picks})
+    degenerate = len(top_picks) >= 5 and unique_scores < 5
     if degenerate:
         log.warning(
             "generate_daily_signal: DEGENERATE signal — %d picks share only "
@@ -297,10 +310,14 @@ def submit_daily_orders(today: date | None = None,
     # as_of=5/20. The cache reset above keeps both sides computing from the
     # same on-disk calendar (a stale in-process cache re-introduced the skew).
     today = today or _next_trading_day(_last_trading_day())
+    n_topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
 
     with SessionLocal() as db:
+        # rank <= topk: signals persist SIGNAL_STORE_TOP_N (30) ranks for
+        # sell-reason context, but trading only ever targets the top-K.
         signals = (db.query(Signal)
-                     .filter(Signal.as_of == today)
+                     .filter(Signal.as_of == today,
+                             Signal.rank <= n_topk)
                      .order_by(Signal.rank.asc())
                      .all())
         if not signals:
@@ -328,7 +345,7 @@ def submit_daily_orders(today: date | None = None,
             holding = next((h for h in snapshot.holdings if h.code == code), None)
             if not holding or holding.qty <= 0:
                 continue
-            sell_why = _sell_reasons(code)
+            sell_why = _sell_reasons(db, today, code)
             if simulated:
                 px = _last_close(code) or holding.eval_price or holding.avg_price
                 if not px or px <= 0:
@@ -555,23 +572,35 @@ def _buy_reasons(db: Session, as_of: date, code: str) -> dict | None:
         return None
 
 
-def _sell_reasons(code: str) -> dict | None:
-    """Decision basis for a sell — the stock DROPPED OUT of today's top-K,
-    so there is no signal row to point at; capture an at-sale metrics
-    snapshot instead. Best effort, never blocks the order flow."""
+def _sell_reasons(db: Session, as_of: date, code: str) -> dict | None:
+    """Decision basis for a sell — the stock DROPPED OUT of today's top-K.
+
+    Signals persist SIGNAL_STORE_TOP_N (30) ranks, so we can usually say
+    exactly where the stock landed ("전일 3위 → 금일 21위" or "30위권 밖")
+    plus an at-sale metrics snapshot. Best effort, never blocks orders."""
+    topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
+    basis = f"당일 신호 top-{topk} 이탈 (보유 유지 근거 소멸)"
+    try:
+        prev = (db.query(Signal)
+                  .filter(Signal.code == code, Signal.as_of < as_of)
+                  .order_by(Signal.as_of.desc(), Signal.rank.asc())
+                  .first())
+        cur = (db.query(Signal)
+                 .filter(Signal.code == code, Signal.as_of == as_of)
+                 .first())
+        prev_txt = f"전일 {prev.rank}위" if prev else "전일 순위 기록 없음"
+        cur_txt = f"금일 {cur.rank}위" if cur else f"금일 {SIGNAL_STORE_TOP_N}위권 밖"
+        basis = f"당일 신호 top-{topk} 이탈 — {prev_txt} → {cur_txt}"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_sell_reasons rank context failed for %s: %s", code, exc)
     try:
         from .signal_reasons import build_intuitive_metrics, summarize
         m = build_intuitive_metrics([code]).get(code, {})
-        return {
-            "action": "sell",
-            "basis": "당일 신호 top-10 이탈 (보유 유지 근거 소멸)",
-            "summary": summarize(m),
-            "metrics": m,
-            "top_features": [],
-        }
+        return {"action": "sell", "basis": basis,
+                "summary": summarize(m), "metrics": m, "top_features": []}
     except Exception as exc:  # noqa: BLE001
         log.warning("_sell_reasons failed for %s: %s", code, exc)
-        return {"action": "sell", "basis": "당일 신호 top-10 이탈 (보유 유지 근거 소멸)",
+        return {"action": "sell", "basis": basis,
                 "summary": "", "metrics": {}, "top_features": []}
 
 

@@ -160,7 +160,8 @@ export default function LiveDashboardPage() {
           <h2 className="text-lg font-semibold mb-1">📤 최근 청산 종목</h2>
           <p className="text-xs text-gray-500 mb-3">
             신호 top-10 이탈 등으로 전량 매도되어 보유 목록에서 빠진 종목 — 매도 사유와
-            확정 손익입니다. (* = 시장가 매도라 당일 시가 기준 추정)
+            확정 손익입니다. (* = 시장가 매도라 당일 시가 기준 추정) ·{" "}
+            <a href="/guide/strategy" className="text-blue-600 underline">매도 기준 설명 →</a>
           </p>
           <ExitsTable exits={exits.data || []} />
         </section>

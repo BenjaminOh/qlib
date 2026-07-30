@@ -381,8 +381,10 @@ def get_latest_signals():
         if not latest:
             return LiveSignalsResponse(as_of=None, picks=[])
         as_of = latest[0]
+        # Signals persist 30 ranks (sell-reason context); the recommendation
+        # card shows only the tradable top-10.
         rows = (db.query(Signal)
-                  .filter(Signal.as_of == as_of)
+                  .filter(Signal.as_of == as_of, Signal.rank <= 10)
                   .order_by(Signal.rank.asc())
                   .all())
         def _reasons(r):
