@@ -230,6 +230,9 @@ export const api = {
   getLiveSignals: () => fetchApi<LiveSignalsResponse>("/api/v1/live/signals"),
   getStockTrades: (code: string) =>
     fetchApi<StockTrade[]>(`/api/v1/live/stock/${code}/trades`),
+  getRecentExits: () => fetchApi<ExitRow[]>("/api/v1/live/exits"),
+  getTodayRealized: () =>
+    fetchApi<TodayRealized>("/api/v1/live/realized/today"),
   getLiveOrders: (limit = 100) =>
     fetchApi<LiveOrdersResponse>(`/api/v1/live/orders?limit=${limit}`),
   getLiveDailyPnL: (days = 180) =>
@@ -246,6 +249,7 @@ export interface StockTradeReasons extends SignalReasons {
 }
 
 export interface StockTrade {
+  order_id: number | null;
   trade_date: string;
   strategy: string;
   side: "BUY" | "SELL";
@@ -328,10 +332,39 @@ export interface LiveOrderRow {
   status: string;
   error: string | null;
   kis_order_id: string | null;
+  realized_pnl: number | null;
+  realized_est: boolean;
 }
 
 export interface LiveOrdersResponse {
   orders: LiveOrderRow[];
+}
+
+export interface ExitRow {
+  code: string;
+  name: string | null;
+  strategy: string;
+  last_sell_date: string;
+  sold_qty: number;
+  avg_buy_price: number | null;
+  est_sell_price: number | null;
+  price_est: boolean;
+  realized_pnl: number | null;
+  reasons: StockTradeReasons | null;
+}
+
+export interface TodayRealized {
+  date: string;
+  strategy: string;
+  realized_pnl: number;
+  sell_count: number;
+  estimated: boolean;
+}
+
+/** DB timestamps are stored as naive UTC — parse them as UTC so the browser
+ *  renders KST correctly instead of misreading UTC as local (+9h shift). */
+export function parseUtc(ts: string): Date {
+  return new Date(/Z|[+-]\d{2}:?\d{2}$/.test(ts) ? ts : ts + "Z");
 }
 
 export interface DailyPnLRow {

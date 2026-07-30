@@ -76,6 +76,10 @@ class LiveOrderRow(BaseModel):
     status: str
     error: str | None = None
     kis_order_id: str | None = None
+    # SELL rows only: realized pnl vs the running average price at sale.
+    # Market orders estimate the fill from the day open ('realized_est').
+    realized_pnl: float | None = None
+    realized_est: bool = False
 
 
 class LiveOrdersResponse(BaseModel):
@@ -136,6 +140,7 @@ def _stock_name_safe(code: str) -> str | None:
 
 
 class StockTradeRow(BaseModel):
+    order_id: int | None = None
     trade_date: date
     strategy: str
     side: str
@@ -182,27 +187,14 @@ def _price_series(code: str) -> dict[str, tuple[float | None, float | None]]:
         return {}
 
 
-@router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
-def get_stock_trades(code: str, strategy: str = Query("open")):
-    """Chronological per-stock trade history with running position state,
-    point-in-time valuation and the decision basis of each order."""
-    init_db()
+def _position_timeline(code: str, strategy: str,
+                       kis_avg: float | None = None,
+                       kis_now: float | None = None) -> list[StockTradeRow]:
+    """Chronological order timeline with running position reconstruction.
+
+    Shared by /stock/{code}/trades, /exits and the realized-pnl roll-up so
+    every surface computes avg price / realized pnl identically."""
     prices = _price_series(code)
-    # Intraday fallback: today's bars only land in kr_data at the 15:45
-    # refresh, so same-day rows would show no exec price / valuation all
-    # trading day. For the open strategy use the KIS holding instead —
-    # avg_price is the REAL average fill, eval_price the live quote.
-    kis_avg: float | None = None
-    kis_now: float | None = None
-    if strategy == "open":
-        try:
-            snap = get_kis_client().get_balance()
-            h = next((h for h in snap.holdings if h.code == code), None)
-            if h is not None:
-                kis_avg = h.avg_price or None
-                kis_now = h.eval_price or None
-        except Exception:  # noqa: BLE001
-            pass
     with SessionLocal() as db:
         rows = (db.query(Order)
                   .filter(Order.code == code, Order.strategy == strategy)
@@ -226,6 +218,7 @@ def get_stock_trades(code: str, strategy: str = Query("open")):
                 day_open, day_close = kis_avg, kis_now
 
             item = StockTradeRow(
+                order_id=r.id,
                 trade_date=r.trade_date, strategy=r.strategy, side=r.side,
                 qty=r.qty, status=r.status, error=r.error, reasons=reasons,
             )
@@ -253,6 +246,130 @@ def get_stock_trades(code: str, strategy: str = Query("open")):
                     item.pnl_amt = (day_close - item.avg_price) * pos_qty
             out.append(item)
         return out
+
+
+def _close_safe(code: str) -> float | None:
+    try:
+        from ..services.live_trader import _last_close
+        return _last_close(code)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _kis_holding_prices(code: str) -> tuple[float | None, float | None]:
+    """(avg_price, live quote) from the KIS balance — intraday fallback for
+    dates whose bar hasn't landed in kr_data yet (arrives at 15:45)."""
+    try:
+        snap = get_kis_client().get_balance()
+        h = next((h for h in snap.holdings if h.code == code), None)
+        if h is not None:
+            return h.avg_price or None, h.eval_price or None
+    except Exception:  # noqa: BLE001
+        pass
+    return None, None
+
+
+@router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
+def get_stock_trades(code: str, strategy: str = Query("open")):
+    """Per-stock trade timeline (see _position_timeline)."""
+    init_db()
+    kis_avg, kis_now = _kis_holding_prices(code) if strategy == "open" else (None, None)
+    return _position_timeline(code, strategy, kis_avg=kis_avg, kis_now=kis_now)
+
+
+class ExitRow(BaseModel):
+    code: str
+    name: str | None = None
+    strategy: str
+    last_sell_date: date
+    sold_qty: int
+    avg_buy_price: float | None = None
+    est_sell_price: float | None = None
+    price_est: bool = True
+    realized_pnl: float | None = None
+    reasons: dict | None = None
+
+
+@router.get("/exits", response_model=list[ExitRow])
+def get_recent_exits(days: int = Query(30, ge=1, le=180), strategy: str = Query("open")):
+    """Positions fully exited recently — the stocks that 'disappeared' from
+    the holdings card, with why they were sold and the (estimated) realized
+    pnl. Market sells have no recorded fill price until fill reconciliation
+    exists, so exec/realized values use the day-open estimate."""
+    init_db()
+    cutoff = date.today() - timedelta(days=days)
+    try:
+        held = {h.code for h in get_kis_client().get_balance().holdings} if strategy == "open" else set()
+    except Exception:  # noqa: BLE001
+        held = set()
+    with SessionLocal() as db:
+        sold_codes = [r[0] for r in (db.query(Order.code)
+                                       .filter(Order.strategy == strategy,
+                                               Order.side == "SELL",
+                                               Order.status.in_(("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")),
+                                               Order.trade_date >= cutoff)
+                                       .distinct())]
+    out: list[ExitRow] = []
+    for code in sold_codes:
+        if code in held:
+            continue  # partially rotated but still held — not an exit
+        # Exited stocks have no KIS holding to fall back on intraday; use the
+        # last stored close as the estimate until today's bar lands at 15:45.
+        lc = _close_safe(code)
+        timeline = _position_timeline(code, strategy, kis_now=lc)
+        sells = [t for t in timeline
+                 if t.side == "SELL" and t.status in ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
+                 and t.trade_date >= cutoff]
+        if not sells:
+            continue
+        last = sells[-1]
+        # avg buy price the position carried INTO the final sell: reconstruct
+        # from realized = (sell - avg) * qty when both are known.
+        avg_buy = None
+        if last.realized_pnl is not None and last.exec_price is not None and last.qty:
+            avg_buy = last.exec_price - (last.realized_pnl / last.qty)
+        with SessionLocal() as db:
+            name_row = (db.query(Order.name)
+                          .filter(Order.code == code, Order.name.isnot(None))
+                          .order_by(desc(Order.id)).first())
+        out.append(ExitRow(
+            code=code, name=name_row[0] if name_row else None, strategy=strategy,
+            last_sell_date=last.trade_date,
+            sold_qty=sum(s.qty for s in sells),
+            avg_buy_price=avg_buy,
+            est_sell_price=last.exec_price,
+            price_est=last.price_est,
+            realized_pnl=sum(s.realized_pnl for s in sells if s.realized_pnl is not None) or None,
+            reasons=last.reasons,
+        ))
+    out.sort(key=lambda r: r.last_sell_date, reverse=True)
+    return out
+
+
+@router.get("/realized/today")
+def get_today_realized(strategy: str = Query("open")):
+    """Sum of (estimated) realized pnl over today's sells — feeds the
+    '당일 실현 손익' card, which previously ignored open-strategy sells."""
+    init_db()
+    today = date.today()
+    with SessionLocal() as db:
+        codes = [r[0] for r in (db.query(Order.code)
+                                  .filter(Order.strategy == strategy,
+                                          Order.side == "SELL",
+                                          Order.status.in_(("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")),
+                                          Order.trade_date == today)
+                                  .distinct())]
+    total = 0.0
+    any_est = False
+    n = 0
+    for code in codes:
+        for t in _position_timeline(code, strategy, kis_now=_close_safe(code)):
+            if t.side == "SELL" and t.trade_date == today and t.realized_pnl is not None:
+                total += t.realized_pnl
+                any_est = any_est or t.price_est
+                n += 1
+    return {"date": today.isoformat(), "strategy": strategy,
+            "realized_pnl": round(total, 0), "sell_count": n, "estimated": any_est}
 
 
 @router.get("/signals", response_model=LiveSignalsResponse)
@@ -294,8 +411,24 @@ def get_latest_signals():
 
 @router.get("/orders", response_model=LiveOrdersResponse)
 def get_orders(limit: int = Query(100, ge=1, le=500)):
-    """Recent orders (newest first)."""
+    """Recent orders (newest first) — SELL rows carry (estimated) realized pnl."""
     init_db()
+    with SessionLocal() as db:
+        rows = (db.query(Order)
+                  .order_by(desc(Order.submitted_at))
+                  .limit(limit)
+                  .all())
+    # Realized pnl per SELL order via the shared position timeline.
+    _executed = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
+    realized_by_id: dict[int, tuple[float, bool]] = {}
+    for code, strat in {(o.code, o.strategy) for o in rows
+                        if o.side == "SELL" and o.status in _executed}:
+        try:
+            for t in _position_timeline(code, strat, kis_now=_close_safe(code)):
+                if t.order_id is not None and t.realized_pnl is not None:
+                    realized_by_id[t.order_id] = (t.realized_pnl, t.price_est)
+        except Exception:  # noqa: BLE001
+            continue
     with SessionLocal() as db:
         rows = (db.query(Order)
                   .order_by(desc(Order.submitted_at))
@@ -312,6 +445,8 @@ def get_orders(limit: int = Query(100, ge=1, le=500)):
             price=o.price,
             status=o.status,
             error=o.error,
+            realized_pnl=(realized_by_id.get(o.id) or (None, False))[0],
+            realized_est=(realized_by_id.get(o.id) or (None, False))[1],
             kis_order_id=o.kis_order_id,
         ) for o in rows])
 

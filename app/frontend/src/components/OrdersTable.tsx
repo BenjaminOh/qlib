@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { LiveOrderRow } from "@/lib/api";
+import { LiveOrderRow, parseUtc } from "@/lib/api";
 
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {
@@ -36,6 +36,7 @@ export default function OrdersTable({
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
             <th className="text-right px-3 py-2 font-medium">지정가</th>
+            <th className="text-right px-3 py-2 font-medium" title="매도 시 확정 손익 (시장가는 당일 시가 추정)">손익</th>
             <th className="text-left px-3 py-2 font-medium">상태</th>
             {!compact && (
               <th className="text-left px-3 py-2 font-medium">KIS ID</th>
@@ -49,7 +50,9 @@ export default function OrdersTable({
             return (
               <tr key={o.id} className="border-t border-gray-100 hover:bg-gray-50">
                 <td className="px-3 py-2 font-mono text-xs">
-                  {new Date(o.submitted_at).toLocaleString("ko-KR", { hour12: false })}
+                  {parseUtc(o.submitted_at).toLocaleString("ko-KR", {
+                    hour12: false, timeZone: "Asia/Seoul",
+                  })}
                 </td>
                 <td className="px-3 py-2">
                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${sideColor}`}>
@@ -65,6 +68,14 @@ export default function OrdersTable({
                 <td className="px-3 py-2 text-right font-mono">{o.qty.toLocaleString()}</td>
                 <td className="px-3 py-2 text-right font-mono">
                   {o.price == null ? "시장가" : o.price.toLocaleString()}
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${
+                  o.realized_pnl == null ? "text-gray-300"
+                    : o.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700"
+                }`}>
+                  {o.realized_pnl != null
+                    ? `${o.realized_pnl >= 0 ? "+" : ""}${Math.round(o.realized_pnl).toLocaleString()}${o.realized_est ? "*" : ""}`
+                    : "—"}
                 </td>
                 <td className="px-3 py-2">
                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadge(o.status)}`}>

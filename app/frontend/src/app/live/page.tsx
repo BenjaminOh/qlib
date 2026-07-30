@@ -7,6 +7,7 @@ import EquityChart from "@/components/EquityChart";
 import HoldingsTable from "@/components/HoldingsTable";
 import OrdersTable from "@/components/OrdersTable";
 import SignalPicksTable from "@/components/SignalPicksTable";
+import ExitsTable from "@/components/ExitsTable";
 
 const fmtKRW = (v: number) => {
   if (v == null) return "—";
@@ -33,6 +34,16 @@ export default function LiveDashboardPage() {
     queryKey: ["live-orders"],
     queryFn: () => api.getLiveOrders(20),
     refetchInterval: 30_000,
+  });
+  const exits = useQuery({
+    queryKey: ["live-exits"],
+    queryFn: api.getRecentExits,
+    refetchInterval: 60_000,
+  });
+  const todayRealized = useQuery({
+    queryKey: ["live-today-realized"],
+    queryFn: api.getTodayRealized,
+    refetchInterval: 60_000,
   });
   const pnl = useQuery({
     queryKey: ["live-pnl"],
@@ -97,9 +108,9 @@ export default function LiveDashboardPage() {
         <Card label="총 평가금액" value={b ? fmtKRW(b.total_eval) : "…"} hint={b ? `예수금 ${fmtKRW(b.cash)}` : ""} />
         <Card
           label="당일 실현 손익"
-          value={today ? fmtKRW(today.realised_pnl) : "—"}
-          color={today?.realised_pnl != null ? (today.realised_pnl >= 0 ? "good" : "bad") : "neutral"}
-          hint="장중 매도 체결 손익"
+          value={todayRealized.data ? `${fmtKRW(todayRealized.data.realized_pnl)}${todayRealized.data.estimated ? "*" : ""}` : "—"}
+          color={todayRealized.data ? (todayRealized.data.realized_pnl >= 0 ? "good" : "bad") : "neutral"}
+          hint={todayRealized.data?.sell_count ? `오늘 매도 ${todayRealized.data.sell_count}건${todayRealized.data.estimated ? " · 시가 추정" : ""}` : "오늘 매도 없음"}
         />
         <Card
           label="당일 평가손익(미실현)"
@@ -123,9 +134,12 @@ export default function LiveDashboardPage() {
 
       {/* Equity chart */}
       <section className="bg-white rounded-lg border border-gray-200 p-5">
-        <h2 className="text-lg font-semibold mb-1">💹 누적 수익률 곡선</h2>
+        <h2 className="text-lg font-semibold mb-1">💹 전략 누적 수익률 곡선</h2>
         <p className="text-xs text-gray-500 mb-3">
-          각 전략의 시드 대비 평가금액 변동 — open {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"}. 30초마다 자동 갱신.
+          개별 종목이 아니라 <strong>계좌(전략) 전체의 자산 흐름</strong>입니다 — 종목은 매일
+          교체되어도 &ldquo;전략이 돈을 벌고 있는가&rdquo;는 이 곡선으로 이어집니다. 시초가
+          실주문(open)과 종가 시뮬(close) 두 실행 방식의 성적 비교가 목적. 시드 open{" "}
+          {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"} · 30초 갱신.
         </p>
         <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
       </section>
@@ -139,6 +153,18 @@ export default function LiveDashboardPage() {
         </p>
         <HoldingsTable holdings={b?.holdings || []} totalEval={b?.total_eval} />
       </section>
+
+      {/* Recent exits — where yesterday's holdings went */}
+      {(exits.data?.length ?? 0) > 0 && (
+        <section className="bg-white rounded-lg border border-gray-200 p-5">
+          <h2 className="text-lg font-semibold mb-1">📤 최근 청산 종목</h2>
+          <p className="text-xs text-gray-500 mb-3">
+            신호 top-10 이탈 등으로 전량 매도되어 보유 목록에서 빠진 종목 — 매도 사유와
+            확정 손익입니다. (* = 시장가 매도라 당일 시가 기준 추정)
+          </p>
+          <ExitsTable exits={exits.data || []} />
+        </section>
+      )}
 
       {/* Latest signals */}
       <section className="bg-emerald-50 border border-emerald-200 rounded-lg p-5">
