@@ -13,6 +13,12 @@ export PATH=$PATH:/usr/local/bin:/usr/bin
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
+# Build on the DEFAULT docker builder. The globally-selected container-driver
+# builder (stocktrading-builder0) cannot write to the daemon's image store
+# directly, so every build ended with a multi-GB "sending tarball" transfer —
+# 6-9 minutes of pure copying per deploy.
+docker buildx use default 2>/dev/null || true
+
 # ─────────────────────────────────────────────────────────────
 # Port layout (nginx-waf upstream routes to these)
 #   blue : web=25022, api=25023
