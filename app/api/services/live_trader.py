@@ -193,6 +193,20 @@ def generate_daily_signal(today: date | None = None) -> dict:
                  "strategy_kwargs": {**LIVE_CONFIG["strategy_kwargs"],
                                       "topk": SIGNAL_STORE_TOP_N}}
     picks = _extract_recommended_picks(pred, store_cfg) or []
+
+    # Drop stocks whose bars FROZE (no data for 5+ trading days = suspended /
+    # delisting track). Their Alpha158 rows are computed from stale pre-halt
+    # prices and can produce ghost scores — 콘텐트리중앙 ranked #3 while
+    # trade-halted since 6/15 (2026-07-30 incident).
+    try:
+        stale = _stale_codes([p["code"] for p in picks], today, max_lag_days=5)
+        if stale:
+            log.warning("generate_daily_signal: dropping stale/halted codes: %s", sorted(stale))
+            picks = [p for p in picks if p["code"] not in stale]
+            for i, p in enumerate(picks, 1):
+                p["rank"] = i  # re-rank after removal
+    except Exception as exc:  # noqa: BLE001
+        log.warning("generate_daily_signal: stale filter failed: %s", exc)
     log.info(
         "generate_daily_signal: picks count=%d today=%s signal_for=%s",
         len(picks), today, signal_for,
@@ -250,10 +264,34 @@ def generate_daily_signal(today: date | None = None) -> dict:
 # ─── Order submission (09:00 KST) ───────────────────────────────────
 
 
+def _is_risky(code: str, client: KISClient | None = None) -> str | None:
+    """Return a reason string if the stock must not be bought — 거래정지,
+    관리종목, 투자위험/경고 (KIS quote flags). None = tradable.
+
+    The model only sees prices, so a stock in receivership can score high on
+    its FROZEN pre-halt data (콘텐트리중앙 ranked #3 while trade-halted,
+    2026-07-30) — this is the safety net in front of the order."""
+    try:
+        client = client or get_kis_client()
+        if client.is_mock:
+            return None
+        q = client.get_quote(code) or {}
+        time.sleep(KIS_THROTTLE_SECONDS)
+        if q.get("halted"):
+            return "거래정지"
+        names = {"51": "관리종목", "52": "투자위험", "53": "투자경고"}
+        if q.get("status_code") in names:
+            return names[q["status_code"]]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_is_risky check failed for %s: %s", code, exc)
+    return None
+
+
 def _select_affordable_buys(candidates: list[str],
                             slot_budget: float,
                             n_drop: int,
-                            price_fn=None) -> tuple[list[tuple[str, float]], list[str]]:
+                            price_fn=None,
+                            risk_fn=None) -> tuple[list[tuple[str, float]], list[str]]:
     """Pick up to n_drop buy candidates in rank order, skipping stocks whose
     single-share price exceeds the target per-stock slot budget
     (= total equity / topk — the weight one stock is *supposed* to hold).
@@ -267,6 +305,7 @@ def _select_affordable_buys(candidates: list[str],
     Returns (selected [(code, last_close)], skipped_expensive [codes]).
     """
     price_fn = price_fn or _last_close
+    risk_fn = risk_fn if risk_fn is not None else _is_risky
     selected: list[tuple[str, float]] = []
     skipped: list[str] = []
     for code in candidates:
@@ -282,6 +321,14 @@ def _select_affordable_buys(candidates: list[str],
                 "skipped, next rank takes the slot", code, px, slot_budget,
             )
             skipped.append(code)
+            continue
+        risk = risk_fn(code)
+        if risk:
+            log.warning(
+                "_select_affordable_buys: %s RISKY (%s) — skipped, next rank "
+                "takes the slot", code, risk,
+            )
+            skipped.append(f"{code}({risk})")
             continue
         selected.append((code, px))
     return selected, skipped
@@ -830,6 +877,30 @@ def _walk_forward_windows(today: date) -> tuple[date, date, date]:
     valid_start = (today_ts - pd.DateOffset(months=2, days=29)).date()
     valid_end = _prev_trading_day(today)
     return train_end, valid_start, valid_end
+
+
+def _stale_codes(codes: list[str], today: date, max_lag_days: int = 5) -> set[str]:
+    """Codes whose LAST real bar is max_lag_days+ trading days behind `today`
+    — i.e. price data froze (trade halt / delisting). Batched via one
+    D.features call over a recent window."""
+    from qlib.data import D
+    lookback_start = (pd.Timestamp(today) - pd.Timedelta(days=max_lag_days * 3)).date()
+    df = D.features(list(codes), ["$close"], start_time=lookback_start.isoformat(),
+                    end_time=today.isoformat(), freq="day")
+    stale: set[str] = set(codes)  # no rows at all in window = stale
+    if df is None or df.empty:
+        return stale
+    cal = [pd.Timestamp(c).date() for c in D.calendar(
+        start_time=lookback_start.isoformat(), end_time=today.isoformat())]
+    if len(cal) < max_lag_days:
+        return set()
+    cutoff = cal[-max_lag_days]  # must have a bar on/after this trading day
+    closes = df["$close"] if "$close" in df.columns else df.iloc[:, 0]
+    for code, sub in closes.groupby(level="instrument"):
+        s = sub.droplevel("instrument").dropna()
+        if not s.empty and s.index.max().date() >= cutoff:
+            stale.discard(str(code))
+    return stale
 
 
 def _last_close(code: str) -> float | None:

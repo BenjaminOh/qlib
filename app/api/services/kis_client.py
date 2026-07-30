@@ -364,6 +364,12 @@ class KISClient:
         return {
             "open": float(d.get("stck_oprc") or 0) or None,
             "price": float(d.get("stck_prpr") or 0) or None,
+            # Risk flags — the ONLY fundamental-risk signal this system has:
+            # trht_yn: 거래정지 여부, iscd_stat_cls_code: 51 관리종목 /
+            # 52 투자위험 / 53 투자경고, mrkt_warn_cls_code: 시장경고.
+            "halted": str(d.get("trht_yn") or "N").upper() == "Y",
+            "status_code": str(d.get("iscd_stat_cls_code") or ""),
+            "warn_code": str(d.get("mrkt_warn_cls_code") or ""),
         }
 
     # ─── Daily fills (주문체결조회) ────────────────────────────
