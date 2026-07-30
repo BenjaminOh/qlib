@@ -3,11 +3,42 @@
 import { useState } from "react";
 import { LiveSignalRow } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
+import SignalCompareTable from "@/components/SignalCompareTable";
 
 export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [view, setView] = useState<"list" | "compare">("list");
+
+  const toggle = (
+    <div className="flex justify-end mb-2 gap-1 text-xs">
+      {([["list", "목록"], ["compare", "지표 비교표"]] as const).map(([v, label]) => (
+        <button
+          key={v}
+          onClick={() => setView(v)}
+          className={`px-2.5 py-1 rounded border ${
+            view === v
+              ? "bg-emerald-600 text-white border-emerald-600"
+              : "bg-white text-gray-600 border-gray-200 hover:border-emerald-400"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (view === "compare") {
+    return (
+      <div>
+        {toggle}
+        <SignalCompareTable picks={picks} />
+      </div>
+    );
+  }
 
   return (
+    <div>
+    {toggle}
     <div className="overflow-x-auto bg-white rounded-md border border-emerald-100">
       <table className="w-full text-sm">
         <thead className="bg-emerald-50 text-emerald-900">
@@ -90,6 +121,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
           })}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }

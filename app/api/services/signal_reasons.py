@@ -138,27 +138,38 @@ def build_intuitive_metrics(codes: list[str]) -> dict[str, dict]:
 # ─── Model attribution (LightGBM pred_contrib) ──────────────────────
 
 
-def top_model_features(model, dataset, codes: list[str], top_n: int = 5) -> dict[str, list[dict]]:
-    """Per-code top-N contributing features for the latest test-date row."""
+def top_model_features(model, dataset, codes: list[str], top_n: int = 5,
+                       common_n: int = 10,
+                       ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+    """LightGBM contributions for the latest test-date rows.
+
+    Returns two per-code dicts:
+      - per-code top-N features (each stock's own strongest drivers)
+      - values for the COMMON top features (ranked by summed |contrib|
+        across all requested codes) — same columns for every stock, which
+        is what makes a side-by-side comparison table possible.
+    """
     out: dict[str, list[dict]] = {}
+    common: dict[str, list[dict]] = {}
     try:
         from qlib.data.dataset.handler import DataHandlerLP
         booster = getattr(model, "model", None)
         if booster is None:
-            return out
+            return out, common
         feats = dataset.prepare("test", col_set="feature", data_key=DataHandlerLP.DK_I)
         if feats is None or feats.empty:
-            return out
+            return out, common
         last_dt = feats.index.get_level_values(0).max()
         snap = feats.loc[last_dt]
         cols = [c[1] if isinstance(c, tuple) else c for c in snap.columns]
         wanted = [c for c in codes if c in snap.index]
         if not wanted:
-            return out
+            return out, common
         X = snap.loc[wanted]
         contribs = booster.predict(X.values, pred_contrib=True)  # (n, n_feat+1)
+        mat = np.asarray(contribs)[:, :-1]  # drop base value column
         for i, code in enumerate(wanted):
-            row = contribs[i][:-1]  # drop base value
+            row = mat[i]
             order = np.argsort(-np.abs(row))[:top_n]
             out[str(code)] = [
                 {
@@ -168,18 +179,34 @@ def top_model_features(model, dataset, codes: list[str], top_n: int = 5) -> dict
                 }
                 for j in order
             ]
+        # Common columns: the features that mattered most across ALL picks.
+        common_order = np.argsort(-np.abs(mat).sum(axis=0))[:common_n]
+        for i, code in enumerate(wanted):
+            common[str(code)] = [
+                {
+                    "name": str(cols[j]),
+                    "desc": describe_feature(str(cols[j])),
+                    "contrib": round(float(mat[i][j]), 5),
+                }
+                for j in common_order
+            ]
     except Exception as exc:  # noqa: BLE001
         log.warning("signal_reasons: pred_contrib failed: %s", exc)
-    return out
+    return out, common
 
 
 # ─── Combined entry point ───────────────────────────────────────────
 
 
 def build_reasons(codes: list[str], model=None, dataset=None) -> dict[str, dict]:
-    """Return {code: {"summary", "metrics", "top_features"}} — best effort."""
+    """Return {code: {"summary", "metrics", "top_features", "common_features"}}
+    — best effort. common_features share the same feature columns across all
+    codes (comparison-table ready)."""
     metrics = build_intuitive_metrics(codes)
-    features = top_model_features(model, dataset, codes) if model is not None and dataset is not None else {}
+    if model is not None and dataset is not None:
+        features, common = top_model_features(model, dataset, codes)
+    else:
+        features, common = {}, {}
     out: dict[str, dict] = {}
     for code in codes:
         m = metrics.get(code, {})
@@ -187,5 +214,6 @@ def build_reasons(codes: list[str], model=None, dataset=None) -> dict[str, dict]
             "summary": summarize(m),
             "metrics": m,
             "top_features": features.get(code, []),
+            "common_features": common.get(code, []),
         }
     return out

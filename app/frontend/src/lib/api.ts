@@ -303,6 +303,8 @@ export interface SignalReasons {
     vol_ratio?: number | null;
   };
   top_features: SignalReasonFeature[];
+  /** Same feature columns for every pick — comparison-table ready. */
+  common_features?: SignalReasonFeature[];
 }
 
 export interface LiveSignalRow {
