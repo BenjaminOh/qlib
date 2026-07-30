@@ -65,6 +65,16 @@ SCENARIOS = [
   {key:"sim_topk5",  broker:"sim", profile:"default", topk:5,  n_drop:2},
   {key:"sim_topk15", broker:"sim", profile:"default", topk:15, n_drop:3},
   {key:"sim_weekly", broker:"sim", profile:"default", topk:10, n_drop:2, rebalance_days:5},
+  # ── 2026-07-30 운영 관찰에서 도출·사용자 승인된 실험 3종 ──
+  # 히스테리시스 매도: 진입 top-10 / 퇴출은 rank > exit_rank일 때만
+  # (실측: 일간 top-10 회전 100%인 날 존재 — 경계 회전·수수료 절감 검증)
+  {key:"sim_hysteresis",  broker:"sim", profile:"default", topk:10, n_drop:2, exit_rank:20},
+  # 과열 진입 필터: 직전 5일 수익률 +20% 초과 종목은 순위 무관 매수 스킵
+  # (셀바스AI +43% 진입 → 익일 이탈 -10.7만 사례)
+  {key:"sim_no_overheat", broker:"sim", profile:"default", topk:10, n_drop:2, max_ret5_entry:0.20},
+  # 시장 국면 필터: KODEX200(069500) 종가가 regime_ma일 이동평균 하회 시
+  # 신규 매수 중단(매도만 수행) — 완전투자 전략의 폭락장 무방비 보완
+  {key:"sim_regime",      broker:"sim", profile:"default", topk:10, n_drop:2, regime_ma:20},
 ]
 def sync_scenarios(db): idempotent upsert (worker/api boot 시 호출)
 ```
@@ -76,6 +86,13 @@ def sync_scenarios(db): idempotent upsert (worker/api boot 시 호출)
 - `submit_daily_orders(scenario)`: scenario.params로 topk/n_drop/rebalance_days,
   rank ≤ topk 슬라이스, `_seed_for`→scenario.seed_cash. 기존 simulated 경로 재사용.
 - `sync_account(scenario)`: broker 분기 (sim→`_simulated_balance(key)`, kis_paper→KIS).
+- 신규 파라미터 실행 로직 (submit_daily_orders 내):
+  - `exit_rank`: 매도 판정을 "top-topk 이탈"이 아니라 "**rank > exit_rank** (top-30 밖 포함)"로 —
+    top-30 저장(2241b125) 데이터 활용.
+  - `max_ret5_entry`: 매수 후보 필터에 signal_reasons metrics의 ret5 사용 —
+    초과 시 스킵하고 차순위 대체(고가주 필터와 동일 패턴).
+  - `regime_ma`: `_last_close("069500")` vs 최근 N일 이평 비교 — 하회 시 매수 루프 전체 스킵
+    (매도는 정상 수행), 결과 dict에 `regime: "risk_off"` 표기.
 - beat: `live_orders_close`/`live_sync_close` → `live_scenarios_run`(15:20)/`live_scenarios_sync`(15:40)
   — sim 시나리오 직렬 루프. open(09:00)은 기존 유지.
 - `app/api/db/session.py`: connect 이벤트에 `PRAGMA journal_mode=WAL; busy_timeout=5000`.
@@ -101,7 +118,8 @@ def sync_scenarios(db): idempotent upsert (worker/api boot 시 호출)
 ## 5. 검증 (Check 기준)
 
 - [ ] 5거래일 연속: 신호 top10 고유값 ≥ 5, best_iteration ≥ 10
-- [ ] sim 시나리오 4개+ 가 일일 snapshot/pnl 각 1행 생성, 이력 무손상
+- [ ] sim 시나리오 7개(topk5/15·weekly·hysteresis·no_overheat·regime 포함)가 일일 snapshot/pnl 각 1행 생성, 이력 무손상
+- [ ] 실험 3종(hysteresis/no_overheat/regime)이 base(close)와 분리된 에쿼티 곡선 생성
 - [ ] 리더보드에 시나리오별 곡선 분화 표시
 - [ ] 15:45 창 전체 소요(profile 학습 포함) < 30분
 
