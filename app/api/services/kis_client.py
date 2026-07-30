@@ -24,6 +24,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +44,10 @@ _HOSTS = {
 
 # TR_ID prefixes: T... = real, V... = paper. Same trailing 7 chars.
 _TR = {
-    "real":  {"buy": "TTTC0802U", "sell": "TTTC0801U", "balance": "TTTC8434R", "psbl": "TTTC8908R"},
-    "paper": {"buy": "VTTC0802U", "sell": "VTTC0801U", "balance": "VTTC8434R", "psbl": "VTTC8908R"},
+    "real":  {"buy": "TTTC0802U", "sell": "TTTC0801U", "balance": "TTTC8434R", "psbl": "TTTC8908R",
+              "fills": "TTTC8001R"},
+    "paper": {"buy": "VTTC0802U", "sell": "VTTC0801U", "balance": "VTTC8434R", "psbl": "VTTC8908R",
+              "fills": "VTTC8001R"},
 }
 
 
@@ -343,6 +346,66 @@ class KISClient:
         cash = float(summary.get("dnca_tot_amt") or 0)
         total = float(summary.get("tot_evlu_amt") or 0)
         return AccountSnapshot(cash=cash, total_eval=total, holdings=holdings)
+
+    # ─── Daily fills (주문체결조회) ────────────────────────────
+
+    def get_daily_fills(self, start: "date", end: "date") -> dict[str, dict]:
+        """Actual fills per order number over [start, end].
+
+        Returns {odno: {"code", "side", "ccld_qty", "avg_price"}}. Market
+        orders carry no price at submission — this is the ONLY source of the
+        real average fill price, which pins realized pnl permanently instead
+        of re-estimating it from bars. Mock mode returns {}.
+        """
+        if self.is_mock:
+            return {}
+        path = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        out: dict[str, dict] = {}
+        fk, nk = "", ""
+        for _page in range(10):  # pagination guard
+            params = {
+                "CANO": self.cano,
+                "ACNT_PRDT_CD": self.acnt_prdt_cd,
+                "INQR_STRT_DT": start.strftime("%Y%m%d"),
+                "INQR_END_DT": end.strftime("%Y%m%d"),
+                "SLL_BUY_DVSN_CD": "00",   # all
+                "INQR_DVSN": "00",         # 역순
+                "PDNO": "",
+                "CCLD_DVSN": "01",         # 체결
+                "ORD_GNO_BRNO": "",
+                "ODNO": "",
+                "INQR_DVSN_3": "00",
+                "INQR_DVSN_1": "",
+                "CTX_AREA_FK100": fk,
+                "CTX_AREA_NK100": nk,
+            }
+            r = requests.get(self.host + path,
+                             headers=self._headers(self.tr_set["fills"]),
+                             params=params, timeout=15)
+            if r.status_code != 200:
+                log.warning("KIS get_daily_fills HTTP %s: %s", r.status_code, r.text[:300])
+                break
+            d = r.json()
+            for row in d.get("output1", []) or []:
+                odno = str(row.get("odno") or "").lstrip("0") or str(row.get("odno") or "")
+                qty = int(float(row.get("tot_ccld_qty") or 0))
+                amt = float(row.get("tot_ccld_amt") or 0)
+                avg = float(row.get("avg_prvs") or 0) or ((amt / qty) if qty else 0.0)
+                if not odno or qty <= 0 or avg <= 0:
+                    continue
+                out[odno] = {
+                    "code": str(row.get("pdno") or ""),
+                    "side": "SELL" if str(row.get("sll_buy_dvsn_cd")) == "01" else "BUY",
+                    "ccld_qty": qty,
+                    "avg_price": avg,
+                }
+            tr_cont = (r.headers.get("tr_cont") or "").strip()
+            if tr_cont not in ("F", "M"):
+                break
+            fk = d.get("ctx_area_fk100", "")
+            nk = d.get("ctx_area_nk100", "")
+            time.sleep(1.2)
+        return out
 
     # ─── Order placement ──────────────────────────────────────
 

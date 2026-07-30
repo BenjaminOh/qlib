@@ -35,7 +35,7 @@ export default function OrdersTable({
             <th className="text-left px-3 py-2 font-medium">방향</th>
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
-            <th className="text-right px-3 py-2 font-medium">지정가</th>
+            <th className="text-right px-3 py-2 font-medium" title="지정가 주문의 주문가 또는 체결 확정 후 실체결 평균가">가격</th>
             <th className="text-right px-3 py-2 font-medium" title="매도 시 확정 손익 (시장가는 당일 시가 추정)">손익</th>
             <th className="text-left px-3 py-2 font-medium">상태</th>
             {!compact && (

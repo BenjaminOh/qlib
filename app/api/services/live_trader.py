@@ -434,6 +434,49 @@ def submit_daily_orders(today: date | None = None,
         }
 
 
+def reconcile_fills(trade_date: date | None = None,
+                    strategy: str = STRATEGY_OPEN,
+                    client: KISClient | None = None) -> dict:
+    """Pin actual fill prices onto today's orders (fill reconciliation).
+
+    Market orders are submitted with price=None, so every display had to
+    ESTIMATE the fill from bars — and the estimate drifted as better bars
+    arrived (the '확정 손익 keeps changing' bug). KIS knows the real average
+    fill; write it into Order.price once and the number is immutable.
+    Idempotent: orders that already carry a price are skipped.
+    """
+    init_db()
+    trade_date = trade_date or date.today()
+    client = client or get_kis_client()
+    if client.is_mock:
+        return {"status": "skipped", "reason": "mock"}
+    fills = client.get_daily_fills(trade_date, trade_date)
+    matched = updated = 0
+    with SessionLocal() as db:
+        rows = (db.query(Order)
+                  .filter(Order.trade_date == trade_date,
+                          Order.strategy == strategy,
+                          Order.status.in_(("SUBMITTED", "PARTIAL")),
+                          Order.kis_order_id.isnot(None))
+                  .all())
+        for o in rows:
+            key = (o.kis_order_id or "").lstrip("0") or o.kis_order_id
+            f = fills.get(key)
+            if f is None:
+                continue
+            matched += 1
+            if o.price is not None:
+                continue  # already pinned
+            o.price = f["avg_price"]
+            o.status = "FILLED" if f["ccld_qty"] >= o.qty else "PARTIAL"
+            updated += 1
+        db.commit()
+    result = {"status": "ok", "trade_date": trade_date.isoformat(),
+              "kis_fills": len(fills), "matched": matched, "updated": updated}
+    log.info("reconcile_fills: %s", result)
+    return result
+
+
 # ─── Account sync + daily PnL roll-up ───────────────────────────────
 
 

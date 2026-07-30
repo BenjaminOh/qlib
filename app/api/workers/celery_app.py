@@ -47,6 +47,13 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders",
         "schedule": crontab(hour=9, minute=0, day_of_week="mon-fri"),
     },
+    # Pin actual fill prices onto the 09:00 orders — market orders submit
+    # with price=None and realized pnl would otherwise be re-estimated from
+    # bars (and drift) all day.
+    "reconcile-fills-morning": {
+        "task": "reconcile_fills",
+        "schedule": crontab(hour=9, minute=20, day_of_week="mon-fri"),
+    },
     "live-sync-mid-morning": {
         "task": "live_sync",
         "schedule": crontab(hour=9, minute=30, day_of_week="mon-fri"),

@@ -52,7 +52,7 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
             <th className="text-left px-3 py-2 font-medium">매도일</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
             <th className="text-right px-3 py-2 font-medium">평단 → 매도가</th>
-            <th className="text-right px-3 py-2 font-medium">확정 손익</th>
+            <th className="text-right px-3 py-2 font-medium" title="* 표시는 체결가 수신 전 추정치 — 매일 09:20 실체결가로 확정됩니다">손익</th>
             <th className="text-left px-3 py-2 font-medium">매도 사유</th>
           </tr>
         </thead>
@@ -84,7 +84,7 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
                   </td>
                   <td className={`px-3 py-2 text-right font-mono ${pnlCls}`}>
                     {e.realized_pnl != null
-                      ? `${e.realized_pnl >= 0 ? "+" : ""}${Math.round(e.realized_pnl).toLocaleString()}${pct != null ? ` (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)` : ""}`
+                      ? `${e.realized_pnl >= 0 ? "+" : ""}${Math.round(e.realized_pnl).toLocaleString()}${pct != null ? ` (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)` : ""}${e.price_est ? " 추정*" : " 확정"}`
                       : "—"}
                   </td>
                   <td className="px-3 py-2 text-xs text-gray-700 max-w-[260px]">

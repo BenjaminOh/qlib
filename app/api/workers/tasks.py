@@ -91,6 +91,25 @@ def live_sync_close_task(self) -> dict:
 
 @celery_app.task(
     bind=True,
+    name="reconcile_fills",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=3,
+)
+def reconcile_fills_task(self) -> dict:
+    """09:20 KST — pin actual KIS fill prices onto this morning's orders.
+
+    Idempotent read-modify-write; retries are safe. Freezes realized pnl
+    (the exits card used to re-estimate it from bars all day)."""
+    from ..services.live_trader import reconcile_fills
+    self.update_state(state="RUNNING")
+    return reconcile_fills()
+
+
+@celery_app.task(
+    bind=True,
     name="refresh_kr_data",
     autoretry_for=(Exception,),
     retry_backoff=True,
