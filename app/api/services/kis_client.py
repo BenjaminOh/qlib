@@ -347,6 +347,25 @@ class KISClient:
         total = float(summary.get("tot_evlu_amt") or 0)
         return AccountSnapshot(cash=cash, total_eval=total, holdings=holdings)
 
+    # ─── Quote (현재가/시가) ───────────────────────────────────
+
+    def get_quote(self, code: str) -> dict:
+        """{"open", "price"} for a stock — market-data TRs work on paper too."""
+        if self.is_mock:
+            return {}
+        r = requests.get(
+            self.host + "/uapi/domestic-stock/v1/quotations/inquire-price",
+            headers=self._headers("FHKST01010100"),
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code},
+            timeout=10)
+        if r.status_code != 200:
+            return {}
+        d = r.json().get("output") or {}
+        return {
+            "open": float(d.get("stck_oprc") or 0) or None,
+            "price": float(d.get("stck_prpr") or 0) or None,
+        }
+
     # ─── Daily fills (주문체결조회) ────────────────────────────
 
     def get_daily_fills(self, start: "date", end: "date") -> dict[str, dict]:

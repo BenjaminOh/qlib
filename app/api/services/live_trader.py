@@ -470,6 +470,35 @@ def reconcile_fills(trade_date: date | None = None,
             o.price = f["avg_price"]
             o.status = "FILLED" if f["ccld_qty"] >= o.qty else "PARTIAL"
             updated += 1
+
+        # Pass 2 — the PAPER env returns nothing from daily-ccld ("모의투자
+        # 조회할 내역이 없습니다", verified 2026-07-30). Two exact substitutes:
+        #  * BUY of a currently-held code: the KIS balance avg IS the real fill.
+        #  * An order submitted into the 09:00 opening auction fills AT the
+        #    opening price by definition (single-price auction) — take 시가
+        #    from the quote endpoint (market-data TRs work on paper).
+        pending = [o for o in rows if o.price is None]
+        if pending:
+            try:
+                bal_avg = {h.code: h.avg_price for h in client.get_balance().holdings}
+            except Exception:  # noqa: BLE001
+                bal_avg = {}
+            quote_cache: dict[str, float | None] = {}
+            for o in pending:
+                px = None
+                if o.side == "BUY" and bal_avg.get(o.code):
+                    px = bal_avg[o.code]
+                else:
+                    sub_kst_min = (o.submitted_at.hour * 60 + o.submitted_at.minute + 540) % 1440
+                    if 8 * 60 + 55 <= sub_kst_min <= 9 * 60 + 6:  # opening auction window
+                        if o.code not in quote_cache:
+                            quote_cache[o.code] = (client.get_quote(o.code) or {}).get("open")
+                            time.sleep(KIS_THROTTLE_SECONDS)
+                        px = quote_cache[o.code]
+                if px:
+                    o.price = float(px)
+                    o.status = "FILLED"
+                    updated += 1
         db.commit()
     result = {"status": "ok", "trade_date": trade_date.isoformat(),
               "kis_fills": len(fills), "matched": matched, "updated": updated}
