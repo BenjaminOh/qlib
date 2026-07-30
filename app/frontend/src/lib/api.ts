@@ -233,8 +233,10 @@ export const api = {
   getRecentExits: () => fetchApi<ExitRow[]>("/api/v1/live/exits"),
   getTodayRealized: () =>
     fetchApi<TodayRealized>("/api/v1/live/realized/today"),
-  getLiveOrders: (limit = 100) =>
-    fetchApi<LiveOrdersResponse>(`/api/v1/live/orders?limit=${limit}`),
+  getLiveOrders: (limit = 100, includeSim = false) =>
+    fetchApi<LiveOrdersResponse>(
+      `/api/v1/live/orders?limit=${limit}&include_sim=${includeSim}`,
+    ),
   getLiveDailyPnL: (days = 180) =>
     fetchApi<DailyPnLResponse>(`/api/v1/live/pnl/daily?days=${days}`),
   getLivePositionHistory: (limit = 60) =>

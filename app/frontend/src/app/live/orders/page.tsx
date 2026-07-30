@@ -11,9 +11,10 @@ type Filter = "ALL" | "BUY" | "SELL" | "REJECTED";
 export default function LiveOrdersPage() {
   const [filter, setFilter] = useState<Filter>("ALL");
   const [limit, setLimit] = useState(200);
+  const [includeSim, setIncludeSim] = useState(false);
   const { data, isLoading } = useQuery({
-    queryKey: ["live-orders-all", limit],
-    queryFn: () => api.getLiveOrders(limit),
+    queryKey: ["live-orders-all", limit, includeSim],
+    queryFn: () => api.getLiveOrders(limit, includeSim),
     refetchInterval: 30_000,
   });
 
@@ -48,6 +49,15 @@ export default function LiveOrdersPage() {
             {f === "ALL" ? "전체" : f === "BUY" ? "매수만" : f === "SELL" ? "매도만" : "거부만"}
           </button>
         ))}
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer"
+               title="close 전략(종가 시뮬) A/B 실험 주문 — 기본 숨김, 데이터는 보존됩니다">
+          <input
+            type="checkbox"
+            checked={includeSim}
+            onChange={(e) => setIncludeSim(e.target.checked)}
+          />
+          시뮬(A/B) 포함
+        </label>
         <span className="ml-auto text-sm text-gray-500">
           {filtered.length}건 / 전체 {data?.orders.length ?? 0}건
         </span>

@@ -412,14 +412,21 @@ def get_latest_signals():
 
 
 @router.get("/orders", response_model=LiveOrdersResponse)
-def get_orders(limit: int = Query(100, ge=1, le=500)):
-    """Recent orders (newest first) — SELL rows carry (estimated) realized pnl."""
+def get_orders(limit: int = Query(100, ge=1, le=500),
+               include_sim: bool = Query(False)):
+    """Recent orders (newest first) — SELL rows carry (estimated) realized pnl.
+
+    SIMULATED rows (the close-strategy A/B ledger) are hidden by default —
+    they cluttered the order view — but the DATA is preserved; pass
+    include_sim=true to see them."""
     init_db()
     with SessionLocal() as db:
-        rows = (db.query(Order)
-                  .order_by(desc(Order.submitted_at))
-                  .limit(limit)
-                  .all())
+        q = db.query(Order)
+        if not include_sim:
+            q = q.filter(Order.status != "SIMULATED")
+        rows = (q.order_by(desc(Order.submitted_at))
+                 .limit(limit)
+                 .all())
     # Realized pnl per SELL order via the shared position timeline.
     _executed = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
     realized_by_id: dict[int, tuple[float, bool]] = {}
@@ -432,10 +439,12 @@ def get_orders(limit: int = Query(100, ge=1, le=500)):
         except Exception:  # noqa: BLE001
             continue
     with SessionLocal() as db:
-        rows = (db.query(Order)
-                  .order_by(desc(Order.submitted_at))
-                  .limit(limit)
-                  .all())
+        q = db.query(Order)
+        if not include_sim:
+            q = q.filter(Order.status != "SIMULATED")
+        rows = (q.order_by(desc(Order.submitted_at))
+                 .limit(limit)
+                 .all())
         return LiveOrdersResponse(orders=[LiveOrderRow(
             id=o.id,
             submitted_at=o.submitted_at,
