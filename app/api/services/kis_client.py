@@ -50,6 +50,15 @@ _TR = {
               "fills": "VTTC8001R"},
 }
 
+# Minimum spacing between ANY two KIS calls on the same account, across all
+# containers (see KISClient._gate). Paper enforces ~1 req/s account-wide;
+# real allows ~20 req/s but we stay far under it.
+_MIN_INTERVAL_MS = {"real": 250, "paper": 1200}
+
+# Rejection markers that mean "rate limited, order NOT accepted" — the only
+# rejections that are safe (and correct) to retry verbatim.
+_THROTTLE_MARKERS = ("초당 거래건수", "EGW00201")
+
 
 # ─── Domain models ──────────────────────────────────────────────────
 
@@ -136,6 +145,7 @@ class KISClient:
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._lock = threading.Lock()
+        self._last_call = 0.0  # local fallback for the account-wide call gate
 
     # ─── Mode helpers ──────────────────────────────────────────
 
@@ -258,9 +268,49 @@ class KISClient:
             except Exception:  # noqa: BLE001
                 pass
 
+    # ─── Account-wide call gate ───────────────────────────────
+
+    @property
+    def _redis_slot_key(self) -> str:
+        return f"kis:apislot:{self.env}:{self.cano}"
+
+    def _gate(self) -> None:
+        """Space out ALL KIS calls for this account across every container.
+
+        KIS rate-limits per ACCOUNT (paper ~1 req/s), but our calls come from
+        web (dashboard polling), worker and scheduler concurrently — per-task
+        spacing alone let a 09:00 balance poll collide with a sell order and
+        get it rejected (2026-07-31 미래에셋 sell). A redis slot key with a
+        TTL equal to the minimum interval serializes them globally; if redis
+        is unavailable we still enforce the interval within this process.
+        """
+        if self.is_mock:
+            return
+        interval_ms = _MIN_INTERVAL_MS.get(self.env, 1200)
+        r_client = self._redis()
+        if r_client is not None:
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                try:
+                    if r_client.set(self._redis_slot_key, "1", nx=True, px=interval_ms):
+                        return
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("KIS gate redis failed, local fallback: %s", exc)
+                    break
+                time.sleep(0.12)
+            else:
+                log.warning("KIS gate wait exceeded 20s — proceeding")
+                return
+        with self._lock:
+            wait = self._last_call + interval_ms / 1000.0 - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_call = time.monotonic()
+
     def _hashkey(self, body: dict) -> str:
         if self.is_mock:
             return "MOCK_HASHKEY"
+        self._gate()  # hashkey counts toward the per-second budget too
         url = f"{self.host}/uapi/hashkey"
         headers = {"content-type": "application/json",
                    "appkey": self.app_key, "appsecret": self.app_secret}
@@ -309,6 +359,7 @@ class KISClient:
         # die on a transient server hiccup.
         last_exc: Exception | None = None
         for attempt in range(3):
+            self._gate()
             r = requests.get(self.host + path, headers=self._headers(self.tr_set["balance"]),
                              params=params, timeout=15)
             if r.status_code == 200:
@@ -353,6 +404,7 @@ class KISClient:
         """{"open", "price"} for a stock — market-data TRs work on paper too."""
         if self.is_mock:
             return {}
+        self._gate()
         r = requests.get(
             self.host + "/uapi/domestic-stock/v1/quotations/inquire-price",
             headers=self._headers("FHKST01010100"),
@@ -404,6 +456,7 @@ class KISClient:
                 "CTX_AREA_FK100": fk,
                 "CTX_AREA_NK100": nk,
             }
+            self._gate()
             r = requests.get(self.host + path,
                              headers=self._headers(self.tr_set["fills"]),
                              params=params, timeout=15)
@@ -459,28 +512,44 @@ class KISClient:
             "ORD_UNPR": "0" if price is None else str(round_to_tick(float(price))),
         }
         tr_id = self.tr_set["sell" if side == "SELL" else "buy"]
-        try:
-            r = requests.post(self.host + path,
-                              headers=self._headers(tr_id, body=body),
-                              data=json.dumps(body), timeout=15)
-        except requests.RequestException as e:
-            return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
-                               price=price, raw={}, error=str(e))
+        # Throttle rejections ("초당 거래건수 초과") mean the order was NOT
+        # accepted — retrying verbatim cannot double-execute. All other
+        # rejections stay no-retry (a rejected sell today = 미래에셋 held all
+        # weekend, 2026-07-31).
+        last: OrderResult | None = None
+        for attempt in range(3):
+            try:
+                headers = self._headers(tr_id, body=body)  # hashkey call inside (gated)
+                self._gate()  # separate slot for the order POST itself
+                r = requests.post(self.host + path,
+                                  headers=headers,
+                                  data=json.dumps(body), timeout=15)
+            except requests.RequestException as e:
+                return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                                   price=price, raw={}, error=str(e))
 
-        d: dict[str, Any] = {}
-        try:
-            d = r.json()
-        except Exception:  # noqa: BLE001
-            pass
-        rt_cd = d.get("rt_cd")
-        if r.status_code != 200 or rt_cd != "0":
-            return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
-                               price=price, raw=d,
-                               error=f"{rt_cd} {d.get('msg1', r.text[:200])}")
-        out = d.get("output") or {}
-        return OrderResult(ok=True,
-                           order_id=str(out.get("ODNO") or out.get("KRX_FWDG_ORD_ORGNO") or ""),
-                           code=code, side=side, qty=qty, price=price, raw=d, error=None)
+            d: dict[str, Any] = {}
+            try:
+                d = r.json()
+            except Exception:  # noqa: BLE001
+                pass
+            rt_cd = d.get("rt_cd")
+            if r.status_code == 200 and rt_cd == "0":
+                out = d.get("output") or {}
+                return OrderResult(ok=True,
+                                   order_id=str(out.get("ODNO") or out.get("KRX_FWDG_ORD_ORGNO") or ""),
+                                   code=code, side=side, qty=qty, price=price, raw=d, error=None)
+            err = f"{rt_cd} {d.get('msg1', r.text[:200])}"
+            msg_cd = str(d.get("msg_cd") or "")
+            last = OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                               price=price, raw=d, error=err)
+            if attempt < 2 and any(m in err or m in msg_cd for m in _THROTTLE_MARKERS):
+                log.warning("KIS throttle rejection %s %s x%d (attempt %d/3) — retrying in 2.5s: %s",
+                            side, code, qty, attempt + 1, err)
+                time.sleep(2.5)
+                continue
+            return last
+        return last  # pragma: no cover — loop always returns
 
 
 # ─── Module-level singleton (lazy) ───────────────────────────────
