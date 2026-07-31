@@ -61,7 +61,8 @@ export default function EquityChart({
   });
 
   return (
-    <ResponsiveContainer width="100%" height={320}>
+    <div className="h-[220px] sm:h-[320px]">
+    <ResponsiveContainer width="100%" height="100%">
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
         <XAxis
@@ -94,5 +95,6 @@ export default function EquityChart({
         ))}
       </LineChart>
     </ResponsiveContainer>
+    </div>
   );
 }

@@ -27,8 +27,9 @@ export default function OrdersTable({
     );
   }
   return (
+    <div>
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="w-full min-w-[620px] text-xs sm:text-sm">
         <thead className="bg-gray-50 text-gray-600">
           <tr>
             <th className="text-left px-3 py-2 font-medium">제출시각</th>
@@ -49,10 +50,18 @@ export default function OrdersTable({
               o.side === "BUY" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700";
             return (
               <tr key={o.id} className="border-t border-gray-100 hover:bg-gray-50">
-                <td className="px-3 py-2 font-mono text-xs">
-                  {parseUtc(o.submitted_at).toLocaleString("ko-KR", {
-                    hour12: false, timeZone: "Asia/Seoul",
-                  })}
+                <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                  <span className="hidden sm:inline">
+                    {parseUtc(o.submitted_at).toLocaleString("ko-KR", {
+                      hour12: false, timeZone: "Asia/Seoul",
+                    })}
+                  </span>
+                  <span className="sm:hidden">
+                    {parseUtc(o.submitted_at).toLocaleString("ko-KR", {
+                      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+                      hour12: false, timeZone: "Asia/Seoul",
+                    })}
+                  </span>
                 </td>
                 <td className="px-3 py-2">
                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${sideColor}`}>
@@ -97,6 +106,10 @@ export default function OrdersTable({
           })}
         </tbody>
       </table>
+    </div>
+    <p className="md:hidden text-[10px] text-gray-400 mt-1 px-1">
+      ← 표를 좌우로 밀면 전체 열을 볼 수 있습니다
+    </p>
     </div>
   );
 }

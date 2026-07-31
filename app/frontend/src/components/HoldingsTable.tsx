@@ -31,7 +31,7 @@ function TradeHistory({ code }: { code: string }) {
 
   return (
     <div className="overflow-x-auto py-1">
-      <table className="w-full text-xs">
+      <table className="w-full min-w-[640px] text-xs">
         <thead className="text-gray-500">
           <tr className="border-b border-gray-200">
             <th className="text-left px-2 py-1.5 font-medium">일자</th>
@@ -149,7 +149,52 @@ export default function HoldingsTable({
     );
   }
   return (
-    <div className="overflow-x-auto">
+    <>
+    {/* Mobile: card list (< md) — same data, stacked layout */}
+    <div className="md:hidden divide-y divide-gray-100">
+      {holdings.map((h) => {
+        const c = h.pnl >= 0 ? "text-emerald-700" : "text-red-700";
+        const contribution = totalEval && totalEval > 0 ? h.pnl / totalEval : null;
+        const expanded = open === h.code;
+        return (
+          <div key={h.code} className="py-2.5">
+            <div
+              className="cursor-pointer active:bg-gray-50"
+              onClick={() => setOpen(expanded ? null : h.code)}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-medium text-gray-900 truncate">
+                  {h.name ?? h.code}
+                  <span className="font-mono text-[11px] text-gray-400 ml-1.5">({h.code})</span>
+                </span>
+                <span className={`text-sm font-mono font-semibold shrink-0 ${c}`}>{fmtPct(h.pnl_pct)}</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5 text-xs text-gray-500 font-mono">
+                <span>
+                  {h.qty.toLocaleString()}주 · {h.avg_price.toLocaleString()} → {h.eval_price.toLocaleString()}
+                </span>
+                <span className={`shrink-0 ${c}`}>{fmtKRW(h.pnl)}</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5 text-[11px] text-gray-400">
+                <span>
+                  평가 {fmtKRW(h.eval_value)}
+                  {contribution != null && ` · 기여도 ${(contribution * 100).toFixed(2)}%p`}
+                </span>
+                <span className="text-gray-400">{expanded ? "▲ 접기" : "▼ 매매이력"}</span>
+              </div>
+            </div>
+            {expanded && (
+              <div className="mt-2 bg-gray-50/60 rounded px-2">
+                <TradeHistory code={h.code} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+
+    {/* Desktop: full table (md+) */}
+    <div className="hidden md:block overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 text-gray-600">
           <tr>
@@ -207,5 +252,6 @@ export default function HoldingsTable({
         </tbody>
       </table>
     </div>
+    </>
   );
 }

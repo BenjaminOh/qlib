@@ -32,8 +32,8 @@ export default function RootLayout({
       <body className="bg-gray-50 min-h-screen">
         <QueryClientProvider client={queryClient}>
           {!isLoginPage && (
-            <nav className="bg-white border-b border-gray-200 px-6 py-3">
-              <div className="max-w-7xl mx-auto flex items-center gap-8">
+            <nav className="bg-white border-b border-gray-200 px-3 sm:px-6 py-3">
+              <div className="max-w-7xl mx-auto flex items-center gap-4 sm:gap-8 overflow-x-auto whitespace-nowrap">
                 <Link href="/" className="text-xl font-bold text-blue-600">
                   Qlib Web
                 </Link>
@@ -63,7 +63,7 @@ export default function RootLayout({
                 </Link>
                 <button
                   onClick={handleLogout}
-                  className="ml-auto text-sm text-gray-500 hover:text-red-600"
+                  className="ml-auto shrink-0 text-sm text-gray-500 hover:text-red-600"
                 >
                   로그아웃
                 </button>

@@ -55,7 +55,8 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
   const scoreMax = Math.max(...rows.map((p) => Math.abs(p.score ?? 0)), 0);
 
   return (
-    <div className="overflow-x-auto bg-white rounded-md border border-emerald-100">
+    <div className="bg-white rounded-md border border-emerald-100">
+      <div className="overflow-x-auto">
       <table className="text-xs whitespace-nowrap">
         <thead className="bg-emerald-50 text-emerald-900">
           <tr>
@@ -108,7 +109,9 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
           ))}
         </tbody>
       </table>
+      </div>
       <p className="text-[10px] text-gray-400 px-2 py-1.5">
+        <span className="md:hidden">← 표를 좌우로 밀면 전체 지표를 볼 수 있습니다 (종목명 열 고정) · </span>
         적색 = 상승/점수를 올린 요인 · 청색 = 하락/점수를 낮춘 요인 · 색 진하기 = 해당 열 내 상대 크기.
         모델 기여도 열은 이번 신호에서 전 종목 합산 영향이 큰 순서.
       </p>

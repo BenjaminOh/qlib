@@ -39,7 +39,72 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
   return (
     <div>
     {toggle}
-    <div className="overflow-x-auto bg-white rounded-md border border-emerald-100">
+
+    {/* Mobile: card list (< md) */}
+    <div className="md:hidden bg-white rounded-md border border-emerald-100 divide-y divide-emerald-50">
+      {picks.map((p) => {
+        const expanded = open === p.code;
+        const hasDetail = !!p.reasons;
+        return (
+          <div key={p.code} className="px-3 py-2.5">
+            <div
+              className={hasDetail ? "cursor-pointer active:bg-emerald-50/40" : ""}
+              onClick={() => hasDetail && setOpen(expanded ? null : p.code)}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm truncate">
+                  <span className="font-semibold text-emerald-700 mr-1.5">#{p.rank}</span>
+                  <span className="text-gray-900 font-medium">{p.name ?? p.code}</span>
+                  <span className="font-mono text-[11px] text-gray-400 ml-1.5">({p.code})</span>
+                </span>
+                <span className="text-sm font-mono shrink-0">
+                  {p.last_close != null ? `${p.last_close.toLocaleString()}원` : "—"}
+                </span>
+              </div>
+              {p.reasons ? (
+                <>
+                  <div className="text-xs text-gray-700 mt-1">
+                    {p.reasons.summary}
+                    {hasDetail && (
+                      <span className="text-emerald-600 ml-1">{expanded ? "▲" : "▼ 상세"}</span>
+                    )}
+                  </div>
+                  <div className="mt-1"><MetricBadges m={p.reasons.metrics} /></div>
+                </>
+              ) : (
+                <div className="text-xs text-gray-400 mt-1">분석 정보 없음 (다음 신호부터 표시)</div>
+              )}
+              <div className="flex items-center justify-between mt-1 text-[11px]">
+                <span className="font-mono text-gray-400">
+                  알파 {p.score == null ? "—" : p.score.toFixed(6)}
+                </span>
+                <a
+                  href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  네이버 ↗
+                </a>
+              </div>
+            </div>
+            {expanded && p.reasons && p.reasons.top_features.length > 0 && (
+              <div className="mt-2 bg-emerald-50/30 rounded px-2 py-2">
+                <p className="text-[11px] text-gray-500 mb-1.5">
+                  모델(LightGBM)이 이 종목 점수에 가장 크게 반영한 지표 Top {p.reasons.top_features.length}
+                  — 양수(+)는 점수를 올린 요인, 음수(−)는 낮춘 요인
+                </p>
+                <FeatureContribList features={p.reasons.top_features} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+
+    {/* Desktop: full table (md+) */}
+    <div className="hidden md:block overflow-x-auto bg-white rounded-md border border-emerald-100">
       <table className="w-full text-sm">
         <thead className="bg-emerald-50 text-emerald-900">
           <tr>

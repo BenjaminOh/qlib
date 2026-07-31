@@ -76,9 +76,9 @@ export default function LiveDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-2xl font-bold text-gray-900">📊 모의투자 라이브</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">📊 모의투자 라이브</h1>
           {b && (
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${modeColor}`}>
               {b.mode === "real" ? "실전" : b.mode === "paper" ? "모의투자" : "MOCK (KIS 미연결)"}
@@ -129,11 +129,12 @@ export default function LiveDashboardPage() {
           value={deployedRoi != null ? fmtPct(deployedRoi) : "—"}
           color={deployedRoi != null ? (deployedRoi >= 0 ? "good" : "bad") : "neutral"}
           hint={deployed > 0 ? `투입 ${fmtKRW(deployed)} 기준` : "현재 보유 0"}
+          className="col-span-2 md:col-span-1"
         />
       </div>
 
       {/* Equity chart */}
-      <section className="bg-white rounded-lg border border-gray-200 p-5">
+      <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
         <h2 className="text-lg font-semibold mb-1">💹 전략 누적 수익률 곡선</h2>
         <p className="text-xs text-gray-500 mb-3">
           개별 종목이 아니라 <strong>계좌(전략) 전체의 자산 흐름</strong>입니다 — 종목은 매일
@@ -145,7 +146,7 @@ export default function LiveDashboardPage() {
       </section>
 
       {/* Holdings */}
-      <section className="bg-white rounded-lg border border-gray-200 p-5">
+      <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
         <h2 className="text-lg font-semibold mb-1">📦 현재 보유 종목</h2>
         <p className="text-xs text-gray-500 mb-3">
           {b ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}` : "…"}
@@ -156,7 +157,7 @@ export default function LiveDashboardPage() {
 
       {/* Recent exits — where yesterday's holdings went */}
       {(exits.data?.length ?? 0) > 0 && (
-        <section className="bg-white rounded-lg border border-gray-200 p-5">
+        <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
           <h2 className="text-lg font-semibold mb-1">📤 최근 청산 종목</h2>
           <p className="text-xs text-gray-500 mb-3">
             신호 top-10 이탈 등으로 전량 매도되어 보유 목록에서 빠진 종목 — 매도 사유와
@@ -168,7 +169,7 @@ export default function LiveDashboardPage() {
       )}
 
       {/* Latest signals */}
-      <section className="bg-emerald-50 border border-emerald-200 rounded-lg p-5">
+      <section className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 sm:p-5">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-lg font-semibold text-emerald-900">📌 다음 거래일 추천 종목</h2>
           <span className="text-xs text-emerald-700">
@@ -191,7 +192,7 @@ export default function LiveDashboardPage() {
       </section>
 
       {/* Recent orders */}
-      <section className="bg-white rounded-lg border border-gray-200 p-5">
+      <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-lg font-semibold">🧾 최근 주문 (20건)</h2>
           <Link href="/live/orders" className="text-blue-600 hover:underline text-sm">
@@ -209,18 +210,20 @@ function Card({
   value,
   hint,
   color,
+  className = "",
 }: {
   label: string;
   value: string;
   hint?: string;
   color?: "good" | "bad" | "neutral";
+  className?: string;
 }) {
   const c =
     color === "good" ? "text-emerald-700" : color === "bad" ? "text-red-700" : "text-gray-900";
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
+    <div className={`bg-white rounded-lg border border-gray-200 p-3 sm:p-4 ${className}`}>
       <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`text-2xl font-semibold ${c}`}>{value}</div>
+      <div className={`text-lg sm:text-2xl font-semibold ${c}`}>{value}</div>
       {hint && <div className="text-xs text-gray-400 mt-1">{hint}</div>}
     </div>
   );

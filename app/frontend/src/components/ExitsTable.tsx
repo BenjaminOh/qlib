@@ -44,7 +44,58 @@ function ExitTimeline({ code }: { code: string }) {
 export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
-    <div className="overflow-x-auto">
+    <>
+    {/* Mobile: card list (< md) */}
+    <div className="md:hidden divide-y divide-gray-100">
+      {exits.map((e) => {
+        const expanded = open === e.code;
+        const pnlCls = e.realized_pnl == null ? "text-gray-400"
+          : e.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700";
+        const pct = e.realized_pnl != null && e.avg_buy_price && e.sold_qty
+          ? (e.realized_pnl / (e.avg_buy_price * e.sold_qty)) * 100 : null;
+        return (
+          <div key={e.code} className="py-2.5">
+            <div
+              className="cursor-pointer active:bg-gray-50"
+              onClick={() => setOpen(expanded ? null : e.code)}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-medium text-gray-900 truncate">
+                  {e.name ?? e.code}
+                  <span className="font-mono text-[11px] text-gray-400 ml-1.5">({e.code})</span>
+                </span>
+                <span className="font-mono text-[11px] text-gray-500 shrink-0">{e.last_sell_date}</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5 text-xs font-mono text-gray-500">
+                <span>
+                  {e.sold_qty.toLocaleString()}주 ·{" "}
+                  {e.avg_buy_price != null ? Math.round(e.avg_buy_price).toLocaleString() : "—"}
+                  {" → "}
+                  {e.est_sell_price != null ? `${Math.round(e.est_sell_price).toLocaleString()}${e.price_est ? "*" : ""}` : "—"}
+                </span>
+                <span className={`shrink-0 ${pnlCls}`}>
+                  {e.realized_pnl != null
+                    ? `${e.realized_pnl >= 0 ? "+" : ""}${Math.round(e.realized_pnl).toLocaleString()}${pct != null ? ` (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}${e.price_est ? " 추정*" : " 확정"}`
+                    : "—"}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5 text-[11px]">
+                <span className="text-gray-600 truncate">{e.reasons?.basis ?? "—"}</span>
+                <span className="text-gray-400 shrink-0">{expanded ? "▲ 접기" : "▼ 이력"}</span>
+              </div>
+            </div>
+            {expanded && (
+              <div className="mt-2 bg-gray-50/60 rounded px-2">
+                <ExitTimeline code={e.code} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+
+    {/* Desktop: full table (md+) */}
+    <div className="hidden md:block overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 text-gray-600">
           <tr>
@@ -104,5 +155,6 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
         </tbody>
       </table>
     </div>
+    </>
   );
 }
