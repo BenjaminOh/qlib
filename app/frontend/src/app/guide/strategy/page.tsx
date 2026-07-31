@@ -65,6 +65,7 @@ export default function StrategyGuidePage() {
           재무제표·뉴스·테마는 일절 반영하지 않습니다. 대시보드의 &ldquo;모델 기여 지표&rdquo;에 나오는
           이름들이 바로 이것입니다.
         </p>
+        <div className="overflow-x-auto">
         <table className="min-w-full border border-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -82,6 +83,7 @@ export default function StrategyGuidePage() {
             <tr><td className="px-3 py-1.5">거래량</td><td className="px-3 py-1.5 font-mono text-xs">VMA · CORR · VSUMP</td><td className="px-3 py-1.5">거래량 급증, 가격-거래량 동행 여부</td></tr>
           </tbody>
         </table>
+        </div>
       </Step>
 
       <Step n="3" title="판단 — AI 모델의 점수화">
@@ -121,6 +123,7 @@ export default function StrategyGuidePage() {
         <p className="text-sm text-emerald-900/80 mb-3">
           계좌 1,000만원 → 슬롯 예산 = 10,000,000 ÷ 10 = <strong>1,000,000원</strong>
         </p>
+        <div className="overflow-x-auto">
         <table className="min-w-full border border-emerald-200 bg-white text-sm">
           <thead className="bg-emerald-100/60">
             <tr>
@@ -151,6 +154,7 @@ export default function StrategyGuidePage() {
             </tr>
           </tbody>
         </table>
+        </div>
         <p className="text-xs text-emerald-900/70 mt-2">
           → 첫날 2종목 · 약 200만원 투입. 이후 매일 최대 2종목씩 추가돼 약 5거래일에 걸쳐
           10종목 완전투자 상태로 수렴합니다.
