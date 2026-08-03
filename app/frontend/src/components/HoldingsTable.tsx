@@ -175,6 +175,9 @@ export default function HoldingsTable({
                 </span>
                 <span className={`shrink-0 ${c}`}>{fmtKRW(h.pnl)}</span>
               </div>
+              <div className="mt-0.5 text-[11px] text-gray-400 font-mono">
+                매수 총 {Math.round(h.qty * h.avg_price).toLocaleString()}원
+              </div>
               <div className="flex items-baseline justify-between gap-2 mt-0.5 text-[11px] text-gray-400">
                 <span>
                   평가 {fmtKRW(h.eval_value)}
@@ -201,6 +204,7 @@ export default function HoldingsTable({
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
             <th className="text-right px-3 py-2 font-medium">평균단가</th>
+            <th className="text-right px-3 py-2 font-medium">매수 총금액</th>
             <th className="text-right px-3 py-2 font-medium">현재가</th>
             <th className="text-right px-3 py-2 font-medium">평가금액</th>
             <th className="text-right px-3 py-2 font-medium">평가손익</th>
@@ -231,6 +235,7 @@ export default function HoldingsTable({
                   </td>
                   <td className="px-3 py-2 text-right font-mono">{h.qty.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right font-mono">{h.avg_price.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right font-mono">{Math.round(h.qty * h.avg_price).toLocaleString()}</td>
                   <td className="px-3 py-2 text-right font-mono">{h.eval_price.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right font-mono">{fmtKRW(h.eval_value)}</td>
                   <td className={`px-3 py-2 text-right font-mono ${c}`}>{fmtKRW(h.pnl)}</td>
@@ -241,7 +246,7 @@ export default function HoldingsTable({
                 </tr>
                 {expanded && (
                   <tr key={`${h.code}-history`} className="bg-gray-50/60">
-                    <td colSpan={8} className="px-4 py-2">
+                    <td colSpan={9} className="px-4 py-2">
                       <TradeHistory code={h.code} />
                     </td>
                   </tr>
