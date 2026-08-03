@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # what ended up in starting/ending_equity rows — set the env override.
     live_seed_cash_open: float = 10_000_000.0
     live_seed_cash_close: float = 10_000_000.0
+    # - flow  : same seed and execution as close, picks re-ranked by
+    #           기관/외국인 net buying. Equal seeds are REQUIRED for the A/B
+    #           to mean anything — the curves are compared against each other.
+    live_seed_cash_flow: float = 10_000_000.0
 
     # Close-sim bracket exits (2026-08-03): the close strategy no longer sells
     # on top-10 dropout — positions exit ONLY when the day's range touches

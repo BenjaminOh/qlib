@@ -29,7 +29,7 @@ from ..config import settings
 from ..core import kr_universes
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
-    STRATEGY_OPEN, STRATEGY_CLOSE, init_db,
+    STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW, init_db,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
@@ -42,7 +42,15 @@ def _seed_for(strategy: str) -> float:
     baseline and the simulated cash starting point."""
     if strategy == STRATEGY_CLOSE:
         return settings.live_seed_cash_close
+    if strategy == STRATEGY_FLOW:
+        return settings.live_seed_cash_flow
     return settings.live_seed_cash_open
+
+
+# Strategies that hold DB-only positions exited by ±N% brackets rather than
+# by rank dropout. 'flow' mirrors 'close' exactly so the only difference
+# between their equity curves is the pick set.
+BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW)
 
 
 # Same model/strategy as the user's validated backtest — Phase A targets
@@ -362,14 +370,23 @@ def submit_daily_orders(today: date | None = None,
     with SessionLocal() as db:
         # rank <= topk: signals persist SIGNAL_STORE_TOP_N (30) ranks for
         # sell-reason context, but trading only ever targets the top-K.
+        # The flow overlay is the exception — it needs the WIDE candidate
+        # list to re-rank before slicing top-K.
+        rank_cutoff = SIGNAL_STORE_TOP_N if strategy == STRATEGY_FLOW else n_topk
         signals = (db.query(Signal)
                      .filter(Signal.as_of == today,
-                             Signal.rank <= n_topk)
+                             Signal.rank <= rank_cutoff)
                      .order_by(Signal.rank.asc())
                      .all())
         if not signals:
             return {"status": "no_signal", "as_of": today.isoformat(),
                     "strategy": strategy, "simulated": simulated}
+
+        flow_info: dict = {}
+        flow_metrics: dict[str, dict] = {}
+        if strategy == STRATEGY_FLOW:
+            signals, flow_metrics, flow_info = _apply_flow_overlay(
+                db, signals, today, n_topk)
 
         if simulated:
             snapshot = _simulated_balance(db, strategy=strategy)
@@ -380,8 +397,8 @@ def submit_daily_orders(today: date | None = None,
         target_codes = [s.code for s in signals]
         n_drop = LIVE_CONFIG["strategy_kwargs"]["n_drop"]
 
-        if simulated and strategy == STRATEGY_CLOSE:
-            # Bracket-exit mode (2026-08-03): close-sim positions exit ONLY
+        if simulated and strategy in BRACKET_STRATEGIES:
+            # Bracket-exit mode (2026-08-03): these sim positions exit ONLY
             # via evaluate_bracket_exits (±N% touch after the 15:45 refresh),
             # never on rank dropout. Buys below stay signal-driven.
             to_sell_codes: list[str] = []
@@ -441,7 +458,7 @@ def submit_daily_orders(today: date | None = None,
                 qty = max(int(per_code_budget // px), 0)
                 if qty <= 0:
                     continue
-                buy_why = _buy_reasons(db, today, code)
+                buy_why = _buy_reasons(db, today, code, flow=flow_metrics.get(code))
                 if simulated:
                     _persist_simulated_fill(db, today, code, "BUY", qty, px,
                                             strategy=strategy, reasons=buy_why)
@@ -474,7 +491,7 @@ def submit_daily_orders(today: date | None = None,
                 strategy, submitted, rejected, last_err,
             )
 
-        return {
+        result = {
             "status": "ok",
             "as_of": today.isoformat(),
             "strategy": strategy,
@@ -485,6 +502,9 @@ def submit_daily_orders(today: date | None = None,
             "submitted": submitted,
             "rejected": rejected,
         }
+        if strategy == STRATEGY_FLOW:
+            result["flow"] = flow_info
+        return result
 
 
 def reconcile_fills(trade_date: date | None = None,
@@ -682,8 +702,43 @@ def _persist_order(db: Session, trade_date: date, code: str, side: str,
     return o
 
 
-def _buy_reasons(db: Session, as_of: date, code: str) -> dict | None:
-    """Decision basis for a buy = that day's signal reasons + entry rank."""
+def _apply_flow_overlay(db: Session, signals: list[Signal], today: date,
+                        n_topk: int) -> tuple[list[Signal], dict[str, dict], dict]:
+    """Re-rank the wide candidate list by 기관/외국인 net buying, slice top-K.
+
+    Self-healing: the evening `fetch_market_flow` task normally has the data
+    loaded already, but if it was missed (deploy window, KIS hiccup) we fetch
+    on demand here. Any failure degrades to the plain model order — a 'flow'
+    day without supply/demand data is simply a 'close' day.
+    """
+    codes = [s.code for s in signals]
+    try:
+        from . import market_flow
+        as_of_flow = _prev_trading_day(today)  # today's rows only exist post-close
+        market_flow.ensure_flow_data(db, codes, as_of_flow)
+        metrics = market_flow.flow_scores(db, codes, as_of_flow)
+        ordered, info = market_flow.rerank(codes, metrics)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("flow overlay failed — falling back to model order: %s", exc)
+        return signals[:n_topk], {}, {"applied": False, "reason": f"error: {exc}"}
+
+    by_code = {s.code: s for s in signals}
+    picked = [by_code[c] for c in ordered[:n_topk] if c in by_code]
+    info["model_top"] = codes[:n_topk]
+    info["flow_top"] = [s.code for s in picked]
+    log.info("flow overlay: applied=%s scored=%s dropped=%s model_top=%s flow_top=%s",
+             info.get("applied"), info.get("scored"), info.get("dropped"),
+             info["model_top"], info["flow_top"])
+    return picked, metrics, info
+
+
+def _buy_reasons(db: Session, as_of: date, code: str,
+                 flow: dict | None = None) -> dict | None:
+    """Decision basis for a buy = that day's signal reasons + entry rank.
+
+    `flow` (the 'flow' strategy's supply/demand metrics) is folded in when
+    present so the dashboard shows what actually drove the pick.
+    """
     try:
         sig = (db.query(Signal)
                  .filter(Signal.as_of == as_of, Signal.code == code)
@@ -691,7 +746,15 @@ def _buy_reasons(db: Session, as_of: date, code: str) -> dict | None:
         if sig is None:
             return None
         base = json.loads(sig.reasons_json) if sig.reasons_json else {}
-        return {"action": "buy", "basis": f"신호 {sig.rank}위 진입", **base}
+        out = {"action": "buy", "basis": f"신호 {sig.rank}위 진입", **base}
+        if flow:
+            from .market_flow import flow_summary
+            out["basis"] = f"신호 {sig.rank}위 + 수급 상위 진입"
+            out["flow"] = flow
+            summary = flow_summary(flow)
+            if summary:
+                out["summary"] = f"{out.get('summary', '')} · {summary}".strip(" ·")
+        return out
     except Exception as exc:  # noqa: BLE001
         log.warning("_buy_reasons failed for %s: %s", code, exc)
         return None
@@ -803,9 +866,10 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
     return AccountSnapshot(cash=cash, total_eval=total_eval, holdings=holdings)
 
 
-def evaluate_bracket_exits(trade_date: date | None = None) -> dict:
-    """Close-sim bracket exits: sell any position whose day range touched
-    avg_price × (1+tp) / (1−sl).
+def evaluate_bracket_exits(trade_date: date | None = None,
+                           strategy: str = STRATEGY_CLOSE) -> dict:
+    """Sim bracket exits: sell any position whose day range touched
+    avg_price × (1+tp) / (1−sl). Applies to every BRACKET_STRATEGIES member.
 
     Runs after the 15:45 kr_data refresh so `trade_date`'s own bar exists
     ($open/$high/$low). Idempotent: a position sold in one run disappears
@@ -827,12 +891,12 @@ def evaluate_bracket_exits(trade_date: date | None = None) -> dict:
     exits: list[dict] = []
     ambiguous = 0
     with SessionLocal() as db:
-        snapshot = _simulated_balance(db, strategy=STRATEGY_CLOSE)
+        snapshot = _simulated_balance(db, strategy=strategy)
         for h in snapshot.holdings:
             if h.qty <= 0 or h.avg_price <= 0:
                 continue
             last_buy = (db.query(Order)
-                          .filter(Order.strategy == STRATEGY_CLOSE,
+                          .filter(Order.strategy == strategy,
                                   Order.code == h.code,
                                   Order.side == "BUY")
                           .order_by(Order.trade_date.desc())
@@ -869,12 +933,12 @@ def evaluate_bracket_exits(trade_date: date | None = None) -> dict:
             except Exception as exc:  # noqa: BLE001
                 log.warning("bracket exit reasons failed for %s: %s", h.code, exc)
             _persist_simulated_fill(db, day, h.code, "SELL", h.qty, px,
-                                    strategy=STRATEGY_CLOSE, pnl=realised,
+                                    strategy=strategy, pnl=realised,
                                     reasons=reasons)
             exits.append({"code": h.code, "kind": kind, "qty": h.qty,
                           "price": round(px, 2), "realised": round(realised)})
         db.commit()
-    return {"status": "ok", "trade_date": day.isoformat(),
+    return {"status": "ok", "trade_date": day.isoformat(), "strategy": strategy,
             "tp": tp, "sl": sl, "exits": exits, "ambiguous": ambiguous}
 
 

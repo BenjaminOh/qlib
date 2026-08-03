@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from ..config import settings
@@ -27,6 +27,23 @@ if _DB_URL.startswith("sqlite"):
 engine = create_engine(_DB_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
+
+
+if _DB_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover — driver hook
+        """WAL + a busy timeout so concurrent writers queue instead of erroring.
+
+        Production runs SQLite with `--concurrency=2` and several beat slots
+        now fire together (15:20 close+flow orders, 15:40 three syncs). Under
+        the default rollback journal a second writer fails instantly with
+        "database is locked"; WAL lets readers run during a write and
+        busy_timeout makes a competing writer wait 5s instead of dying.
+        """
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.close()
 
 
 def _drop_authorized() -> bool:

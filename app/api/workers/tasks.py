@@ -89,20 +89,81 @@ def live_sync_close_task(self) -> dict:
     return sync_account(strategy="close")
 
 
+@celery_app.task(bind=True, name="live_orders_flow")
+def live_orders_flow_task(self) -> dict:
+    """15:20 KST — flow strategy: same close-priced simulation as `close`, but
+    the picks are the top-30 signal re-ranked by 기관/외국인 net buying."""
+    from ..services.live_trader import submit_daily_orders
+    self.update_state(state="RUNNING")
+    return submit_daily_orders(strategy="flow", simulated=True)
+
+
+@celery_app.task(bind=True, name="live_sync_flow")
+def live_sync_flow_task(self) -> dict:
+    """15:40 KST — flow strategy: snapshot the simulated portfolio, PnL roll-up."""
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="flow")
+
+
+@celery_app.task(
+    bind=True,
+    name="fetch_market_flow",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=2,
+)
+def fetch_market_flow_task(self) -> dict:
+    """Load 기관/외국인 net-buy rows for the candidates the flow overlay will use.
+
+    Primary trigger: chained after live_signal, which is when we first know
+    tomorrow's top-30. The 18:10 beat entry is a fallback. KIS only publishes
+    the current day's investor row AFTER the close, so both slots see it.
+    Idempotent — codes already covered for the day are skipped.
+    """
+    from ..db import SessionLocal, Signal, init_db
+    from ..services.live_trader import (
+        SIGNAL_STORE_TOP_N, _last_trading_day, _next_trading_day, _reset_qlib_caches,
+    )
+    from ..services.market_flow import ensure_flow_data
+
+    self.update_state(state="RUNNING")
+    init_db()
+    _reset_qlib_caches()
+    today = _last_trading_day()
+    signal_for = _next_trading_day(today)
+    with SessionLocal() as db:
+        codes = [c for (c,) in db.query(Signal.code)
+                                 .filter(Signal.as_of == signal_for,
+                                         Signal.rank <= SIGNAL_STORE_TOP_N)
+                                 .order_by(Signal.rank.asc())
+                                 .all()]
+        if not codes:
+            return {"status": "no_signal", "as_of": signal_for.isoformat()}
+        return ensure_flow_data(db, codes, today)
+
+
 @celery_app.task(bind=True, name="close_bracket_exits")
 def close_bracket_exits_task(self) -> dict:
-    """Chained after refresh_kr_data (+ 16:25 fallback beat) — close-sim ±N% bracket exits.
+    """Chained after refresh_kr_data (+ 16:25 fallback beat) — ±N% bracket exits
+    for every sim strategy (close, flow).
 
     Must run AFTER the day's bars land: the touch test reads that day's
     $open/$high/$low. Idempotent (sold positions leave the reconstructed
-    balance), so the fallback re-run is harmless. Re-syncs the close
-    snapshot afterwards so daily_pnl reflects same-day exits.
+    balance), so the fallback re-run is harmless. Re-syncs each snapshot
+    afterwards so daily_pnl reflects same-day exits.
     """
-    from ..services.live_trader import evaluate_bracket_exits, sync_account
+    from ..services.live_trader import (
+        BRACKET_STRATEGIES, evaluate_bracket_exits, sync_account,
+    )
     self.update_state(state="RUNNING")
-    result = evaluate_bracket_exits()
-    sync_account(strategy="close")
-    return result
+    results = {}
+    for strategy in BRACKET_STRATEGIES:
+        results[strategy] = evaluate_bracket_exits(strategy=strategy)
+        sync_account(strategy=strategy)
+    return results
 
 
 @celery_app.task(
@@ -145,6 +206,8 @@ def refresh_kr_data_task(self) -> dict:
     self.update_state(state="RUNNING")
     result = refresh_kr_data()
     if result.get("status") == "ok" and result.get("new_calendar_days", 0) > 0:
-        live_signal_task.delay()
+        # Flow data is fetched for the codes live_signal is about to store, so
+        # it has to queue behind it rather than beside it.
+        live_signal_task.apply_async(link=fetch_market_flow_task.si())
         close_bracket_exits_task.delay()
     return result

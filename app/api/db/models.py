@@ -16,13 +16,18 @@ from sqlalchemy.orm import relationship
 from .session import Base
 
 
-# Two parallel virtual portfolios share the live DB:
+# Three parallel virtual portfolios share the live DB:
 #   - 'open'  → KIS-real orders fired at 09:00 (existing behavior)
 #   - 'close' → simulated fills at 15:20 call-auction close, DB-only
+#   - 'flow'  → same execution as 'close', but the picks are re-ranked by
+#               기관/외국인 net buying (market_flow overlay). Identical
+#               execution is deliberate: the equity-curve gap vs 'close' IS
+#               the overlay's effect, with no other variable in between.
 # Tag every Order/Fill/Snapshot/DailyPnL with this string so per-strategy
 # PnL can be compared without two databases.
 STRATEGY_OPEN = "open"
 STRATEGY_CLOSE = "close"
+STRATEGY_FLOW = "flow"
 
 
 class User(Base):
@@ -56,8 +61,38 @@ class Signal(Base):
     __table_args__ = (Index("ix_signals_asof_rank", "as_of", "rank"),)
 
 
+class MarketFlow(Base):
+    """Per-(day, stock) investor net-buy row from KIS TR FHKST01010900.
+
+    Populated for the day's top-30 signal candidates only — one KIS call per
+    code returns ~30 days of history, so a single fetch fills the whole
+    lookback window and the table accumulates naturally over time.
+
+    Quantities are in SHARES and are what the flow score uses: the amount
+    fields come straight from KIS whose unit is not documented in the example
+    spec, so scoring normalises qty against qlib's own $volume instead. The
+    amounts are stored raw for later analysis, not for arithmetic today.
+    """
+    __tablename__ = "market_flow"
+
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    code = Column(String(8), nullable=False, index=True)
+    frgn_net_qty = Column(Float, nullable=True)   # 외국인(+기타외국인) 순매수 수량
+    orgn_net_qty = Column(Float, nullable=True)   # 기관계 순매수 수량
+    prsn_net_qty = Column(Float, nullable=True)   # 개인 순매수 수량
+    frgn_net_amt = Column(Float, nullable=True)   # raw KIS 거래대금 (단위 미확정)
+    orgn_net_amt = Column(Float, nullable=True)
+    prsn_net_amt = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "code", name="uq_market_flow_date_code"),
+    )
+
+
 class Order(Base):
-    """One outbound order attempt (real KIS for 'open', simulated for 'close')."""
+    """One outbound order attempt (real KIS for 'open', simulated otherwise)."""
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True)

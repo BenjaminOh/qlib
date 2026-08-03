@@ -79,6 +79,28 @@ celery_app.conf.beat_schedule = {
         "task": "live_sync_close",
         "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
     },
+    # Flow strategy: identical execution to close (sim fills at the same
+    # last close, ±5% brackets) — the ONLY difference is that picks come from
+    # the top-30 signal re-ranked by 기관/외국인 net buying.
+    # Offset by a minute from the close slots on purpose: prod runs SQLite
+    # with --concurrency=2, and stacking a third writer on 15:20/15:40 is how
+    # "database is locked" starts. Both strategies price off the same stored
+    # close, so the minute of offset changes nothing about the comparison.
+    "live-orders-at-close-flow": {
+        "task": "live_orders_flow",
+        "schedule": crontab(hour=15, minute=22, day_of_week="mon-fri"),
+    },
+    "live-sync-flow-after-close": {
+        "task": "live_sync_flow",
+        "schedule": crontab(hour=15, minute=42, day_of_week="mon-fri"),
+    },
+    # FALLBACK slot — primary trigger is the live_signal chain (it knows the
+    # fresh top-30). KIS publishes the day's investor row only after the
+    # close, so 18:10 is safely past it. Idempotent per (day, code).
+    "market-flow-fetch-fallback": {
+        "task": "fetch_market_flow",
+        "schedule": crontab(hour=18, minute=10, day_of_week="mon-fri"),
+    },
     # Incrementally extend qlib kr_data after the close-day sync wraps, then
     # chain live_signal (see refresh_kr_data_task) so the model sees today's
     # bars. dump_update mode preserves prior history.

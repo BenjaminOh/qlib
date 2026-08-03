@@ -424,6 +424,57 @@ class KISClient:
             "warn_code": str(d.get("mrkt_warn_cls_code") or ""),
         }
 
+    # ─── 투자자별 매매동향 (기관/외국인 수급) ──────────────────
+
+    def get_investor_daily(self, code: str) -> list[dict]:
+        """Daily 개인/외국인/기관계 net-buy rows for one stock (~30 days).
+
+        TR FHKST01010900 (주식현재가 투자자). One call returns the whole
+        lookback window, so a 5-day cumulative flow score costs a single
+        request per candidate. Per KIS docs the CURRENT day's row only
+        appears after the close — which is exactly what keeps the flow
+        overlay free of look-ahead.
+
+        '외국인' here means 외국인 + 기타외국인 (KIS aggregates them).
+        Returns [] on mock/any failure — callers must treat empty as
+        "no flow data today", never as "zero net buying".
+        """
+        if self.is_mock:
+            return []
+        self._gate()
+        r = requests.get(
+            self.host + "/uapi/domestic-stock/v1/quotations/inquire-investor",
+            headers=self._headers("FHKST01010900"),
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code.zfill(6)},
+            timeout=10)
+        if r.status_code != 200:
+            log.warning("KIS get_investor_daily %s HTTP %s: %s",
+                        code, r.status_code, r.text[:200])
+            return []
+        rows = (r.json() or {}).get("output") or []
+        out: list[dict] = []
+        for row in rows:
+            day = str(row.get("stck_bsop_date") or "").strip()
+            if len(day) != 8:
+                continue
+
+            def _num(key: str) -> float:
+                try:
+                    return float(row.get(key) or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            out.append({
+                "date": day,
+                "frgn_net_qty": _num("frgn_ntby_qty"),
+                "orgn_net_qty": _num("orgn_ntby_qty"),
+                "prsn_net_qty": _num("prsn_ntby_qty"),
+                "frgn_net_amt": _num("frgn_ntby_tr_pbmn"),
+                "orgn_net_amt": _num("orgn_ntby_tr_pbmn"),
+                "prsn_net_amt": _num("prsn_ntby_tr_pbmn"),
+            })
+        return out
+
     # ─── Daily fills (주문체결조회) ────────────────────────────
 
     def get_daily_fills(self, start: "date", end: "date") -> dict[str, dict]:
