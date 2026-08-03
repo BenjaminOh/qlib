@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import AssetSummary from "@/components/AssetSummary";
 import EquityChart from "@/components/EquityChart";
 import StockCurvesChart from "@/components/StockCurvesChart";
 import HoldingsTable from "@/components/HoldingsTable";
@@ -19,7 +20,6 @@ const fmtKRW = (v: number) => {
   if (a >= 1e4) return `${sign}${(a / 1e4).toFixed(0)}만`;
   return `${sign}${a.toFixed(0)}`;
 };
-const fmtPct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
 export default function LiveDashboardPage() {
   const [chartView, setChartView] = useState<"strategy" | "stocks">("strategy");
@@ -106,52 +106,17 @@ export default function LiveDashboardPage() {
         </div>
       )}
 
-      {/* Money breakdown: total = invested + cash */}
-      <div className="grid grid-cols-3 gap-3">
-        <Card label="총 평가금액" value={b ? fmtKRW(b.total_eval) : "…"} hint="투자금액 + 보유 현금" small />
-        <Card
-          label="투자된 금액"
-          value={b ? fmtKRW(b.total_eval - b.cash) : "…"}
-          hint={b && b.total_eval > 0
-            ? `매수원금 ${fmtKRW(deployed)} · 비중 ${(((b.total_eval - b.cash) / b.total_eval) * 100).toFixed(1)}%`
-            : ""}
-          small
-        />
-        <Card
-          label="보유 현금"
-          value={b ? fmtKRW(b.cash) : "…"}
-          hint={b && b.total_eval > 0 ? `비중 ${((b.cash / b.total_eval) * 100).toFixed(1)}%` : ""}
-          small
-        />
-      </div>
-
-      {/* Performance cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card
-          label="당일 실현 손익"
-          value={todayRealized.data ? `${fmtKRW(todayRealized.data.realized_pnl)}${todayRealized.data.estimated ? "*" : ""}` : "—"}
-          color={todayRealized.data ? (todayRealized.data.realized_pnl >= 0 ? "good" : "bad") : "neutral"}
-          hint={todayRealized.data?.sell_count ? `오늘 매도 ${todayRealized.data.sell_count}건${todayRealized.data.estimated ? " · 시가 추정" : ""}` : "오늘 매도 없음"}
-        />
-        <Card
-          label="당일 평가손익(미실현)"
-          value={today ? fmtKRW(today.unrealised_pnl) : "—"}
-          color={today?.unrealised_pnl != null ? (today.unrealised_pnl >= 0 ? "good" : "bad") : "neutral"}
-          hint="현재 보유 종목 합산"
-        />
-        <Card
-          label="누적 수익률"
-          value={cumulative != null ? fmtPct(cumulative) : "—"}
-          color={cumulative != null ? (cumulative >= 0 ? "good" : "bad") : "neutral"}
-          hint="시드 자본 대비"
-        />
-        <Card
-          label="투입자본 수익률"
-          value={deployedRoi != null ? fmtPct(deployedRoi) : "—"}
-          color={deployedRoi != null ? (deployedRoi >= 0 ? "good" : "bad") : "neutral"}
-          hint={deployed > 0 ? `투입 ${fmtKRW(deployed)} 기준` : "현재 보유 0"}
-        />
-      </div>
+      {/* Asset summary — total, sparkline, invested/cash bar, holdings donut, sub-stats */}
+      <AssetSummary
+        balance={b}
+        loading={balance.isLoading}
+        todayRealized={todayRealized.data}
+        todayUnrealised={today?.unrealised_pnl}
+        cumulative={cumulative}
+        deployed={deployed}
+        deployedRoi={deployedRoi}
+        pnlRows={pnl.data?.rows || []}
+      />
 
       {/* Equity chart — strategy curves vs per-stock curves */}
       <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
@@ -280,28 +245,3 @@ export default function LiveDashboardPage() {
   );
 }
 
-function Card({
-  label,
-  value,
-  hint,
-  color,
-  className = "",
-  small = false,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  color?: "good" | "bad" | "neutral";
-  className?: string;
-  small?: boolean;
-}) {
-  const c =
-    color === "good" ? "text-emerald-700" : color === "bad" ? "text-red-700" : "text-gray-900";
-  return (
-    <div className={`bg-white rounded-lg border border-gray-200 p-3 sm:p-4 ${className}`}>
-      <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`${small ? "text-base" : "text-lg"} sm:text-2xl font-semibold ${c}`}>{value}</div>
-      {hint && <div className="text-xs text-gray-400 mt-1">{hint}</div>}
-    </div>
-  );
-}
