@@ -206,7 +206,14 @@ export default function LiveDashboardPage() {
           {b ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}` : "…"}
           {" · 평균단가/현재가는 KIS 모의투자 API 기준이라 실제 KRX 시세와 다를 수 있습니다."}
         </p>
-        <HoldingsTable holdings={b?.holdings || []} totalEval={b?.total_eval} />
+        {balance.isLoading ? (
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-gray-400">
+            <span className="inline-block w-4 h-4 border-2 border-gray-300 border-t-emerald-500 rounded-full animate-spin" />
+            보유 종목 불러오는 중…
+          </div>
+        ) : (
+          <HoldingsTable holdings={b?.holdings || []} totalEval={b?.total_eval} />
+        )}
       </section>
 
       {/* Recent exits — where yesterday's holdings went */}
