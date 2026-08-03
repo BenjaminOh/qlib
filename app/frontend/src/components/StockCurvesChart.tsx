@@ -152,7 +152,12 @@ export default function StockCurvesChart({ strategy = "open" }: { strategy?: str
                 dataKey={seriesKey(c)}
                 stroke={colorOf.get(c.code) || "#888"}
                 strokeDasharray={c.status === "exited" ? "5 3" : undefined}
-                dot={false}
+                // A line needs 2+ points to draw a segment — a stock entered
+                // today has exactly one point and would be invisible without
+                // its dot.
+                dot={c.points.length < 2
+                  ? { r: 4, fill: colorOf.get(c.code) || "#888", strokeWidth: 0 }
+                  : false}
                 strokeWidth={2}
                 connectNulls={false}
                 hide={hidden.has(c.code)}
