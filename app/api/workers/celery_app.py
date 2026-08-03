@@ -63,11 +63,17 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=15, minute=40, day_of_week="mon-fri"),
     },
     # Close strategy: simulated DB fills at the call-auction window.
-    # Same Signal(as_of=today) the open strategy used at 09:00 — variable
-    # under test is execution timing (open vs close), not the signal itself.
+    # Buys follow the same Signal(as_of=today) the open strategy used at
+    # 09:00; exits are ±N% brackets (close_bracket_exits), not rank dropout.
     "live-orders-at-close": {
         "task": "live_orders_close",
         "schedule": crontab(hour=15, minute=20, day_of_week="mon-fri"),
+    },
+    # FALLBACK slot — primary trigger is the refresh_kr_data chain (needs
+    # the day's own $high/$low bar). Idempotent, double-firing harmless.
+    "close-bracket-exits-fallback": {
+        "task": "close_bracket_exits",
+        "schedule": crontab(hour=16, minute=25, day_of_week="mon-fri"),
     },
     "live-sync-close-after-close": {
         "task": "live_sync_close",

@@ -138,8 +138,10 @@ export default function LiveDashboardPage() {
         <h2 className="text-lg font-semibold mb-1">💹 전략 누적 수익률 곡선</h2>
         <p className="text-xs text-gray-500 mb-3">
           개별 종목이 아니라 <strong>계좌(전략) 전체의 자산 흐름</strong>입니다 — 종목은 매일
-          교체되어도 &ldquo;전략이 돈을 벌고 있는가&rdquo;는 이 곡선으로 이어집니다. 시초가
-          실주문(open)과 종가 시뮬(close) 두 실행 방식의 성적 비교가 목적. 시드 open{" "}
+          교체되어도 &ldquo;전략이 돈을 벌고 있는가&rdquo;는 이 곡선으로 이어집니다.
+          두 곡선은 <strong>청산 규칙 비교</strong>: open(실주문)은 신호 top-10 이탈 시 매도,
+          close(시뮬)는 종가 매수 후 <strong>±5% 도달 시 익절/손절</strong>(2026-08-03부터 —
+          이전 구간은 open과 동일 규칙의 체결시점 비교였음). 시드 open{" "}
           {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"} · 30초 갱신.
         </p>
         <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />

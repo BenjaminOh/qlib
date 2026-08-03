@@ -380,7 +380,13 @@ def submit_daily_orders(today: date | None = None,
         target_codes = [s.code for s in signals]
         n_drop = LIVE_CONFIG["strategy_kwargs"]["n_drop"]
 
-        to_sell_codes = [c for c in held_codes if c not in set(target_codes)][:n_drop]
+        if simulated and strategy == STRATEGY_CLOSE:
+            # Bracket-exit mode (2026-08-03): close-sim positions exit ONLY
+            # via evaluate_bracket_exits (±N% touch after the 15:45 refresh),
+            # never on rank dropout. Buys below stay signal-driven.
+            to_sell_codes: list[str] = []
+        else:
+            to_sell_codes = [c for c in held_codes if c not in set(target_codes)][:n_drop]
         # Buy candidates keep full rank order — affordability filtering below
         # (after sells refresh the cash) decides which n_drop actually get bought.
         buy_candidates = [c for c in target_codes if c not in held_codes]
@@ -797,6 +803,81 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
     return AccountSnapshot(cash=cash, total_eval=total_eval, holdings=holdings)
 
 
+def evaluate_bracket_exits(trade_date: date | None = None) -> dict:
+    """Close-sim bracket exits: sell any position whose day range touched
+    avg_price × (1+tp) / (1−sl).
+
+    Runs after the 15:45 kr_data refresh so `trade_date`'s own bar exists
+    ($open/$high/$low). Idempotent: a position sold in one run disappears
+    from the reconstructed balance, so a re-run finds nothing to sell.
+
+    Fill-price conventions (daily-bar approximation):
+      - gap through the level at the open → fill at the open
+      - otherwise → fill at the bracket level itself
+      - day touches BOTH levels → assume the stop hit first (pessimistic),
+        counted in `ambiguous`
+    Entry-day bars are excluded — the modeled entry is that day's close, so
+    the day's intraday range precedes the position.
+    """
+    init_db()
+    _reset_qlib_caches()
+    day = trade_date or _last_trading_day()
+    tp = settings.live_close_bracket_tp
+    sl = settings.live_close_bracket_sl
+    exits: list[dict] = []
+    ambiguous = 0
+    with SessionLocal() as db:
+        snapshot = _simulated_balance(db, strategy=STRATEGY_CLOSE)
+        for h in snapshot.holdings:
+            if h.qty <= 0 or h.avg_price <= 0:
+                continue
+            last_buy = (db.query(Order)
+                          .filter(Order.strategy == STRATEGY_CLOSE,
+                                  Order.code == h.code,
+                                  Order.side == "BUY")
+                          .order_by(Order.trade_date.desc())
+                          .first())
+            if last_buy is not None and last_buy.trade_date >= day:
+                continue  # entered at this day's close — range predates entry
+            bar = _day_ohlc(h.code, day)
+            if not bar:
+                continue
+            tp_px = h.avg_price * (1.0 + tp)
+            sl_px = h.avg_price * (1.0 - sl)
+            tp_hit = bar["high"] >= tp_px
+            sl_hit = bar["low"] <= sl_px
+            if not tp_hit and not sl_hit:
+                continue
+            if tp_hit and sl_hit:
+                ambiguous += 1
+            if sl_hit:
+                px = bar["open"] if bar["open"] <= sl_px else sl_px
+                kind, pct = "손절", -sl
+            else:
+                px = bar["open"] if bar["open"] >= tp_px else tp_px
+                kind, pct = "익절", tp
+            realised = (px - h.avg_price) * h.qty
+            basis = (f"브래킷 {kind} {pct * 100:+.1f}% 도달 — "
+                     f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
+            reasons = {"action": "sell", "basis": basis,
+                       "summary": "", "metrics": {}, "top_features": []}
+            try:
+                from .signal_reasons import build_intuitive_metrics, summarize
+                m = build_intuitive_metrics([h.code]).get(h.code, {})
+                reasons["summary"] = summarize(m)
+                reasons["metrics"] = m
+            except Exception as exc:  # noqa: BLE001
+                log.warning("bracket exit reasons failed for %s: %s", h.code, exc)
+            _persist_simulated_fill(db, day, h.code, "SELL", h.qty, px,
+                                    strategy=STRATEGY_CLOSE, pnl=realised,
+                                    reasons=reasons)
+            exits.append({"code": h.code, "kind": kind, "qty": h.qty,
+                          "price": round(px, 2), "realised": round(realised)})
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(),
+            "tp": tp, "sl": sl, "exits": exits, "ambiguous": ambiguous}
+
+
 def _last_trading_day(today: date | None = None) -> date:
     """Most recent KRX trading day on or before `today`.
 
@@ -911,5 +992,24 @@ def _last_close(code: str) -> float | None:
         if df.empty:
             return None
         return float(df.iloc[-1]["$close"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _day_ohlc(code: str, day: date) -> dict | None:
+    """One day's OHLC bar for a code, or None if missing/invalid."""
+    try:
+        from qlib.data import D
+        df = D.features([f"{code}"], ["$open", "$high", "$low", "$close"],
+                        start_time=day.isoformat(), end_time=day.isoformat(),
+                        freq="day")
+        if df is None or df.empty:
+            return None
+        row = df.iloc[-1]
+        bar = {"open": float(row["$open"]), "high": float(row["$high"]),
+               "low": float(row["$low"]), "close": float(row["$close"])}
+        if any(v <= 0 for v in bar.values()):
+            return None
+        return bar
     except Exception:  # noqa: BLE001
         return None

@@ -89,6 +89,22 @@ def live_sync_close_task(self) -> dict:
     return sync_account(strategy="close")
 
 
+@celery_app.task(bind=True, name="close_bracket_exits")
+def close_bracket_exits_task(self) -> dict:
+    """Chained after refresh_kr_data (+ 16:25 fallback beat) — close-sim ±N% bracket exits.
+
+    Must run AFTER the day's bars land: the touch test reads that day's
+    $open/$high/$low. Idempotent (sold positions leave the reconstructed
+    balance), so the fallback re-run is harmless. Re-syncs the close
+    snapshot afterwards so daily_pnl reflects same-day exits.
+    """
+    from ..services.live_trader import evaluate_bracket_exits, sync_account
+    self.update_state(state="RUNNING")
+    result = evaluate_bracket_exits()
+    sync_account(strategy="close")
+    return result
+
+
 @celery_app.task(
     bind=True,
     name="reconcile_fills",
@@ -130,4 +146,5 @@ def refresh_kr_data_task(self) -> dict:
     result = refresh_kr_data()
     if result.get("status") == "ok" and result.get("new_calendar_days", 0) > 0:
         live_signal_task.delay()
+        close_bracket_exits_task.delay()
     return result

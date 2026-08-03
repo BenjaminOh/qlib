@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     live_seed_cash_open: float = 10_000_000.0
     live_seed_cash_close: float = 10_000_000.0
 
+    # Close-sim bracket exits (2026-08-03): the close strategy no longer sells
+    # on top-10 dropout — positions exit ONLY when the day's range touches
+    # avg_price × (1+tp) / (1−sl). Evaluated after the 15:45 kr_data refresh
+    # against that day's $open/$high/$low.
+    live_close_bracket_tp: float = 0.05
+    live_close_bracket_sl: float = 0.05
+
     # Auth — JWT-based admin login. JWT secret MUST be overridden in production
     # (default is a sentinel; rotating it invalidates all existing sessions).
     # Admin user is seeded on first startup from these credentials if the users

@@ -55,11 +55,18 @@
   보유기간 짧고 실현손익 나쁠 것 (셀바스AI: +43% 진입→익일 -11% 이탈 사례). 검증 방법:
   매수 주문 reasons_json의 ret5 vs 이후 보유기간·실현손익 상관 (2~3주 데이터 필요).
   확인 시 대응: 과열 필터(직전 5일 +N% 초과 시 순위 무관 스킵) 시나리오 추가.
+- **[2026-08-03 — 사용자 지시로 close 시뮬 규칙 전환] ±5% 브래킷 실험 시작.** close 전략은
+  이날부터 신호 이탈 매도 없이 평단 ±5% 터치로만 청산(`evaluate_bracket_exits`, refresh 체인
+  +16:25 폴백, 양쪽 터치 시 손절 우선). **기존 "체결시점 A/B(시초가 vs 종가)"는 7/28~8/1
+  4일치로 종료**(최종: close가 open 대비 +3.5만 우위, 표본 부족으로 결론 무의미) — 이후 파란
+  곡선은 "청산 규칙 비교(신호 이탈 vs 브래킷)"로 읽을 것. 브래킷 판정은 당일 봉이 필요하므로
+  15:45 refresh 이후에만 유효 — 15:40 sync 시점 close 곡선은 당일 매도 미반영(체인 재sync가 보정).
 
 ## 3. 점검 체크리스트 (매일 확인할 것)
 
 1. 09:00 `live_orders` 결과 — submitted/rejected/skipped_expensive (worker 로그 + orders 테이블)
-2. 15:20 `live_orders_close` (close 시뮬) 동일 확인
+2. 15:20 `live_orders_close` (close 시뮬 매수) + refresh 체인의 `close_bracket_exits`
+   (±5% 브래킷 매도 — exits/ambiguous 카운트, 16:25 폴백 포함) 확인
 3. 15:40 `live_sync` — snapshot/pnl 기록 여부
 4. 15:45 `refresh_kr_data` — status ok + **bin이 실제 append됐는지** (캘린더 날짜 vs bin 끝 날짜 —
    과거에 캘린더만 늘고 bin은 동결된 사고 2회)
