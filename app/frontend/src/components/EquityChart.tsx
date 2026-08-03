@@ -21,8 +21,8 @@ const STRATEGY_COLORS: Record<string, string> = {
 
 const STRATEGY_LABELS: Record<string, string> = {
   open: "시초가 매수 (open)",
-  close: "종가 매수 ±5% 브래킷 (close, 시뮬)",
-  flow: "기관·외국인 수급 추종 (flow, 시뮬)",
+  close: "종가 매수 브래킷 +10%/전저점 (close, 시뮬)",
+  flow: "기관·외국인 수급 추종 브래킷 (flow, 시뮬)",
 };
 
 type WideRow = { date: string } & Record<string, number | string | undefined>;

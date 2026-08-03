@@ -44,12 +44,16 @@ class Settings(BaseSettings):
     #           to mean anything — the curves are compared against each other.
     live_seed_cash_flow: float = 10_000_000.0
 
-    # Close-sim bracket exits (2026-08-03): the close strategy no longer sells
-    # on top-10 dropout — positions exit ONLY when the day's range touches
-    # avg_price × (1+tp) / (1−sl). Evaluated after the 15:45 kr_data refresh
-    # against that day's $open/$high/$low.
-    live_close_bracket_tp: float = 0.05
-    live_close_bracket_sl: float = 0.05
+    # Sim bracket exits (close + flow). 2026-08-03 evening revision (user):
+    # take-profit +10%; stop = the LOWEST $low of the `low_window` trading
+    # days before entry × (1 − low_buffer) — the cafe-recommender-style
+    # structural stop ("전 저점"). `sl` now acts as a RISK CAP: the stop is
+    # never placed deeper than avg × (1 − sl), and is the fallback when no
+    # valid prior low exists (e.g. entry at fresh lows).
+    live_close_bracket_tp: float = 0.10
+    live_close_bracket_sl: float = 0.10
+    live_close_bracket_low_window: int = 10
+    live_close_bracket_low_buffer: float = 0.01
 
     # Auth — JWT-based admin login. JWT secret MUST be overridden in production
     # (default is a sentinel; rotating it invalidates all existing sessions).

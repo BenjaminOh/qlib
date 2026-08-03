@@ -177,14 +177,28 @@ export default function LiveDashboardPage() {
         </div>
         {chartView === "strategy" ? (
           <>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-gray-500 mb-2">
               개별 종목이 아니라 <strong>계좌(전략) 전체의 자산 흐름</strong>입니다 — 종목은 매일
               교체되어도 &ldquo;전략이 돈을 벌고 있는가&rdquo;는 이 곡선으로 이어집니다.
-              곡선 간 차이는 <strong>청산 규칙 비교</strong>: open(실주문)은 신호 top-10 이탈 시 매도,
-              close(시뮬)는 종가 매수 후 <strong>±5% 도달 시 익절/손절</strong>(2026-08-03부터 —
-              이전 구간은 open과 동일 규칙의 체결시점 비교였음). 시드 open{" "}
-              {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"} · 30초 갱신.
+              곡선 간 차이는 <strong>청산 규칙·픽 비교</strong>: open(실주문)은 신호 top-10 이탈 시
+              매도, close·flow(시뮬)는 종가 매수 후 <strong>브래킷 매도(+10% 익절 / 전 저점
+              손절)</strong>. 시드 각 {seedCash?.open ? fmtKRW(seedCash.open) : "…"} · 30초 갱신.
             </p>
+            <details className="text-xs text-gray-500 mb-3">
+              <summary className="cursor-pointer text-emerald-700 hover:underline select-none">
+                ❓ 시뮬(close·flow) 매도 가이드 자세히 보기
+              </summary>
+              <div className="mt-1.5 bg-emerald-50/60 border border-emerald-100 rounded p-2.5 space-y-1">
+                <p>① <strong>익절</strong> — 당일 고가가 평균단가 <strong>+10%</strong>에 닿으면 전량 매도</p>
+                <p>② <strong>손절</strong> — 당일 저가가 <strong>전 저점</strong>(진입일 이전 10거래일
+                  최저가 −1% 버퍼) 아래로 내려가면 전량 매도. 단 손절선은 평단 −10%보다 깊어지지
+                  않도록 캡(전 저점이 없거나 너무 멀면 −10% 적용)</p>
+                <p>③ 판정은 매일 15:48(당일 시세 반영 직후) 시가·고가·저가 기준 — 갭으로 뚫린 날은
+                  시가 체결, 익절·손절 동시 터치 시 손절 우선 가정</p>
+                <p>④ 시뮬엔 신호 이탈 매도 없음 — 매수는 매일 15:20 종가로, close는 신호 top-10
+                  미보유 상위 2종목, flow는 기관·외국인 순매수 재랭킹 상위</p>
+              </div>
+            </details>
             <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
           </>
         ) : (

@@ -868,8 +868,14 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
 
 def evaluate_bracket_exits(trade_date: date | None = None,
                            strategy: str = STRATEGY_CLOSE) -> dict:
-    """Sim bracket exits: sell any position whose day range touched
-    avg_price × (1+tp) / (1−sl). Applies to every BRACKET_STRATEGIES member.
+    """Sim bracket exits (cafe-recommender style). Applies to every
+    BRACKET_STRATEGIES member:
+
+      - take-profit: day high touches avg × (1+tp)  [tp=0.10]
+      - stop: day low breaks the STRUCTURAL stop — lowest $low of the
+        `low_window` trading days before entry × (1 − low_buffer) — capped
+        at avg × (1 − sl) so a wide prior low never risks more than `sl`.
+        No valid prior low (entry at fresh lows) → the cap is the stop.
 
     Runs after the 15:45 kr_data refresh so `trade_date`'s own bar exists
     ($open/$high/$low). Idempotent: a position sold in one run disappears
@@ -887,7 +893,9 @@ def evaluate_bracket_exits(trade_date: date | None = None,
     _reset_qlib_caches()
     day = trade_date or _last_trading_day()
     tp = settings.live_close_bracket_tp
-    sl = settings.live_close_bracket_sl
+    sl_cap = settings.live_close_bracket_sl
+    low_window = settings.live_close_bracket_low_window
+    low_buffer = settings.live_close_bracket_low_buffer
     exits: list[dict] = []
     ambiguous = 0
     with SessionLocal() as db:
@@ -895,19 +903,34 @@ def evaluate_bracket_exits(trade_date: date | None = None,
         for h in snapshot.holdings:
             if h.qty <= 0 or h.avg_price <= 0:
                 continue
-            last_buy = (db.query(Order)
-                          .filter(Order.strategy == strategy,
-                                  Order.code == h.code,
-                                  Order.side == "BUY")
-                          .order_by(Order.trade_date.desc())
-                          .first())
-            if last_buy is not None and last_buy.trade_date >= day:
+            # Episode entry = first BUY after the last full SELL (sim episodes
+            # hold exactly one BUY today, but keep this robust to re-entries).
+            last_sell = (db.query(Order)
+                           .filter(Order.strategy == strategy,
+                                   Order.code == h.code,
+                                   Order.side == "SELL")
+                           .order_by(Order.trade_date.desc())
+                           .first())
+            entry_q = (db.query(Order)
+                         .filter(Order.strategy == strategy,
+                                 Order.code == h.code,
+                                 Order.side == "BUY"))
+            if last_sell is not None:
+                entry_q = entry_q.filter(Order.trade_date > last_sell.trade_date)
+            entry = entry_q.order_by(Order.trade_date.asc()).first()
+            if entry is None or entry.trade_date >= day:
                 continue  # entered at this day's close — range predates entry
             bar = _day_ohlc(h.code, day)
             if not bar:
                 continue
             tp_px = h.avg_price * (1.0 + tp)
-            sl_px = h.avg_price * (1.0 - sl)
+            cap_px = h.avg_price * (1.0 - sl_cap)
+            prev_low = _prev_low(h.code, entry.trade_date, low_window)
+            low_stop = prev_low * (1.0 - low_buffer) if prev_low else None
+            if low_stop is not None and low_stop < h.avg_price and low_stop > cap_px:
+                sl_px, sl_kind = low_stop, "prev_low"
+            else:
+                sl_px, sl_kind = cap_px, "cap"
             tp_hit = bar["high"] >= tp_px
             sl_hit = bar["low"] <= sl_px
             if not tp_hit and not sl_hit:
@@ -916,13 +939,20 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 ambiguous += 1
             if sl_hit:
                 px = bar["open"] if bar["open"] <= sl_px else sl_px
-                kind, pct = "손절", -sl
+                kind = "손절"
+                if sl_kind == "prev_low":
+                    basis = (f"브래킷 손절 — 전 저점 {round(prev_low):,}원 이탈 "
+                             f"(손절선 {round(sl_px):,} · 평단 {round(h.avg_price):,} "
+                             f"→ 체결 {round(px):,})")
+                else:
+                    basis = (f"브래킷 손절 −{sl_cap * 100:.1f}% (리스크 캡) — "
+                             f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
             else:
                 px = bar["open"] if bar["open"] >= tp_px else tp_px
-                kind, pct = "익절", tp
+                kind = "익절"
+                basis = (f"브래킷 익절 {tp * 100:+.1f}% 도달 — "
+                         f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
             realised = (px - h.avg_price) * h.qty
-            basis = (f"브래킷 {kind} {pct * 100:+.1f}% 도달 — "
-                     f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
             reasons = {"action": "sell", "basis": basis,
                        "summary": "", "metrics": {}, "top_features": []}
             try:
@@ -936,10 +966,12 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                                     strategy=strategy, pnl=realised,
                                     reasons=reasons)
             exits.append({"code": h.code, "kind": kind, "qty": h.qty,
-                          "price": round(px, 2), "realised": round(realised)})
+                          "price": round(px, 2), "realised": round(realised),
+                          "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
         db.commit()
     return {"status": "ok", "trade_date": day.isoformat(), "strategy": strategy,
-            "tp": tp, "sl": sl, "exits": exits, "ambiguous": ambiguous}
+            "tp": tp, "sl_cap": sl_cap, "low_window": low_window,
+            "exits": exits, "ambiguous": ambiguous}
 
 
 def _last_trading_day(today: date | None = None) -> date:
@@ -1056,6 +1088,28 @@ def _last_close(code: str) -> float | None:
         if df.empty:
             return None
         return float(df.iloc[-1]["$close"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _prev_low(code: str, entry_date: date, window: int) -> float | None:
+    """Lowest $low over the `window` trading days strictly BEFORE entry_date.
+
+    The structural-stop anchor: a close-bet position is invalidated when the
+    day range breaks the low it based its entry on."""
+    try:
+        from qlib.data import D
+        cal = D.calendar(end_time=entry_date.isoformat())
+        days = [pd.Timestamp(c).date() for c in cal]
+        days = [d for d in days if d < entry_date][-window:]
+        if not days:
+            return None
+        df = D.features([f"{code}"], ["$low"], start_time=days[0].isoformat(),
+                        end_time=days[-1].isoformat(), freq="day")
+        if df is None or df.empty:
+            return None
+        v = float(df["$low"].min())
+        return v if v > 0 else None
     except Exception:  # noqa: BLE001
         return None
 
