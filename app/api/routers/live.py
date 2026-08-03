@@ -277,6 +277,127 @@ def get_stock_trades(code: str, strategy: str = Query("open")):
     return _position_timeline(code, strategy, kis_avg=kis_avg, kis_now=kis_now)
 
 
+# ─── Per-stock return curves (holding-period lines for the chart) ────
+
+_EXECUTED_STATUSES = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
+
+
+class StockCurvePoint(BaseModel):
+    date: date
+    ret_pct: float  # close / running avg_price − 1 on that day
+
+
+class StockCurve(BaseModel):
+    code: str
+    name: str | None = None
+    status: str  # "held" | "exited"
+    episode: int  # re-entries get separate curves: 1, 2, ...
+    start: date
+    end: date | None = None  # None while still held
+    avg_price: float | None = None  # avg carried at episode end/now
+    points: list[StockCurvePoint]
+
+
+class StockCurvesResponse(BaseModel):
+    strategy: str
+    curves: list[StockCurve]
+
+
+@router.get("/stocks/curves", response_model=StockCurvesResponse)
+def get_stock_curves(strategy: str = Query("open"),
+                     days: int = Query(120, ge=7, le=365)):
+    """Daily return-% series per stock, spanning ONLY its holding period(s).
+
+    One curve per holding episode (buy → position reaches zero); a re-entered
+    code yields episode 2, 3, ... Return basis is the running average buy
+    price in effect on each day, so adding to a position bends the line at
+    the new avg. Sell-day points use that day's CLOSE — the exits card owns
+    the exact realized figure (actual fill price)."""
+    init_db()
+    cutoff = date.today() - timedelta(days=days)
+    with SessionLocal() as db:
+        rows = (db.query(Order)
+                  .filter(Order.strategy == strategy,
+                          Order.status.in_(_EXECUTED_STATUSES))
+                  .order_by(Order.code.asc(), Order.trade_date.asc(), Order.id.asc())
+                  .all())
+        by_code: dict[str, list] = {}
+        for r in rows:
+            by_code.setdefault(r.code, []).append(
+                (r.trade_date, r.side, r.qty, r.price))
+
+    curves: list[StockCurve] = []
+    for code, events in by_code.items():
+        prices = _price_series(code)
+        if not prices:
+            continue
+        all_dates = sorted(prices.keys())
+
+        # Walk orders, carving episodes and per-date avg checkpoints.
+        pos_qty, pos_cost = 0, 0.0
+        episode = 0
+        ep_start: date | None = None
+        checkpoints: list[tuple[date, float]] = []  # (effective_date, avg)
+        ep_list: list[dict] = []
+        for (d, side, qty, px) in events:
+            if px is None:  # market order pre-reconciliation → day open estimate
+                day_open, day_close = prices.get(d.isoformat(), (None, None))
+                px = day_open or day_close
+            if px is None:
+                continue
+            if side == "BUY":
+                if pos_qty == 0:
+                    episode += 1
+                    ep_start = d
+                    checkpoints = []
+                pos_qty += qty
+                pos_cost += qty * px
+                checkpoints.append((d, pos_cost / pos_qty))
+            else:  # SELL
+                avg_before = (pos_cost / pos_qty) if pos_qty else 0.0
+                pos_cost -= avg_before * min(qty, pos_qty)
+                pos_qty = max(pos_qty - qty, 0)
+                if pos_qty == 0 and ep_start is not None:
+                    ep_list.append({"episode": episode, "start": ep_start,
+                                    "end": d, "checkpoints": list(checkpoints),
+                                    "avg": avg_before})
+                    ep_start = None
+        if pos_qty > 0 and ep_start is not None:  # still held
+            ep_list.append({"episode": episode, "start": ep_start, "end": None,
+                            "checkpoints": list(checkpoints),
+                            "avg": (pos_cost / pos_qty)})
+
+        for ep in ep_list:
+            if ep["end"] is not None and ep["end"] < cutoff:
+                continue
+            points: list[StockCurvePoint] = []
+            for d_iso in all_dates:
+                d_obj = date.fromisoformat(d_iso)
+                if d_obj < ep["start"] or d_obj < cutoff:
+                    continue
+                if ep["end"] is not None and d_obj > ep["end"]:
+                    break
+                avg = None
+                for (cd, cavg) in ep["checkpoints"]:
+                    if cd <= d_obj:
+                        avg = cavg
+                _open, close = prices[d_iso]
+                if not avg or not close:
+                    continue
+                points.append(StockCurvePoint(
+                    date=d_obj, ret_pct=round(close / avg - 1, 6)))
+            if not points:
+                continue
+            curves.append(StockCurve(
+                code=code, name=_stock_name_safe(code),
+                status="exited" if ep["end"] is not None else "held",
+                episode=ep["episode"], start=ep["start"], end=ep["end"],
+                avg_price=ep["avg"], points=points))
+
+    curves.sort(key=lambda c: (c.status != "held", c.start), reverse=False)
+    return StockCurvesResponse(strategy=strategy, curves=curves)
+
+
 class ExitRow(BaseModel):
     code: str
     name: str | None = None
@@ -476,6 +597,7 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
             seed_cash={
                 "open": settings.live_seed_cash_open,
                 "close": settings.live_seed_cash_close,
+                "flow": settings.live_seed_cash_flow,
             },
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,

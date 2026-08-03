@@ -231,6 +231,10 @@ export const api = {
   getStockTrades: (code: string) =>
     fetchApi<StockTrade[]>(`/api/v1/live/stock/${code}/trades`),
   getRecentExits: () => fetchApi<ExitRow[]>("/api/v1/live/exits"),
+  getStockCurves: (strategy = "open", days = 120) =>
+    fetchApi<StockCurvesResponse>(
+      `/api/v1/live/stocks/curves?strategy=${strategy}&days=${days}`,
+    ),
   getTodayRealized: () =>
     fetchApi<TodayRealized>("/api/v1/live/realized/today"),
   getLiveOrders: (limit = 100, includeSim = false) =>
@@ -355,6 +359,27 @@ export interface ExitRow {
   price_est: boolean;
   realized_pnl: number | null;
   reasons: StockTradeReasons | null;
+}
+
+export interface StockCurvePoint {
+  date: string;
+  ret_pct: number; // close / running avg − 1
+}
+
+export interface StockCurve {
+  code: string;
+  name: string | null;
+  status: "held" | "exited";
+  episode: number;
+  start: string;
+  end: string | null;
+  avg_price: number | null;
+  points: StockCurvePoint[];
+}
+
+export interface StockCurvesResponse {
+  strategy: string;
+  curves: StockCurve[];
 }
 
 export interface TodayRealized {

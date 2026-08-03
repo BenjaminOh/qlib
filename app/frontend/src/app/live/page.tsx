@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import EquityChart from "@/components/EquityChart";
+import StockCurvesChart from "@/components/StockCurvesChart";
 import HoldingsTable from "@/components/HoldingsTable";
 import OrdersTable from "@/components/OrdersTable";
 import SignalPicksTable from "@/components/SignalPicksTable";
@@ -20,6 +22,7 @@ const fmtKRW = (v: number) => {
 const fmtPct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
 export default function LiveDashboardPage() {
+  const [chartView, setChartView] = useState<"strategy" | "stocks">("strategy");
   const balance = useQuery({
     queryKey: ["live-balance"],
     queryFn: api.getLiveBalance,
@@ -103,9 +106,27 @@ export default function LiveDashboardPage() {
         </div>
       )}
 
-      {/* Headline cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Card label="총 평가금액" value={b ? fmtKRW(b.total_eval) : "…"} hint={b ? `예수금 ${fmtKRW(b.cash)}` : ""} />
+      {/* Money breakdown: total = invested + cash */}
+      <div className="grid grid-cols-3 gap-3">
+        <Card label="총 평가금액" value={b ? fmtKRW(b.total_eval) : "…"} hint="투자금액 + 보유 현금" small />
+        <Card
+          label="투자된 금액"
+          value={b ? fmtKRW(b.total_eval - b.cash) : "…"}
+          hint={b && b.total_eval > 0
+            ? `매수원금 ${fmtKRW(deployed)} · 비중 ${(((b.total_eval - b.cash) / b.total_eval) * 100).toFixed(1)}%`
+            : ""}
+          small
+        />
+        <Card
+          label="보유 현금"
+          value={b ? fmtKRW(b.cash) : "…"}
+          hint={b && b.total_eval > 0 ? `비중 ${((b.cash / b.total_eval) * 100).toFixed(1)}%` : ""}
+          small
+        />
+      </div>
+
+      {/* Performance cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card
           label="당일 실현 손익"
           value={todayRealized.data ? `${fmtKRW(todayRealized.data.realized_pnl)}${todayRealized.data.estimated ? "*" : ""}` : "—"}
@@ -129,22 +150,53 @@ export default function LiveDashboardPage() {
           value={deployedRoi != null ? fmtPct(deployedRoi) : "—"}
           color={deployedRoi != null ? (deployedRoi >= 0 ? "good" : "bad") : "neutral"}
           hint={deployed > 0 ? `투입 ${fmtKRW(deployed)} 기준` : "현재 보유 0"}
-          className="col-span-2 md:col-span-1"
         />
       </div>
 
-      {/* Equity chart */}
+      {/* Equity chart — strategy curves vs per-stock curves */}
       <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
-        <h2 className="text-lg font-semibold mb-1">💹 전략 누적 수익률 곡선</h2>
-        <p className="text-xs text-gray-500 mb-3">
-          개별 종목이 아니라 <strong>계좌(전략) 전체의 자산 흐름</strong>입니다 — 종목은 매일
-          교체되어도 &ldquo;전략이 돈을 벌고 있는가&rdquo;는 이 곡선으로 이어집니다.
-          두 곡선은 <strong>청산 규칙 비교</strong>: open(실주문)은 신호 top-10 이탈 시 매도,
-          close(시뮬)는 종가 매수 후 <strong>±5% 도달 시 익절/손절</strong>(2026-08-03부터 —
-          이전 구간은 open과 동일 규칙의 체결시점 비교였음). 시드 open{" "}
-          {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"} · 30초 갱신.
-        </p>
-        <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
+        <div className="flex items-center justify-between mb-1 gap-2">
+          <h2 className="text-lg font-semibold">
+            {chartView === "strategy" ? "💹 전략 누적 수익률 곡선" : "💹 종목별 수익률 곡선"}
+          </h2>
+          <div className="flex gap-1 text-xs">
+            {([["strategy", "전략"], ["stocks", "종목별"]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setChartView(v)}
+                className={`px-2.5 py-1 rounded border ${
+                  chartView === v
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-emerald-400"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {chartView === "strategy" ? (
+          <>
+            <p className="text-xs text-gray-500 mb-3">
+              개별 종목이 아니라 <strong>계좌(전략) 전체의 자산 흐름</strong>입니다 — 종목은 매일
+              교체되어도 &ldquo;전략이 돈을 벌고 있는가&rdquo;는 이 곡선으로 이어집니다.
+              곡선 간 차이는 <strong>청산 규칙 비교</strong>: open(실주문)은 신호 top-10 이탈 시 매도,
+              close(시뮬)는 종가 매수 후 <strong>±5% 도달 시 익절/손절</strong>(2026-08-03부터 —
+              이전 구간은 open과 동일 규칙의 체결시점 비교였음). 시드 open{" "}
+              {seedCash?.open ? fmtKRW(seedCash.open) : "…"} / close {seedCash?.close ? fmtKRW(seedCash.close) : "…"} · 30초 갱신.
+            </p>
+            <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-3">
+              실계좌(open)가 거쳐 간 <strong>모든 종목</strong>(현재 보유 + 청산)의 수익률을
+              각각의 <strong>보유 기간 동안만</strong> 그립니다 — 그날 종가 ÷ 당시 평균단가 기준.
+              범례 칩을 클릭하면 종목별로 표시/숨김을 전환할 수 있습니다.
+            </p>
+            <StockCurvesChart strategy="open" />
+          </>
+        )}
       </section>
 
       {/* Holdings */}
@@ -213,19 +265,21 @@ function Card({
   hint,
   color,
   className = "",
+  small = false,
 }: {
   label: string;
   value: string;
   hint?: string;
   color?: "good" | "bad" | "neutral";
   className?: string;
+  small?: boolean;
 }) {
   const c =
     color === "good" ? "text-emerald-700" : color === "bad" ? "text-red-700" : "text-gray-900";
   return (
     <div className={`bg-white rounded-lg border border-gray-200 p-3 sm:p-4 ${className}`}>
       <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`text-lg sm:text-2xl font-semibold ${c}`}>{value}</div>
+      <div className={`${small ? "text-base" : "text-lg"} sm:text-2xl font-semibold ${c}`}>{value}</div>
       {hint && <div className="text-xs text-gray-400 mt-1">{hint}</div>}
     </div>
   );
