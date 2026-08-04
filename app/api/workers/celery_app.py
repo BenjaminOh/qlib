@@ -94,6 +94,27 @@ celery_app.conf.beat_schedule = {
         "task": "live_sync_flow",
         "schedule": crontab(hour=15, minute=42, day_of_week="mon-fri"),
     },
+    # Exit-rule matrix sims (trail/scale): same close-priced buys as `close`,
+    # exits differ via the shared bracket loop. Minute offsets continue the
+    # SQLite-writer stagger. limit strategy has NO 15:2x slot — its −3%
+    # resting-limit fills are judged inside the refresh chain (needs the
+    # day's own bar; see close_bracket_exits_task).
+    "live-orders-at-close-trail": {
+        "task": "live_orders_trail",
+        "schedule": crontab(hour=15, minute=24, day_of_week="mon-fri"),
+    },
+    "live-sync-trail-after-close": {
+        "task": "live_sync_trail",
+        "schedule": crontab(hour=15, minute=43, day_of_week="mon-fri"),
+    },
+    "live-orders-at-close-scale": {
+        "task": "live_orders_scale",
+        "schedule": crontab(hour=15, minute=26, day_of_week="mon-fri"),
+    },
+    "live-sync-scale-after-close": {
+        "task": "live_sync_scale",
+        "schedule": crontab(hour=15, minute=44, day_of_week="mon-fri"),
+    },
     # FALLBACK slot — primary trigger is the live_signal chain (it knows the
     # fresh top-30). KIS publishes the day's investor row only after the
     # close, so 18:10 is safely past it. Idempotent per (day, code).

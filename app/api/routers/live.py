@@ -598,6 +598,9 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                 "open": settings.live_seed_cash_open,
                 "close": settings.live_seed_cash_close,
                 "flow": settings.live_seed_cash_flow,
+                "trail": settings.live_seed_cash_trail,
+                "scale": settings.live_seed_cash_scale,
+                "limit": settings.live_seed_cash_limit,
             },
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,

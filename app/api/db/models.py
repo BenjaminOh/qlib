@@ -28,6 +28,9 @@ from .session import Base
 STRATEGY_OPEN = "open"
 STRATEGY_CLOSE = "close"
 STRATEGY_FLOW = "flow"
+STRATEGY_TRAIL = "trail"
+STRATEGY_SCALE = "scale"
+STRATEGY_LIMIT = "limit"
 
 
 class User(Base):

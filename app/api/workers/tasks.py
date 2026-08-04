@@ -89,6 +89,38 @@ def live_sync_close_task(self) -> dict:
     return sync_account(strategy="close")
 
 
+@celery_app.task(bind=True, name="live_orders_trail")
+def live_orders_trail_task(self) -> dict:
+    """15:20 KST — trail strategy: same close-priced buys as `close`; exits are
+    a −7% trailing stop (no fixed TP) via the shared bracket loop."""
+    from ..services.live_trader import submit_daily_orders
+    self.update_state(state="RUNNING")
+    return submit_daily_orders(strategy="trail", simulated=True)
+
+
+@celery_app.task(bind=True, name="live_sync_trail")
+def live_sync_trail_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="trail")
+
+
+@celery_app.task(bind=True, name="live_orders_scale")
+def live_orders_scale_task(self) -> dict:
+    """15:20 KST — scale strategy: close-priced buys; +7% sells half, the
+    remainder rides the −7% trail (shared bracket loop)."""
+    from ..services.live_trader import submit_daily_orders
+    self.update_state(state="RUNNING")
+    return submit_daily_orders(strategy="scale", simulated=True)
+
+
+@celery_app.task(bind=True, name="live_sync_scale")
+def live_sync_scale_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="scale")
+
+
 @celery_app.task(bind=True, name="live_orders_flow")
 def live_orders_flow_task(self) -> dict:
     """15:20 KST — flow strategy: same close-priced simulation as `close`, but
@@ -147,22 +179,30 @@ def fetch_market_flow_task(self) -> dict:
 
 @celery_app.task(bind=True, name="close_bracket_exits")
 def close_bracket_exits_task(self) -> dict:
-    """Chained after refresh_kr_data (+ 16:25 fallback beat) — ±N% bracket exits
-    for every sim strategy (close, flow).
+    """Chained after refresh_kr_data (+ 16:25 fallback beat) — exit-rule matrix
+    for every sim strategy (close/flow: TP+prev-low, trail: −7% trailing,
+    scale: +7% half then trail, limit: TP+prev-low).
 
     Must run AFTER the day's bars land: the touch test reads that day's
     $open/$high/$low. Idempotent (sold positions leave the reconstructed
     balance), so the fallback re-run is harmless. Re-syncs each snapshot
     afterwards so daily_pnl reflects same-day exits.
+
+    limit strategy ALSO buys here (exits first frees cash): its −3% resting
+    limit fills are judged against the same day bar, which only exists after
+    the refresh — hence no 15:20 buy slot for limit.
     """
     from ..services.live_trader import (
-        BRACKET_STRATEGIES, evaluate_bracket_exits, sync_account,
+        BRACKET_STRATEGIES, evaluate_bracket_exits, evaluate_limit_entries,
+        sync_account,
     )
     self.update_state(state="RUNNING")
     results = {}
     for strategy in BRACKET_STRATEGIES:
         results[strategy] = evaluate_bracket_exits(strategy=strategy)
         sync_account(strategy=strategy)
+    results["limit_entries"] = evaluate_limit_entries()
+    sync_account(strategy="limit")
     return results
 
 

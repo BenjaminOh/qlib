@@ -8,6 +8,7 @@ from .session import Base, SessionLocal, engine, init_db
 from .models import (
     DailyPnL, Fill, MarketFlow, Order, PositionSnapshot, Signal, User,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
+    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT,
 )
 
 __all__ = [
@@ -25,4 +26,7 @@ __all__ = [
     "STRATEGY_OPEN",
     "STRATEGY_CLOSE",
     "STRATEGY_FLOW",
+    "STRATEGY_TRAIL",
+    "STRATEGY_SCALE",
+    "STRATEGY_LIMIT",
 ]

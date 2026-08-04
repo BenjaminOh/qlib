@@ -29,28 +29,46 @@ from ..config import settings
 from ..core import kr_universes
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
-    STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW, init_db,
+    STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
+    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, init_db,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
     AccountSnapshot, Holding, KISClient, OrderResult, get_kis_client,
+    round_to_tick,
 )
 
 
 def _seed_for(strategy: str) -> float:
     """Per-strategy seed cash — picks the right config setting for the chart
     baseline and the simulated cash starting point."""
-    if strategy == STRATEGY_CLOSE:
-        return settings.live_seed_cash_close
-    if strategy == STRATEGY_FLOW:
-        return settings.live_seed_cash_flow
-    return settings.live_seed_cash_open
+    seeds = {
+        STRATEGY_CLOSE: settings.live_seed_cash_close,
+        STRATEGY_FLOW: settings.live_seed_cash_flow,
+        STRATEGY_TRAIL: settings.live_seed_cash_trail,
+        STRATEGY_SCALE: settings.live_seed_cash_scale,
+        STRATEGY_LIMIT: settings.live_seed_cash_limit,
+    }
+    return seeds.get(strategy, settings.live_seed_cash_open)
 
 
-# Strategies that hold DB-only positions exited by ±N% brackets rather than
-# by rank dropout. 'flow' mirrors 'close' exactly so the only difference
-# between their equity curves is the pick set.
-BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW)
+# Strategies that hold DB-only positions exited by price brackets rather than
+# by rank dropout. All share the same signal picks (flow re-ranks them) and
+# 1천만 seed — the exit-rule matrix (2026-08-04):
+#   close/flow : fixed TP +10%  + structural prev-low stop
+#   trail      : no TP — trailing stop −7% off the peak close (+ prev-low stop)
+#   scale      : TP +7% sells HALF, remainder rides the −7% trail
+#   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
+BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
+                      STRATEGY_SCALE, STRATEGY_LIMIT)
+
+EXIT_RULES: dict[str, dict] = {
+    STRATEGY_CLOSE: {"tp": 0.10},
+    STRATEGY_FLOW:  {"tp": 0.10},
+    STRATEGY_TRAIL: {"trail": 0.07},
+    STRATEGY_SCALE: {"tp": 0.07, "tp_fraction": 0.5, "trail": 0.07},
+    STRATEGY_LIMIT: {"tp": 0.10},
+}
 
 
 # Same model/strategy as the user's validated backtest — Phase A targets
@@ -868,13 +886,14 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
 
 def evaluate_bracket_exits(trade_date: date | None = None,
                            strategy: str = STRATEGY_CLOSE) -> dict:
-    """Sim bracket exits (cafe-recommender style). Applies to every
-    BRACKET_STRATEGIES member:
+    """Sim exits driven by the per-strategy EXIT_RULES table:
 
-      - take-profit: day high touches avg × (1+tp)  [tp=0.10]
-      - stop: day low breaks the STRUCTURAL stop — lowest $low of the
-        `low_window` trading days before entry × (1 − low_buffer) — capped
-        at avg × (1 − sl) so a wide prior low never risks more than `sl`.
+      - tp: day high touches avg × (1+tp) → sell (tp_fraction<1 sells that
+        fraction ONCE — scale's +7% half-sell — remainder rides the trail)
+      - trail: effective stop tightens to peak_close × (1−trail) as the
+        position's peak rises (peak = entry..yesterday closes, deterministic)
+      - structural stop (always on): lowest $low of the `low_window` days
+        before entry × (1 − low_buffer), capped at avg × (1 − sl).
         No valid prior low (entry at fresh lows) → the cap is the stop.
 
     Runs after the 15:45 kr_data refresh so `trade_date`'s own bar exists
@@ -892,7 +911,10 @@ def evaluate_bracket_exits(trade_date: date | None = None,
     init_db()
     _reset_qlib_caches()
     day = trade_date or _last_trading_day()
-    tp = settings.live_close_bracket_tp
+    rule = EXIT_RULES.get(strategy, {"tp": settings.live_close_bracket_tp})
+    tp = rule.get("tp")
+    tp_fraction = float(rule.get("tp_fraction", 1.0))
+    trail = rule.get("trail")
     sl_cap = settings.live_close_bracket_sl
     low_window = settings.live_close_bracket_low_window
     low_buffer = settings.live_close_bracket_low_buffer
@@ -923,7 +945,7 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             bar = _day_ohlc(h.code, day)
             if not bar:
                 continue
-            tp_px = h.avg_price * (1.0 + tp)
+            # Structural stop (all strategies): prev-low with risk cap.
             cap_px = h.avg_price * (1.0 - sl_cap)
             prev_low = _prev_low(h.code, entry.trade_date, low_window)
             low_stop = prev_low * (1.0 - low_buffer) if prev_low else None
@@ -931,28 +953,52 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 sl_px, sl_kind = low_stop, "prev_low"
             else:
                 sl_px, sl_kind = cap_px, "cap"
-            tp_hit = bar["high"] >= tp_px
+            # Trailing stop tightens the effective stop as the peak rises.
+            if trail:
+                peak = _peak_close(h.code, entry.trade_date, day)
+                if peak:
+                    trail_stop = peak * (1.0 - trail)
+                    if trail_stop > sl_px:
+                        sl_px, sl_kind = trail_stop, "trail"
+            # scale: the +tp% half-sell fires only while the position is still
+            # whole — a reduced qty vs the episode's entry means it already did.
+            partial_done = tp_fraction < 1.0 and h.qty < entry.qty
+            tp_active = tp is not None and not partial_done
+            tp_px = h.avg_price * (1.0 + tp) if tp_active else None
+            tp_hit = tp_px is not None and bar["high"] >= tp_px
             sl_hit = bar["low"] <= sl_px
             if not tp_hit and not sl_hit:
                 continue
             if tp_hit and sl_hit:
                 ambiguous += 1
+            sell_qty = h.qty
             if sl_hit:
                 px = bar["open"] if bar["open"] <= sl_px else sl_px
-                kind = "손절"
+                kind = "손절" if sl_kind != "trail" else "트레일 청산"
                 if sl_kind == "prev_low":
                     basis = (f"브래킷 손절 — 전 저점 {round(prev_low):,}원 이탈 "
                              f"(손절선 {round(sl_px):,} · 평단 {round(h.avg_price):,} "
+                             f"→ 체결 {round(px):,})")
+                elif sl_kind == "trail":
+                    basis = (f"트레일링 청산 — 최고 종가 대비 −{trail * 100:.1f}% 이탈 "
+                             f"(청산선 {round(sl_px):,} · 평단 {round(h.avg_price):,} "
                              f"→ 체결 {round(px):,})")
                 else:
                     basis = (f"브래킷 손절 −{sl_cap * 100:.1f}% (리스크 캡) — "
                              f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
             else:
                 px = bar["open"] if bar["open"] >= tp_px else tp_px
-                kind = "익절"
-                basis = (f"브래킷 익절 {tp * 100:+.1f}% 도달 — "
-                         f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
-            realised = (px - h.avg_price) * h.qty
+                if tp_fraction < 1.0 and h.qty > 1:
+                    sell_qty = max(h.qty // 2, 1)
+                    kind = "부분 익절"
+                    basis = (f"부분 익절 {tp * 100:+.1f}% — {sell_qty}주 매도, "
+                             f"잔여 {h.qty - sell_qty}주 트레일 전환 "
+                             f"(평단 {round(h.avg_price):,} → 체결 {round(px):,})")
+                else:
+                    kind = "익절"
+                    basis = (f"브래킷 익절 {tp * 100:+.1f}% 도달 — "
+                             f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
+            realised = (px - h.avg_price) * sell_qty
             reasons = {"action": "sell", "basis": basis,
                        "summary": "", "metrics": {}, "top_features": []}
             try:
@@ -962,16 +1008,112 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 reasons["metrics"] = m
             except Exception as exc:  # noqa: BLE001
                 log.warning("bracket exit reasons failed for %s: %s", h.code, exc)
-            _persist_simulated_fill(db, day, h.code, "SELL", h.qty, px,
+            _persist_simulated_fill(db, day, h.code, "SELL", sell_qty, px,
                                     strategy=strategy, pnl=realised,
                                     reasons=reasons)
-            exits.append({"code": h.code, "kind": kind, "qty": h.qty,
+            exits.append({"code": h.code, "kind": kind, "qty": sell_qty,
                           "price": round(px, 2), "realised": round(realised),
                           "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
         db.commit()
     return {"status": "ok", "trade_date": day.isoformat(), "strategy": strategy,
-            "tp": tp, "sl_cap": sl_cap, "low_window": low_window,
+            "rule": rule, "sl_cap": sl_cap, "low_window": low_window,
             "exits": exits, "ambiguous": ambiguous}
+
+
+def evaluate_limit_entries(trade_date: date | None = None) -> dict:
+    """limit strategy entries — the user's own trading style, daily-bar model:
+
+    Rest `live_limit_candidates` virtual limit buys at prev_close × (1 −
+    live_limit_discount) for the day's top-10 signal codes not already held.
+    A candidate "fills" when the day's low touches its limit price — capped
+    at `live_limit_max_fills`, taken in RANK order (daily bars can't tell
+    which order touched first; rank priority is the documented convention).
+    Gap-down opens below the limit fill at the open (better price). Unfilled
+    candidates are simply cancelled — no rows — and re-rested off the next
+    day's signal. Runs after the 15:45 refresh (needs the day's own bar).
+    Idempotent: filled codes become holdings, so a re-run skips them.
+    """
+    init_db()
+    _reset_qlib_caches()
+    day = trade_date or _last_trading_day()
+    discount = settings.live_limit_discount
+    n_candidates = settings.live_limit_candidates
+    max_fills = settings.live_limit_max_fills
+    topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
+
+    with SessionLocal() as db:
+        signals = (db.query(Signal)
+                     .filter(Signal.as_of == day, Signal.rank <= topk)
+                     .order_by(Signal.rank.asc())
+                     .all())
+        if not signals:
+            return {"status": "no_signal", "trade_date": day.isoformat(),
+                    "strategy": STRATEGY_LIMIT}
+        snapshot = _simulated_balance(db, strategy=STRATEGY_LIMIT)
+        held = {h.code for h in snapshot.holdings}
+        slot_budget = max(snapshot.total_eval, snapshot.cash) / max(topk, 1)
+
+        rested: list[dict] = []  # the virtual order book for today
+        for s in signals:
+            if s.code in held or len(rested) >= n_candidates:
+                continue
+            bar = _day_ohlc(s.code, day)
+            prev_close = _prev_close_before(s.code, day)
+            if not bar or not prev_close:
+                continue
+            limit_px = round_to_tick(prev_close * (1.0 - discount))
+            if limit_px <= 0 or limit_px > slot_budget:
+                continue  # affordability: one share must fit the slot
+            filled = bar["low"] <= limit_px
+            fill_px = bar["open"] if (filled and bar["open"] < limit_px) else limit_px
+            rested.append({"code": s.code, "rank": s.rank, "limit_px": limit_px,
+                           "prev_close": prev_close, "filled": filled,
+                           "fill_px": fill_px if filled else None})
+
+        fills = [r for r in rested if r["filled"]][:max_fills]
+        cancelled = len(rested) - len(fills)
+        cash = snapshot.cash
+        if fills:
+            per_code_budget = min(cash / len(fills), slot_budget)
+            for f in fills:
+                qty = max(int(per_code_budget // f["fill_px"]), 0)
+                if qty <= 0:
+                    f["qty"] = 0
+                    continue
+                f["qty"] = qty
+                buy_why = _buy_reasons(db, day, f["code"])
+                base = (f"지정가 −{discount * 100:.1f}% 체결 — 예약가 "
+                        f"{f['limit_px']:,} (전일종가 {round(f['prev_close']):,}, "
+                        f"신호 {f['rank']}위)")
+                if buy_why:
+                    buy_why["basis"] = base + (" · " + buy_why.get("basis", "") if buy_why.get("basis") else "")
+                else:
+                    buy_why = {"action": "buy", "basis": base,
+                               "summary": "", "metrics": {}, "top_features": []}
+                _persist_simulated_fill(db, day, f["code"], "BUY", qty, f["fill_px"],
+                                        strategy=STRATEGY_LIMIT, reasons=buy_why)
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(), "strategy": STRATEGY_LIMIT,
+            "discount": discount, "rested": len(rested), "cancelled": cancelled,
+            "fills": [{k: f[k] for k in ("code", "rank", "limit_px", "fill_px")} | {"qty": f.get("qty", 0)}
+                      for f in fills]}
+
+
+def _prev_close_before(code: str, day: date) -> float | None:
+    """Close of the last trading day strictly before `day`."""
+    try:
+        from qlib.data import D
+        df = D.features([f"{code}"], ["$close"], end_time=day.isoformat(), freq="day")
+        if df is None or df.empty:
+            return None
+        s = df.droplevel("instrument")["$close"].dropna()
+        s = s[s.index.map(lambda ts: pd.Timestamp(ts).date() < day)]
+        if s.empty:
+            return None
+        v = float(s.iloc[-1])
+        return v if v > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _last_trading_day(today: date | None = None) -> date:
@@ -1088,6 +1230,29 @@ def _last_close(code: str) -> float | None:
         if df.empty:
             return None
         return float(df.iloc[-1]["$close"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _peak_close(code: str, entry_date: date, day: date) -> float | None:
+    """Highest $close from entry_date through the day BEFORE `day`.
+
+    The trailing-stop anchor. Deterministic from bars, so re-runs (fallback
+    beat) compute the same stop. Today's close is excluded — the trail
+    updates end-of-day, so today's touch is judged against yesterday's peak."""
+    try:
+        from qlib.data import D
+        cal = D.calendar(start_time=entry_date.isoformat(), end_time=day.isoformat())
+        days = [pd.Timestamp(c).date() for c in cal if pd.Timestamp(c).date() < day]
+        if not days:
+            return None
+        df = D.features([f"{code}"], ["$close"],
+                        start_time=days[0].isoformat(), end_time=days[-1].isoformat(),
+                        freq="day")
+        if df is None or df.empty:
+            return None
+        v = float(df["$close"].max())
+        return v if v > 0 else None
     except Exception:  # noqa: BLE001
         return None
 

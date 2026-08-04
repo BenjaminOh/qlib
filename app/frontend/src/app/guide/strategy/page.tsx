@@ -166,10 +166,12 @@ export default function StrategyGuidePage() {
           <li>매도 트리거는 단 하나 — <strong>보유 종목이 그날 신호 top-10에서 빠졌을 때</strong> (하루 최대 2종목, 전량 시장가)</li>
           <li>이탈 매도의 세 가지 성격: ① 급등 후 모멘텀 소진(익절성) ② 다른 종목이 상대적으로 좋아져 밀림(교체) ③ 하락+전망 악화(손절성)</li>
           <li><strong>손절매·익절 라인·현금비중 관리는 없습니다</strong> — 급락해도 top-10에 남아 있으면 계속 보유. 리스크 관리는 10종목 분산과 매일 재평가에 의존</li>
-          <li className="text-gray-500">예외 — <strong>시뮬 전략(close·flow)</strong>은 별도 브래킷 규칙 실험 중
-            (2026-08-03 저녁 개정): 신호 이탈 매도 없이 <strong>익절 +10%</strong> 또는
-            <strong> 손절 = 전 저점 이탈</strong>(진입 전 10거래일 최저가 −1% 버퍼, 리스크 캡 −10%)
-            시에만 전량 매도 — 당일 고가/저가로 판정, 동시 터치 시 손절 우선 가정</li>
+          <li className="text-gray-500">예외 — <strong>시뮬 전략 5종(close·flow·trail·scale·limit)</strong>은
+            신호 이탈 매도 없이 가격 규칙으로만 청산하는 <strong>청산 규칙 실험 매트릭스</strong>
+            (2026-08-04 확장): 공통 손절 = 전 저점 이탈(캡 −10%), close/flow 익절 +10%,
+            trail은 최고 종가 −7% 트레일링, scale은 +7% 절반 익절 후 트레일, limit은 매수부터
+            전일 종가 −3% 지정가 예약(랭크순 최대 2개 체결) + 익절 +10% — 상세는 라이브 화면의
+            &ldquo;시뮬 전략별 매매 규칙&rdquo; 참고</li>
         </ul>
       </Step>
 

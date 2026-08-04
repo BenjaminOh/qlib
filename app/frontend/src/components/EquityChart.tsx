@@ -17,12 +17,18 @@ const STRATEGY_COLORS: Record<string, string> = {
   open: "#10b981",   // emerald — KIS real paper account
   close: "#6366f1",  // indigo — DB-only simulated portfolio
   flow: "#f59e0b",   // amber — close execution, 수급 재랭킹 픽
+  trail: "#0ea5e9",  // sky — trailing −7% exits
+  scale: "#a855f7",  // purple — +7% half take, remainder trails
+  limit: "#ef4444",  // red — −3% resting-limit entries (사장님 방식)
 };
 
 const STRATEGY_LABELS: Record<string, string> = {
   open: "시초가 매수 (open)",
-  close: "종가 매수 브래킷 +10%/전저점 (close, 시뮬)",
-  flow: "기관·외국인 수급 추종 브래킷 (flow, 시뮬)",
+  close: "종가 매수 · 익절 +10%/전저점 손절 (시뮬)",
+  flow: "수급 추종 · 브래킷 (시뮬)",
+  trail: "트레일링 −7% (시뮬)",
+  scale: "부분익절 +7% → 트레일 (시뮬)",
+  limit: "지정가 −3% 매수 · +10% 예약매도 (시뮬)",
 };
 
 type WideRow = { date: string } & Record<string, number | string | undefined>;

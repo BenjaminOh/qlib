@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     #           기관/외국인 net buying. Equal seeds are REQUIRED for the A/B
     #           to mean anything — the curves are compared against each other.
     live_seed_cash_flow: float = 10_000_000.0
+    # Exit-rule matrix sims (2026-08-04): same signal/seed as close, only the
+    # exit (trail/scale) or entry (limit) mechanics differ.
+    live_seed_cash_trail: float = 10_000_000.0
+    live_seed_cash_scale: float = 10_000_000.0
+    live_seed_cash_limit: float = 10_000_000.0
+
+    # limit strategy: rest 5 virtual limit buys at prev_close × (1−discount),
+    # rank-priority fills capped at max_fills per day, unfilled = cancelled.
+    live_limit_discount: float = 0.03
+    live_limit_candidates: int = 5
+    live_limit_max_fills: int = 2
 
     # Sim bracket exits (close + flow). 2026-08-03 evening revision (user):
     # take-profit +10%; stop = the LOWEST $low of the `low_window` trading

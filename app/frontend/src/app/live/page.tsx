@@ -151,17 +151,22 @@ export default function LiveDashboardPage() {
             </p>
             <details className="text-xs text-gray-500 mb-3">
               <summary className="cursor-pointer text-emerald-700 hover:underline select-none">
-                ❓ 시뮬(close·flow) 매도 가이드 자세히 보기
+                ❓ 시뮬 전략별 매매 규칙 자세히 보기 (청산 규칙 실험 매트릭스)
               </summary>
               <div className="mt-1.5 bg-emerald-50/60 border border-emerald-100 rounded p-2.5 space-y-1">
-                <p>① <strong>익절</strong> — 당일 고가가 평균단가 <strong>+10%</strong>에 닿으면 전량 매도</p>
-                <p>② <strong>손절</strong> — 당일 저가가 <strong>전 저점</strong>(진입일 이전 10거래일
-                  최저가 −1% 버퍼) 아래로 내려가면 전량 매도. 단 손절선은 평단 −10%보다 깊어지지
-                  않도록 캡(전 저점이 없거나 너무 멀면 −10% 적용)</p>
-                <p>③ 판정은 매일 15:48(당일 시세 반영 직후) 시가·고가·저가 기준 — 갭으로 뚫린 날은
-                  시가 체결, 익절·손절 동시 터치 시 손절 우선 가정</p>
-                <p>④ 시뮬엔 신호 이탈 매도 없음 — 매수는 매일 15:20 종가로, close는 신호 top-10
-                  미보유 상위 2종목, flow는 기관·외국인 순매수 재랭킹 상위</p>
+                <p>공통 — 매수는 매일 신호 top-10 미보유 상위 종목(종가 체결, 하루 최대 2),
+                  시드 각 1,000만원. 시뮬엔 신호 이탈 매도가 없고 아래 가격 규칙으로만 청산.
+                  <strong> 공통 손절</strong>: 전 저점(진입 전 10거래일 최저가 −1% 버퍼) 이탈,
+                  최대 −10% 캡.</p>
+                <p>• <strong>close</strong> — 익절 +10% 고정 · <strong>flow</strong> — 같은 규칙,
+                  픽만 기관·외국인 순매수 재랭킹</p>
+                <p>• <strong>trail</strong> — 익절 없음, 최고 종가 대비 <strong>−7% 트레일링</strong> 청산</p>
+                <p>• <strong>scale</strong> — <strong>+7%에서 절반</strong> 익절, 잔여는 −7% 트레일</p>
+                <p>• <strong>limit</strong> — 매수부터 다름: 후보 5종목에 <strong>전일 종가 −3%
+                  지정가 예약</strong>, 당일 저가가 닿은 것만 랭크순 최대 2개 체결(미체결 당일 취소),
+                  익절 +10% (예약 매도 모델)</p>
+                <p>판정은 매일 15:48(당일 시세 반영 직후) 시가·고가·저가 기준 — 갭으로 뚫린 날은
+                  시가 체결, 익절·손절 동시 터치 시 손절 우선 가정. 범례 클릭으로 곡선별 표시/숨김.</p>
               </div>
             </details>
             <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />
