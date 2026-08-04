@@ -615,15 +615,15 @@ def sync_account(client: KISClient | None = None,
                  strategy: str = STRATEGY_OPEN) -> dict:
     """Snapshot the per-strategy portfolio and roll up DailyPnL.
 
-    strategy='open'  → reads KIS get_balance (real paper account)
-    strategy='close' → reconstructs from simulated Fills in the DB
+    strategy='open' → reads KIS get_balance (real paper account)
+    anything else   → reconstructs from that strategy's simulated Fills in the DB
     """
     init_db()
     _reset_qlib_caches()
     trade_date = trade_date or _last_trading_day()
-    if strategy == STRATEGY_CLOSE:
+    if strategy != STRATEGY_OPEN:
         with SessionLocal() as db:
-            snapshot = _simulated_balance(db, strategy=STRATEGY_CLOSE)
+            snapshot = _simulated_balance(db, strategy=strategy)
     else:
         client = client or get_kis_client()
         snapshot = client.get_balance()
