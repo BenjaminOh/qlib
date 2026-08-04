@@ -169,7 +169,8 @@ export default function StrategyGuidePage() {
           <li className="text-gray-500">예외 — <strong>시뮬 전략 5종(close·flow·trail·scale·limit)</strong>은
             신호 이탈 매도 없이 가격 규칙으로만 청산하는 <strong>청산 규칙 실험 매트릭스</strong>
             (2026-08-04 확장): 공통 손절 = 전 저점 이탈(캡 −10%), close/flow 익절 +10%,
-            trail은 최고 종가 −7% 트레일링, scale은 +7% 절반 익절 후 트레일, limit은 매수부터
+            trail은 최고 종가 −7% 트레일링, scale은 사다리 익절(+10% 절반 → +15% 잔여 절반 →
+            +20% 전량, 매도 후 플로어 = 직전 단계), limit은 매수부터
             전일 종가 −3% 지정가 예약(랭크순 최대 2개 체결) + 익절 +10% — 상세는 라이브 화면의
             &ldquo;시뮬 전략별 매매 규칙&rdquo; 참고</li>
         </ul>

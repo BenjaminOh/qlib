@@ -27,7 +27,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   close: "종가 매수 · 익절 +10%/전저점 손절 (시뮬)",
   flow: "수급 추종 · 브래킷 (시뮬)",
   trail: "트레일링 −7% (시뮬)",
-  scale: "부분익절 +7% → 트레일 (시뮬)",
+  scale: "사다리 익절 10/15/20% (시뮬)",
   limit: "지정가 −3% 매수 · +10% 예약매도 (시뮬)",
 };
 

@@ -66,7 +66,12 @@ EXIT_RULES: dict[str, dict] = {
     STRATEGY_CLOSE: {"tp": 0.10},
     STRATEGY_FLOW:  {"tp": 0.10},
     STRATEGY_TRAIL: {"trail": 0.07},
-    STRATEGY_SCALE: {"tp": 0.07, "tp_fraction": 0.5, "trail": 0.07},
+    # Ladder scale-out (2026-08-04, user's design): sell 50% at +10%, 50% of
+    # the remainder at +15%, everything at +20%. Once ANY rung has sold, a
+    # ratcheting floor sits one rung below the last fill (+5% after rung 1,
+    # +10% after rung 2) — breaking it liquidates the rest. Before rung 1
+    # the shared structural stop applies.
+    STRATEGY_SCALE: {"ladder": [0.10, 0.15, 0.20], "floor_gap": 0.05},
     STRATEGY_LIMIT: {"tp": 0.10},
 }
 
@@ -953,6 +958,82 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 sl_px, sl_kind = low_stop, "prev_low"
             else:
                 sl_px, sl_kind = cap_px, "cap"
+            # Ladder scale-out (scale strategy) — its own branch: staged rung
+            # sells with a ratcheting floor one rung below the last fill.
+            ladder = rule.get("ladder")
+            if ladder:
+                floor_gap = float(rule.get("floor_gap", 0.05))
+                stage = (db.query(Order)
+                           .filter(Order.strategy == strategy,
+                                   Order.code == h.code,
+                                   Order.side == "SELL",
+                                   Order.trade_date >= entry.trade_date)
+                           .count())
+
+                def _ladder_sell(qty_s: int, px_s: float, kind_s: str, basis_s: str) -> None:
+                    realised_s = (px_s - h.avg_price) * qty_s
+                    reasons_s = {"action": "sell", "basis": basis_s,
+                                 "summary": "", "metrics": {}, "top_features": []}
+                    try:
+                        from .signal_reasons import build_intuitive_metrics, summarize
+                        m_s = build_intuitive_metrics([h.code]).get(h.code, {})
+                        reasons_s["summary"] = summarize(m_s)
+                        reasons_s["metrics"] = m_s
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("ladder exit reasons failed for %s: %s", h.code, exc)
+                    _persist_simulated_fill(db, day, h.code, "SELL", qty_s, px_s,
+                                            strategy=strategy, pnl=realised_s,
+                                            reasons=reasons_s)
+                    exits.append({"code": h.code, "kind": kind_s, "qty": qty_s,
+                                  "price": round(px_s, 2), "realised": round(realised_s),
+                                  "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
+
+                # Ratcheting floor: one rung below the last filled rung.
+                if 0 < stage <= len(ladder):
+                    floor_px = h.avg_price * (1.0 + ladder[stage - 1] - floor_gap)
+                    if floor_px > sl_px:
+                        sl_px, sl_kind = floor_px, "ladder_floor"
+                # Floor / structural stop wins a both-touch day (pessimistic).
+                if bar["low"] <= sl_px:
+                    next_rung_px = h.avg_price * (1.0 + ladder[min(stage, len(ladder) - 1)])
+                    if bar["high"] >= next_rung_px:
+                        ambiguous += 1
+                    px = bar["open"] if bar["open"] <= sl_px else sl_px
+                    if sl_kind == "ladder_floor":
+                        basis = (f"사다리 플로어 이탈 — {stage}차 매도 후 "
+                                 f"+{(ladder[stage - 1] - floor_gap) * 100:.0f}% 선"
+                                 f"({round(sl_px):,}) 붕괴, 잔여 전량 "
+                                 f"(평단 {round(h.avg_price):,} → 체결 {round(px):,})")
+                        _ladder_sell(h.qty, px, "플로어 청산", basis)
+                    elif sl_kind == "prev_low":
+                        basis = (f"브래킷 손절 — 전 저점 {round(prev_low):,}원 이탈 "
+                                 f"(손절선 {round(sl_px):,} · 평단 {round(h.avg_price):,} "
+                                 f"→ 체결 {round(px):,})")
+                        _ladder_sell(h.qty, px, "손절", basis)
+                    else:
+                        basis = (f"브래킷 손절 −{sl_cap * 100:.1f}% (리스크 캡) — "
+                                 f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
+                        _ladder_sell(h.qty, px, "손절", basis)
+                    continue
+                # Cascade every rung the day's high covers (resting limit
+                # sells at each rung would all have filled).
+                remaining = h.qty
+                while stage < len(ladder) and remaining > 0:
+                    rung_px = h.avg_price * (1.0 + ladder[stage])
+                    if bar["high"] < rung_px:
+                        break
+                    fill_px = bar["open"] if bar["open"] > rung_px else rung_px
+                    last = stage == len(ladder) - 1
+                    qty_s = remaining if (last or remaining <= 1) else max(remaining // 2, 1)
+                    tail = "" if (last or qty_s == remaining) else f", 잔여 {remaining - qty_s}주 유지"
+                    basis = (f"사다리 {stage + 1}차 익절 +{ladder[stage] * 100:.0f}% — "
+                             f"{qty_s}주 매도{tail} "
+                             f"(평단 {round(h.avg_price):,} → 체결 {round(fill_px):,})")
+                    _ladder_sell(qty_s, fill_px, "익절" if last else "부분 익절", basis)
+                    remaining -= qty_s
+                    stage += 1
+                continue
+
             # Trailing stop tightens the effective stop as the peak rises.
             if trail:
                 peak = _peak_close(h.code, entry.trade_date, day)

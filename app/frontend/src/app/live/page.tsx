@@ -161,7 +161,9 @@ export default function LiveDashboardPage() {
                 <p>• <strong>close</strong> — 익절 +10% 고정 · <strong>flow</strong> — 같은 규칙,
                   픽만 기관·외국인 순매수 재랭킹</p>
                 <p>• <strong>trail</strong> — 익절 없음, 최고 종가 대비 <strong>−7% 트레일링</strong> 청산</p>
-                <p>• <strong>scale</strong> — <strong>+7%에서 절반</strong> 익절, 잔여는 −7% 트레일</p>
+                <p>• <strong>scale</strong> — <strong>사다리 익절</strong>: +10%에서 절반 →
+                  +15%에서 잔여 절반 → +20% 전량. 매도가 한 번이라도 나가면 <strong>플로어 =
+                  직전 단계</strong>(1차 후 +5%, 2차 후 +10%) 이탈 시 잔여 전량 매도</p>
                 <p>• <strong>limit</strong> — 매수부터 다름: 후보 5종목에 <strong>전일 종가 −3%
                   지정가 예약</strong>, 당일 저가가 닿은 것만 랭크순 최대 2개 체결(미체결 당일 취소),
                   익절 +10% (예약 매도 모델)</p>
