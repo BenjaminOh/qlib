@@ -601,6 +601,7 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                 "trail": settings.live_seed_cash_trail,
                 "scale": settings.live_seed_cash_scale,
                 "limit": settings.live_seed_cash_limit,
+                "cafe": settings.live_seed_cash_cafe,
             },
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,

@@ -31,6 +31,7 @@ STRATEGY_FLOW = "flow"
 STRATEGY_TRAIL = "trail"
 STRATEGY_SCALE = "scale"
 STRATEGY_LIMIT = "limit"
+STRATEGY_CAFE = "cafe"
 
 
 class User(Base):
@@ -91,6 +92,33 @@ class MarketFlow(Base):
 
     __table_args__ = (
         UniqueConstraint("trade_date", "code", name="uq_market_flow_date_code"),
+    )
+
+
+class CafeCandidate(Base):
+    """Daily output of the cafe-mimic market screener (15:05).
+
+    One row per (day, code) candidate that matched one of the four
+    reverse-engineered recommender patterns. stop_px is the STRUCTURAL stop
+    computed at screening time (prev high / breakout-day low / pullback low /
+    rebound low depending on the pattern) — the bracket engine reads it from
+    the entry order's reasons_json after the 15:28 sim buy copies it there.
+    """
+    __tablename__ = "cafe_candidates"
+
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    code = Column(String(8), nullable=False, index=True)
+    name = Column(String(64), nullable=True)
+    pattern = Column(String(2), nullable=False)  # B/A/C/D (priority order)
+    rank = Column(Integer, nullable=False)       # selection order within the day
+    close = Column(Float, nullable=True)         # price at screening time
+    stop_px = Column(Float, nullable=False)
+    metrics_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "code", name="uq_cafe_candidate_date_code"),
     )
 
 

@@ -475,6 +475,124 @@ class KISClient:
             })
         return out
 
+    # ─── Market screener sources (순위·일봉) ───────────────────
+
+    def get_rank_fluctuation(self, count: int = 30) -> list[dict]:
+        """등락률 상위 (TR FHPST01700000). [{code, name, price, change_pct}].
+
+        Market-data TR — works on the paper env like quotes do. Returns []
+        on mock/any failure; callers treat empty as "no pool today"."""
+        if self.is_mock:
+            return []
+        self._gate()
+        r = requests.get(
+            self.host + "/uapi/domestic-stock/v1/ranking/fluctuation",
+            headers=self._headers("FHPST01700000"),
+            params={
+                "fid_cond_mrkt_div_code": "J",
+                "fid_cond_scr_div_code": "20170",
+                "fid_input_iscd": "0000",
+                "fid_rank_sort_cls_code": "0",  # 상승률순
+                "fid_input_cnt_1": "0",
+                "fid_prc_cls_code": "0",
+                "fid_input_price_1": "", "fid_input_price_2": "",
+                "fid_vol_cnt": "", "fid_trgt_cls_code": "0",
+                "fid_trgt_exls_cls_code": "0", "fid_div_cls_code": "0",
+                "fid_rsfl_rate1": "", "fid_rsfl_rate2": "",
+            }, timeout=10)
+        d = r.json() if r.status_code == 200 else {}
+        if r.status_code != 200 or d.get("rt_cd") != "0":
+            log.warning("KIS rank_fluctuation failed HTTP %s: %s",
+                        r.status_code, r.text[:200])
+            return []
+        out = []
+        for row in (d.get("output") or [])[:count]:
+            code = str(row.get("stck_shrn_iscd") or "").strip()
+            if len(code) != 6:
+                continue
+            try:
+                out.append({"code": code,
+                            "name": str(row.get("hts_kor_isnm") or "").strip(),
+                            "price": float(row.get("stck_prpr") or 0),
+                            "change_pct": float(row.get("prdy_ctrt") or 0)})
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def get_rank_volume(self, count: int = 30) -> list[dict]:
+        """거래량 순위 (TR FHPST01710000). Same shape as get_rank_fluctuation."""
+        if self.is_mock:
+            return []
+        self._gate()
+        r = requests.get(
+            self.host + "/uapi/domestic-stock/v1/quotations/volume-rank",
+            headers=self._headers("FHPST01710000"),
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_COND_SCR_DIV_CODE": "20171",
+                "FID_INPUT_ISCD": "0000",
+                "FID_DIV_CLS_CODE": "0",
+                "FID_BLNG_CLS_CODE": "1",  # 거래증가율
+                "FID_TRGT_CLS_CODE": "111111111",
+                "FID_TRGT_EXLS_CLS_CODE": "0000000000",
+                "FID_INPUT_PRICE_1": "", "FID_INPUT_PRICE_2": "",
+                "FID_VOL_CNT": "", "FID_INPUT_DATE_1": "",
+            }, timeout=10)
+        d = r.json() if r.status_code == 200 else {}
+        if r.status_code != 200 or d.get("rt_cd") != "0":
+            log.warning("KIS rank_volume failed HTTP %s: %s",
+                        r.status_code, r.text[:200])
+            return []
+        out = []
+        for row in (d.get("output") or [])[:count]:
+            code = str(row.get("mksc_shrn_iscd") or row.get("stck_shrn_iscd") or "").strip()
+            if len(code) != 6:
+                continue
+            try:
+                out.append({"code": code,
+                            "name": str(row.get("hts_kor_isnm") or "").strip(),
+                            "price": float(row.get("stck_prpr") or 0),
+                            "change_pct": float(row.get("prdy_ctrt") or 0)})
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def get_daily_bars(self, code: str) -> list[dict]:
+        """~30 recent daily OHLCV bars, oldest→newest (TR FHKST01010400).
+
+        The price source for out-of-universe codes (cafe strategy) whose bars
+        never land in kr_data. Adjusted prices (FID_ORG_ADJ_PRC=0)."""
+        if self.is_mock:
+            return []
+        self._gate()
+        r = requests.get(
+            self.host + "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+            headers=self._headers("FHKST01010400"),
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code.zfill(6),
+                    "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"},
+            timeout=10)
+        d = r.json() if r.status_code == 200 else {}
+        if r.status_code != 200 or d.get("rt_cd") != "0":
+            log.warning("KIS get_daily_bars %s failed HTTP %s: %s",
+                        code, r.status_code, r.text[:200])
+            return []
+        out = []
+        for row in d.get("output") or []:
+            day = str(row.get("stck_bsop_date") or "").strip()
+            if len(day) != 8:
+                continue
+            try:
+                out.append({"date": f"{day[:4]}-{day[4:6]}-{day[6:]}",
+                            "open": float(row.get("stck_oprc") or 0),
+                            "high": float(row.get("stck_hgpr") or 0),
+                            "low": float(row.get("stck_lwpr") or 0),
+                            "close": float(row.get("stck_clpr") or 0),
+                            "volume": float(row.get("acml_vol") or 0)})
+            except (TypeError, ValueError):
+                continue
+        out.reverse()  # KIS returns newest first
+        return [b for b in out if b["close"] > 0]
+
     # ─── Daily fills (주문체결조회) ────────────────────────────
 
     def get_daily_fills(self, start: "date", end: "date") -> dict[str, dict]:

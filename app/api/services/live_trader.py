@@ -30,7 +30,7 @@ from ..core import kr_universes
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
-    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, init_db,
+    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE, init_db,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
@@ -48,6 +48,7 @@ def _seed_for(strategy: str) -> float:
         STRATEGY_TRAIL: settings.live_seed_cash_trail,
         STRATEGY_SCALE: settings.live_seed_cash_scale,
         STRATEGY_LIMIT: settings.live_seed_cash_limit,
+        STRATEGY_CAFE: settings.live_seed_cash_cafe,
     }
     return seeds.get(strategy, settings.live_seed_cash_open)
 
@@ -60,7 +61,7 @@ def _seed_for(strategy: str) -> float:
 #   scale      : TP +7% sells HALF, remainder rides the −7% trail
 #   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
-                      STRATEGY_SCALE, STRATEGY_LIMIT)
+                      STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE)
 
 EXIT_RULES: dict[str, dict] = {
     STRATEGY_CLOSE: {"tp": 0.10},
@@ -73,6 +74,9 @@ EXIT_RULES: dict[str, dict] = {
     # the shared structural stop applies.
     STRATEGY_SCALE: {"ladder": [0.10, 0.15, 0.20], "floor_gap": 0.05},
     STRATEGY_LIMIT: {"tp": 0.10},
+    # cafe: TP +10%; the stop is the screener's STRUCTURAL level stored on
+    # the entry order (reasons_json.stop_px), capped at −live_cafe_stop_cap.
+    STRATEGY_CAFE:  {"tp": 0.10, "stop_source": "entry"},
 }
 
 
@@ -947,17 +951,33 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             entry = entry_q.order_by(Order.trade_date.asc()).first()
             if entry is None or entry.trade_date >= day:
                 continue  # entered at this day's close — range predates entry
-            bar = _day_ohlc(h.code, day)
+            bar = _day_ohlc_any(h.code, day)
             if not bar:
                 continue
-            # Structural stop (all strategies): prev-low with risk cap.
-            cap_px = h.avg_price * (1.0 - sl_cap)
-            prev_low = _prev_low(h.code, entry.trade_date, low_window)
-            low_stop = prev_low * (1.0 - low_buffer) if prev_low else None
-            if low_stop is not None and low_stop < h.avg_price and low_stop > cap_px:
-                sl_px, sl_kind = low_stop, "prev_low"
+            if rule.get("stop_source") == "entry":
+                # cafe: the screener stored a structural stop on the entry
+                # order — out-of-universe codes have no kr_data prev-low.
+                prev_low = None
+                cap_px = h.avg_price * (1.0 - settings.live_cafe_stop_cap)
+                entry_stop = None
+                try:
+                    entry_stop = (json.loads(entry.reasons_json or "{}")
+                                  .get("stop_px"))
+                except Exception:  # noqa: BLE001
+                    pass
+                if entry_stop and float(entry_stop) < h.avg_price and float(entry_stop) > cap_px:
+                    sl_px, sl_kind = float(entry_stop), "entry_stop"
+                else:
+                    sl_px, sl_kind = cap_px, "cap"
             else:
-                sl_px, sl_kind = cap_px, "cap"
+                # Structural stop (all strategies): prev-low with risk cap.
+                cap_px = h.avg_price * (1.0 - sl_cap)
+                prev_low = _prev_low(h.code, entry.trade_date, low_window)
+                low_stop = prev_low * (1.0 - low_buffer) if prev_low else None
+                if low_stop is not None and low_stop < h.avg_price and low_stop > cap_px:
+                    sl_px, sl_kind = low_stop, "prev_low"
+                else:
+                    sl_px, sl_kind = cap_px, "cap"
             # Ladder scale-out (scale strategy) — its own branch: staged rung
             # sells with a ratcheting floor one rung below the last fill.
             ladder = rule.get("ladder")
@@ -1064,6 +1084,9 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                     basis = (f"트레일링 청산 — 최고 종가 대비 −{trail * 100:.1f}% 이탈 "
                              f"(청산선 {round(sl_px):,} · 평단 {round(h.avg_price):,} "
                              f"→ 체결 {round(px):,})")
+                elif sl_kind == "entry_stop":
+                    basis = (f"구조적 손절 이탈 — 스크리너 손절선 {round(sl_px):,}원 "
+                             f"(평단 {round(h.avg_price):,} → 체결 {round(px):,})")
                 else:
                     basis = (f"브래킷 손절 −{sl_cap * 100:.1f}% (리스크 캡) — "
                              f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
@@ -1336,6 +1359,28 @@ def _peak_close(code: str, entry_date: date, day: date) -> float | None:
         return v if v > 0 else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _day_ohlc_any(code: str, day: date) -> dict | None:
+    """OHLC bar for `day` — kr_data first, KIS daily-price fallback.
+
+    The fallback exists for out-of-universe codes (cafe strategy): their bars
+    never land in the local store, so the bracket judgment reads KIS instead.
+    Gated like every KIS call; None on both-source miss."""
+    bar = _day_ohlc(code, day)
+    if bar:
+        return bar
+    try:
+        rows = get_kis_client().get_daily_bars(code)
+        iso = day.isoformat()
+        for b in rows:
+            if b["date"] == iso:
+                if all(b[k] > 0 for k in ("open", "high", "low", "close")):
+                    return {k: b[k] for k in ("open", "high", "low", "close")}
+                return None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _prev_low(code: str, entry_date: date, window: int) -> float | None:

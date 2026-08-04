@@ -6,9 +6,9 @@ the live UI need. Backtest results stay in Celery/Redis, not here.
 
 from .session import Base, SessionLocal, engine, init_db
 from .models import (
-    DailyPnL, Fill, MarketFlow, Order, PositionSnapshot, Signal, User,
+    DailyPnL, Fill, MarketFlow, CafeCandidate, Order, PositionSnapshot, Signal, User,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
-    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT,
+    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
 )
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "Order",
     "Fill",
     "MarketFlow",
+    "CafeCandidate",
     "PositionSnapshot",
     "DailyPnL",
     "User",
@@ -29,4 +30,5 @@ __all__ = [
     "STRATEGY_TRAIL",
     "STRATEGY_SCALE",
     "STRATEGY_LIMIT",
+    "STRATEGY_CAFE",
 ]

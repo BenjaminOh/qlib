@@ -115,6 +115,21 @@ celery_app.conf.beat_schedule = {
         "task": "live_sync_scale",
         "schedule": crontab(hour=15, minute=44, day_of_week="mon-fri"),
     },
+    # cafe strategy: recommender-mimic screener. Screen the whole market at
+    # 15:05 (KIS ranking TRs), sim-buy the top candidates at 15:28 near the
+    # closing auction. Sync offset continues the SQLite writer stagger.
+    "cafe-screen": {
+        "task": "cafe_screen",
+        "schedule": crontab(hour=15, minute=5, day_of_week="mon-fri"),
+    },
+    "live-orders-at-close-cafe": {
+        "task": "live_orders_cafe",
+        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
+    },
+    "live-sync-cafe-after-close": {
+        "task": "live_sync_cafe",
+        "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),
+    },
     # FALLBACK slot — primary trigger is the live_signal chain (it knows the
     # fresh top-30). KIS publishes the day's investor row only after the
     # close, so 18:10 is safely past it. Idempotent per (day, code).

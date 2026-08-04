@@ -55,6 +55,19 @@ class Settings(BaseSettings):
     live_limit_candidates: int = 5
     live_limit_max_fills: int = 2
 
+    # cafe strategy: recommender-mimic screener sim. Concentrated slots
+    # (seed/4) reflect the recommender's 1-2 name style; the stop comes from
+    # the screener's structural level, capped at −stop_cap below entry.
+    live_seed_cash_cafe: float = 10_000_000.0
+    live_cafe_slots: int = 4
+    live_cafe_max_buys: int = 2
+    live_cafe_stop_cap: float = 0.15
+
+    # Telegram trade alerts (existing 'trading' BotFather bot +
+    # 시스템트레이딩알림 group). Empty = notifications disabled.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     # Sim bracket exits (close + flow). 2026-08-03 evening revision (user):
     # take-profit +10%; stop = the LOWEST $low of the `low_window` trading
     # days before entry × (1 − low_buffer) — the cafe-recommender-style

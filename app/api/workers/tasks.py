@@ -43,8 +43,11 @@ def live_signal_task(self) -> dict:
 def live_orders_task(self) -> dict:
     """09:00 KST — open strategy: read today's Signal, submit KIS orders."""
     from ..services.live_trader import submit_daily_orders
+    from ..services.notify import notify_open_orders
     self.update_state(state="RUNNING")
-    return submit_daily_orders(strategy="open", simulated=False)
+    result = submit_daily_orders(strategy="open", simulated=False)
+    notify_open_orders(result)
+    return result
 
 
 @celery_app.task(
@@ -177,6 +180,39 @@ def fetch_market_flow_task(self) -> dict:
         return ensure_flow_data(db, codes, today)
 
 
+@celery_app.task(
+    bind=True,
+    name="cafe_screen",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=2,
+)
+def cafe_screen_task(self) -> dict:
+    """15:05 KST — recommender-mimic screener: KIS ranking pools → pattern
+    classifier → today's cafe candidates (with structural stops)."""
+    from ..services.market_screener import run_screener
+    self.update_state(state="RUNNING")
+    return run_screener()
+
+
+@celery_app.task(bind=True, name="live_orders_cafe")
+def live_orders_cafe_task(self) -> dict:
+    """15:28 KST — cafe strategy: sim-buy today's top candidates at the
+    current KIS quote (≈ closing auction price)."""
+    from ..services.market_screener import submit_cafe_orders
+    self.update_state(state="RUNNING")
+    return submit_cafe_orders()
+
+
+@celery_app.task(bind=True, name="live_sync_cafe")
+def live_sync_cafe_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="cafe")
+
+
 @celery_app.task(bind=True, name="close_bracket_exits")
 def close_bracket_exits_task(self) -> dict:
     """Chained after refresh_kr_data (+ 16:25 fallback beat) — exit-rule matrix
@@ -196,10 +232,12 @@ def close_bracket_exits_task(self) -> dict:
         BRACKET_STRATEGIES, evaluate_bracket_exits, evaluate_limit_entries,
         sync_account,
     )
+    from ..services.notify import notify_bracket_exits
     self.update_state(state="RUNNING")
     results = {}
     for strategy in BRACKET_STRATEGIES:
         results[strategy] = evaluate_bracket_exits(strategy=strategy)
+        notify_bracket_exits(strategy, results[strategy])
         sync_account(strategy=strategy)
     results["limit_entries"] = evaluate_limit_entries()
     sync_account(strategy="limit")
@@ -221,8 +259,11 @@ def reconcile_fills_task(self) -> dict:
     Idempotent read-modify-write; retries are safe. Freezes realized pnl
     (the exits card used to re-estimate it from bars all day)."""
     from ..services.live_trader import reconcile_fills
+    from ..services.notify import notify_reconcile
     self.update_state(state="RUNNING")
-    return reconcile_fills()
+    result = reconcile_fills()
+    notify_reconcile(result if isinstance(result, dict) else {})
+    return result
 
 
 @celery_app.task(
