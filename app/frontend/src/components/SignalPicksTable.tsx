@@ -38,9 +38,16 @@ function CompositeBadge({ comp }: { comp?: { score: number; tied: boolean } }) {
 }
 
 export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) {
-  const [open, setOpen] = useState<string | null>(null);
+  const [openCodes, setOpenCodes] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"list" | "compare">("list");
   const composites = useMemo(() => compositeScores(picks), [picks]);
+  const toggleCode = (code: string) =>
+    setOpenCodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
 
   const toggle = (
     <div className="flex justify-end mb-2 gap-1 text-xs">
@@ -76,13 +83,13 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
     {/* Mobile: card list (< md) */}
     <div className="md:hidden bg-white rounded-md border border-emerald-100 divide-y divide-emerald-50">
       {picks.map((p) => {
-        const expanded = open === p.code;
+        const expanded = openCodes.has(p.code);
         const hasDetail = !!p.reasons;
         return (
           <div key={p.code} className="px-3 py-2.5">
             <div
               className={hasDetail ? "cursor-pointer active:bg-emerald-50/40" : ""}
-              onClick={() => hasDetail && setOpen(expanded ? null : p.code)}
+              onClick={() => hasDetail && toggleCode(p.code)}
             >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm truncate">
@@ -153,14 +160,14 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
         </thead>
         <tbody>
           {picks.map((p) => {
-            const expanded = open === p.code;
+            const expanded = openCodes.has(p.code);
             const hasDetail = !!p.reasons;
             return (
               <>
                 <tr
                   key={p.code}
                   className={`border-t border-emerald-50 ${hasDetail ? "cursor-pointer hover:bg-emerald-50/40" : ""}`}
-                  onClick={() => hasDetail && setOpen(expanded ? null : p.code)}
+                  onClick={() => hasDetail && toggleCode(p.code)}
                 >
                   <td className="px-3 py-2 font-semibold text-emerald-700">#{p.rank}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
