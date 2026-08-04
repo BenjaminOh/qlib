@@ -8,8 +8,26 @@ const statusBadge = (status: string) => {
     PARTIAL: "bg-amber-100 text-amber-700",
     REJECTED: "bg-red-100 text-red-700",
     CANCELLED: "bg-gray-100 text-gray-600",
+    SIMULATED: "bg-violet-100 text-violet-700",
   };
   return m[status] || "bg-gray-100 text-gray-600";
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  SUBMITTED: "접수",
+  FILLED: "체결",
+  PARTIAL: "일부 체결",
+  REJECTED: "거부",
+  CANCELLED: "취소",
+  SIMULATED: "시뮬",
+};
+
+const STATUS_TITLES: Record<string, string> = {
+  SUBMITTED: "KIS에 접수된 상태 — 시장가 주문의 실체결가는 매일 09:20 대사에서 확정됩니다 (그 전까지 가격·손익은 시가 추정치*)",
+  FILLED: "실체결가 확정 완료",
+  PARTIAL: "주문 수량 중 일부만 체결",
+  REJECTED: "KIS가 주문을 거부 — 사유는 행의 오류 메시지 참고",
+  SIMULATED: "close/flow 등 시뮬 전략의 가상 체결 (실제 주문 아님)",
 };
 
 export default function OrdersTable({
@@ -87,8 +105,11 @@ export default function OrdersTable({
                     : "—"}
                 </td>
                 <td className="px-3 py-2">
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadge(o.status)}`}>
-                    {o.status}
+                  <span
+                    className={`px-2 py-0.5 rounded text-xs font-medium cursor-help ${statusBadge(o.status)}`}
+                    title={STATUS_TITLES[o.status] || o.status}
+                  >
+                    {STATUS_LABELS[o.status] || o.status}
                   </span>
                   {o.error && (
                     <div className="text-xs text-red-600 truncate max-w-xs" title={o.error}>

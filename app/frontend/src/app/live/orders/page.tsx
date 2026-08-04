@@ -72,6 +72,11 @@ export default function LiveOrdersPage() {
         </select>
       </div>
 
+      <p className="text-xs text-gray-500 -mt-2">
+        상태: <strong>접수</strong> = KIS 접수 완료(시장가 체결가는 09:20 대사에서 확정 — 그 전 가격·손익은 시가 추정*) ·{" "}
+        <strong>체결</strong> = 실체결가 확정 · 배지에 마우스를 올리면 상세 설명이 보입니다.
+      </p>
+
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {isLoading ? (
           <div className="text-center text-gray-400 py-8 text-sm">Loading...</div>
