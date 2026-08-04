@@ -1,13 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { LiveSignalRow } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
 import SignalCompareTable from "@/components/SignalCompareTable";
+import { buildThesis, compositeScores, thesisSegments } from "@/lib/thesis";
+
+function Thesis({ pick, picks }: { pick: LiveSignalRow; picks: LiveSignalRow[] }) {
+  const text = buildThesis(pick, picks);
+  if (!text) return null;
+  return (
+    <p className="text-xs text-gray-800 leading-relaxed mb-1">
+      💡{" "}
+      {thesisSegments(text).map((s, i) =>
+        s.bold ? <strong key={i} className="text-emerald-800">{s.t}</strong> : <span key={i}>{s.t}</span>
+      )}
+    </p>
+  );
+}
+
+function CompositeBadge({ comp }: { comp?: { score: number; tied: boolean } }) {
+  if (!comp) return <span className="text-gray-400">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="font-semibold text-gray-900 tabular-nums">{comp.score}점</span>
+      <span className="inline-block w-10 h-1.5 rounded-full bg-gray-200 overflow-hidden align-middle">
+        <span className="block h-full bg-emerald-500" style={{ width: `${comp.score}%` }} />
+      </span>
+      {comp.tied && (
+        <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px]"
+              title="다른 종목과 알파 점수가 동일 — 이 순위는 코드순 참고용입니다 (모델 변별력 없음)">
+          동점
+        </span>
+      )}
+    </span>
+  );
+}
 
 export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const [view, setView] = useState<"list" | "compare">("list");
+  const composites = useMemo(() => compositeScores(picks), [picks]);
 
   const toggle = (
     <div className="flex justify-end mb-2 gap-1 text-xs">
@@ -63,7 +96,8 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
               </div>
               {p.reasons ? (
                 <>
-                  <div className="text-xs text-gray-700 mt-1">
+                  <div className="mt-1"><Thesis pick={p} picks={picks} /></div>
+                  <div className="text-xs text-gray-500">
                     {p.reasons.summary}
                     {hasDetail && (
                       <span className="text-emerald-600 ml-1">{expanded ? "▲" : "▼ 상세"}</span>
@@ -75,8 +109,9 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                 <div className="text-xs text-gray-400 mt-1">분석 정보 없음 (다음 신호부터 표시)</div>
               )}
               <div className="flex items-center justify-between mt-1 text-[11px]">
-                <span className="font-mono text-gray-400">
-                  알파 {p.score == null ? "—" : p.score.toFixed(6)}
+                <span className="flex items-center gap-2">
+                  <CompositeBadge comp={composites.get(p.code)} />
+                  <span className="font-mono text-gray-400">α {p.score == null ? "—" : p.score.toFixed(4)}</span>
                 </span>
                 <a
                   href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
@@ -112,7 +147,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium" title="신호 기준 최근 종가 — 매수 수량 계산에 쓰이는 가격">종가</th>
             <th className="text-left px-3 py-2 font-medium">매수 근거</th>
-            <th className="text-right px-3 py-2 font-medium">알파 점수</th>
+            <th className="text-right px-3 py-2 font-medium" title="당일 10개 픽 내 상대 확신도 (알파 점수 min-max 정규화, 0~100)">종합점수</th>
             <th className="text-left px-3 py-2 font-medium">조회</th>
           </tr>
         </thead>
@@ -140,7 +175,8 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                   <td className="px-3 py-2">
                     {p.reasons ? (
                       <div>
-                        <div className="text-xs text-gray-800 mb-1">
+                        <Thesis pick={p} picks={picks} />
+                        <div className="text-xs text-gray-500 mb-1">
                           {p.reasons.summary}
                           {hasDetail && (
                             <span className="text-emerald-600 ml-1">{expanded ? "▲" : "▼ 상세"}</span>
@@ -154,8 +190,11 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono align-top">
-                    {p.score == null ? "—" : p.score.toFixed(6)}
+                  <td className="px-3 py-2 text-right align-top whitespace-nowrap">
+                    <CompositeBadge comp={composites.get(p.code)} />
+                    <div className="font-mono text-[10px] text-gray-400 mt-0.5">
+                      α {p.score == null ? "—" : p.score.toFixed(6)}
+                    </div>
                   </td>
                   <td className="px-3 py-2 align-top">
                     <a

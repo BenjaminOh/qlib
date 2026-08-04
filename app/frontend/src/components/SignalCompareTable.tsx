@@ -1,6 +1,7 @@
 "use client";
 
 import { LiveSignalRow } from "@/lib/api";
+import { compositeScores } from "@/lib/thesis";
 
 /**
  * Side-by-side evaluation matrix for the recommended picks:
@@ -53,6 +54,7 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
     );
   }
   const scoreMax = Math.max(...rows.map((p) => Math.abs(p.score ?? 0)), 0);
+  const composites = compositeScores(picks);
 
   return (
     <div className="bg-white rounded-md border border-emerald-100">
@@ -61,6 +63,7 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
         <thead className="bg-emerald-50 text-emerald-900">
           <tr>
             <th className="sticky left-0 bg-emerald-50 text-left px-2 py-2 font-medium z-10">종목</th>
+            <th className="text-right px-2 py-2 font-medium" title="당일 픽 내 상대 확신도 (0~100)">종합점수</th>
             <th className="text-right px-2 py-2 font-medium border-r border-emerald-100">알파점수</th>
             {METRIC_COLS.map((c) => (
               <th key={c.key} className="text-right px-2 py-2 font-medium">{c.label}</th>
@@ -83,6 +86,10 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
               <td className="sticky left-0 bg-white px-2 py-1.5 z-10">
                 <span className="font-semibold text-emerald-700 mr-1.5">#{p.rank}</span>
                 <span className="text-gray-900">{p.name ?? p.code}</span>
+              </td>
+              <td className="text-right px-2 py-1.5 font-semibold tabular-nums">
+                {composites.get(p.code)?.score ?? "—"}점
+                {composites.get(p.code)?.tied && <span className="ml-1 text-[9px] text-amber-600">동점</span>}
               </td>
               <td className="text-right px-2 py-1.5 font-mono border-r border-emerald-100"
                   style={heat(p.score, scoreMax)}>
