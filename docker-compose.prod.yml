@@ -190,7 +190,10 @@ services:
       # Generous timings: the shared host regularly spikes (other tenants'
       # builds/batches) and the 5s exec-probe timed out for hours while the
       # app itself served fine — red status was pure noise.
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      # 127.0.0.1, NOT localhost: in-container localhost resolves to ::1
+      # first and Next binds IPv4-only (0.0.0.0) → connection refused, a
+      # permanently-red healthcheck while the app serves fine.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
       interval: 60s
       timeout: 15s
       retries: 5
