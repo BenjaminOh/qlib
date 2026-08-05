@@ -311,6 +311,9 @@ export interface SignalReasons {
   top_features: SignalReasonFeature[];
   /** Same feature columns for every pick — comparison-table ready. */
   common_features?: SignalReasonFeature[];
+  /** 상위 X% within the full scored universe (stored at generation time). */
+  universe_pct?: number;
+  universe_n?: number;
 }
 
 export interface LiveSignalRow {

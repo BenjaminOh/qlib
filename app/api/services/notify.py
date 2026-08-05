@@ -263,8 +263,15 @@ def notify_signal(result: dict) -> None:
         dup = {k for k, v in Counter(scores).items() if v > 1}
         lines = [f"📌 <b>다음 거래일 추천 종목 TOP10</b> ({as_of})", ""]
         for s in rows:
+            pct = None
+            try:
+                pct = (json.loads(s.reasons_json) or {}).get("universe_pct") if s.reasons_json else None
+            except Exception:  # noqa: BLE001
+                pass
             if s.score in dup:
                 tag = "동점"
+            elif pct is not None:
+                tag = f"상위 {pct}%"
             elif mx > mn and s.score is not None:
                 tag = f"{round((s.score - mn) / (mx - mn) * 100)}점"
             else:

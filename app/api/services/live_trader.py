@@ -277,6 +277,21 @@ def generate_daily_signal(today: date | None = None) -> dict:
     except Exception as exc:  # noqa: BLE001
         log.warning("generate_daily_signal: build_reasons failed: %s", exc)
 
+    # Universe percentile (상위 X%) — the composite score shown to the user.
+    # Computed here because only signal generation sees the FULL cross-section;
+    # min-max within the 10 picks made rank #10 read as "0점" every day.
+    try:
+        snap_all = pred.loc[pred.index.get_level_values(0).max()]
+        n_universe = int(len(snap_all))
+        for p in picks:
+            r = reasons.get(p["code"])
+            if r is not None and p.get("score") is not None and n_universe > 0:
+                higher = int((snap_all > p["score"]).sum())
+                r["universe_pct"] = round((higher + 1) / n_universe * 100, 1)
+                r["universe_n"] = n_universe
+    except Exception as exc:  # noqa: BLE001
+        log.warning("generate_daily_signal: universe percentile failed: %s", exc)
+
     with SessionLocal() as db:
         # Idempotent: nuke any prior picks targeting the same trade date.
         db.query(Signal).filter(Signal.as_of == signal_for).delete()

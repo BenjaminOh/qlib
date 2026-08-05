@@ -19,11 +19,16 @@ function Thesis({ pick, picks }: { pick: LiveSignalRow; picks: LiveSignalRow[] }
   );
 }
 
-function CompositeBadge({ comp }: { comp?: { score: number; tied: boolean } }) {
+function CompositeBadge({ comp }: { comp?: { score: number; pct?: number; tied: boolean } }) {
   if (!comp) return <span className="text-gray-400">—</span>;
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className="font-semibold text-gray-900 tabular-nums">{comp.score}점</span>
+      <span
+        className="font-semibold text-gray-900 tabular-nums"
+        title={comp.pct != null ? "당일 채점된 전체 종목 중 위치 (신호 생성 시 저장)" : "당일 10개 픽 내 상대 확신도"}
+      >
+        {comp.pct != null ? `상위 ${comp.pct}%` : `${comp.score}점`}
+      </span>
       <span className="inline-block w-10 h-1.5 rounded-full bg-gray-200 overflow-hidden align-middle">
         <span className="block h-full bg-emerald-500" style={{ width: `${comp.score}%` }} />
       </span>
@@ -154,7 +159,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium" title="신호 기준 최근 종가 — 매수 수량 계산에 쓰이는 가격">종가</th>
             <th className="text-left px-3 py-2 font-medium">매수 근거</th>
-            <th className="text-right px-3 py-2 font-medium" title="당일 10개 픽 내 상대 확신도 (알파 점수 min-max 정규화, 0~100)">종합점수</th>
+            <th className="text-right px-3 py-2 font-medium" title="전체 채점 종목(약 183개) 중 상위 몇 %인지 — 신호 생성 시 저장 (구신호는 픽 내 상대점수)">종합점수</th>
             <th className="text-left px-3 py-2 font-medium">조회</th>
           </tr>
         </thead>

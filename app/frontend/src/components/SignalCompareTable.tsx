@@ -63,7 +63,7 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
         <thead className="bg-emerald-50 text-emerald-900">
           <tr>
             <th className="sticky left-0 bg-emerald-50 text-left px-2 py-2 font-medium z-10">종목</th>
-            <th className="text-right px-2 py-2 font-medium" title="당일 픽 내 상대 확신도 (0~100)">종합점수</th>
+            <th className="text-right px-2 py-2 font-medium" title="전체 채점 종목 중 상위 몇 %인지 (구신호는 픽 내 상대점수)">종합점수</th>
             <th className="text-right px-2 py-2 font-medium border-r border-emerald-100">알파점수</th>
             {METRIC_COLS.map((c) => (
               <th key={c.key} className="text-right px-2 py-2 font-medium">{c.label}</th>
@@ -88,7 +88,11 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
                 <span className="text-gray-900">{p.name ?? p.code}</span>
               </td>
               <td className="text-right px-2 py-1.5 font-semibold tabular-nums">
-                {composites.get(p.code)?.score ?? "—"}점
+                {(() => {
+                  const c = composites.get(p.code);
+                  if (!c) return "—";
+                  return c.pct != null ? `상위 ${c.pct}%` : `${c.score}점`;
+                })()}
                 {composites.get(p.code)?.tied && <span className="ml-1 text-[9px] text-amber-600">동점</span>}
               </td>
               <td className="text-right px-2 py-1.5 font-mono border-r border-emerald-100"

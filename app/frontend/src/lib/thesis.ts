@@ -5,8 +5,12 @@ import { LiveSignalRow } from "@/lib/api";
  *  top_features, all scores), so it applies retroactively to any signal. */
 
 export interface Composite {
-  /** 0–100, min-max scaled within the day's picks. */
+  /** 0–100. Universe-percentile based when stored (100 − 상위%), else
+   *  min-max scaled within the day's picks (legacy signals). */
   score: number;
+  /** 상위 X% within the full scored universe — present on signals generated
+   *  after 2026-08-05; drives the "상위 0.5%" display. */
+  pct?: number;
   /** True when this pick's alpha ties with another pick — rank is then
    *  code-order fallback, not model conviction (degenerate-signal days). */
   tied: boolean;
@@ -22,11 +26,14 @@ export function compositeScores(picks: LiveSignalRow[]): Map<string, Composite> 
   for (const s of scores) counts.set(s, (counts.get(s) ?? 0) + 1);
   for (const p of picks) {
     if (p.score == null) continue;
-    const scaled = max > min ? ((p.score - min) / (max - min)) * 100 : 100;
-    out.set(p.code, {
-      score: Math.round(scaled),
-      tied: (counts.get(p.score) ?? 0) > 1,
-    });
+    const tied = (counts.get(p.score) ?? 0) > 1;
+    const pct = p.reasons?.universe_pct;
+    if (pct != null) {
+      out.set(p.code, { score: Math.max(0, Math.round(100 - pct)), pct, tied });
+    } else {
+      const scaled = max > min ? ((p.score - min) / (max - min)) * 100 : 100;
+      out.set(p.code, { score: Math.round(scaled), tied });
+    }
   }
   return out;
 }
