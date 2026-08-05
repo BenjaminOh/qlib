@@ -9,6 +9,7 @@ import EquityChart from "@/components/EquityChart";
 import StockCurvesChart from "@/components/StockCurvesChart";
 import HoldingsTable from "@/components/HoldingsTable";
 import OrdersTable from "@/components/OrdersTable";
+import CafeCandidates from "@/components/CafeCandidates";
 import SignalPicksTable from "@/components/SignalPicksTable";
 import ExitsTable from "@/components/ExitsTable";
 
@@ -240,6 +241,9 @@ export default function LiveDashboardPage() {
           일일 스케줄·방법론은 <a href="/guide" className="underline">가이드</a> 참고.
         </p>
       </section>
+
+      {/* Cafe screener candidates */}
+      <CafeCandidates />
 
       {/* Recent orders */}
       <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">

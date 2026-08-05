@@ -76,6 +76,7 @@ class LiveOrderRow(BaseModel):
     status: str
     error: str | None = None
     kis_order_id: str | None = None
+    strategy: str = "open"
     # SELL rows only: realized pnl vs the running average price at sale.
     # Market orders estimate the fill from the day open ('realized_est').
     realized_pnl: float | None = None
@@ -534,20 +535,28 @@ def get_latest_signals():
 
 @router.get("/orders", response_model=LiveOrdersResponse)
 def get_orders(limit: int = Query(100, ge=1, le=500),
-               include_sim: bool = Query(False)):
+               include_sim: bool = Query(False),
+               strategy: str | None = Query(None)):
     """Recent orders (newest first) — SELL rows carry (estimated) realized pnl.
 
-    SIMULATED rows (the close-strategy A/B ledger) are hidden by default —
-    they cluttered the order view — but the DATA is preserved; pass
-    include_sim=true to see them."""
+    SIMULATED rows are hidden by default (they cluttered the order view) but
+    the DATA is preserved: pass include_sim=true to see them all, or pass
+    strategy=<name> to view one strategy — a sim strategy then shows its
+    SIMULATED rows automatically."""
     init_db()
-    with SessionLocal() as db:
-        q = db.query(Order)
+
+    def _filtered(q):
+        if strategy:
+            return q.filter(Order.strategy == strategy)
         if not include_sim:
-            q = q.filter(Order.status != "SIMULATED")
-        rows = (q.order_by(desc(Order.submitted_at))
-                 .limit(limit)
-                 .all())
+            return q.filter(Order.status != "SIMULATED")
+        return q
+
+    with SessionLocal() as db:
+        rows = (_filtered(db.query(Order))
+                .order_by(desc(Order.submitted_at))
+                .limit(limit)
+                .all())
     # Realized pnl per SELL order via the shared position timeline.
     _executed = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
     realized_by_id: dict[int, tuple[float, bool]] = {}
@@ -560,12 +569,10 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
         except Exception:  # noqa: BLE001
             continue
     with SessionLocal() as db:
-        q = db.query(Order)
-        if not include_sim:
-            q = q.filter(Order.status != "SIMULATED")
-        rows = (q.order_by(desc(Order.submitted_at))
-                 .limit(limit)
-                 .all())
+        rows = (_filtered(db.query(Order))
+                .order_by(desc(Order.submitted_at))
+                .limit(limit)
+                .all())
         return LiveOrdersResponse(orders=[LiveOrderRow(
             id=o.id,
             submitted_at=o.submitted_at,
@@ -580,7 +587,49 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
             realized_pnl=(realized_by_id.get(o.id) or (None, False))[0],
             realized_est=(realized_by_id.get(o.id) or (None, False))[1],
             kis_order_id=o.kis_order_id,
+            strategy=o.strategy or "open",
         ) for o in rows])
+
+
+class CafeCandidateRow(BaseModel):
+    trade_date: date
+    code: str
+    name: str | None = None
+    pattern: str
+    pattern_label: str
+    rank: int
+    close: float | None = None
+    stop_px: float | None = None
+    bought: bool = False
+
+
+class CafeCandidatesResponse(BaseModel):
+    candidates: list[CafeCandidateRow]
+
+
+@router.get("/cafe/candidates", response_model=CafeCandidatesResponse)
+def get_cafe_candidates(days: int = Query(7, ge=1, le=60)):
+    """Recent cafe-screener picks (15:05 scan) + whether the 15:28 sim bought them."""
+    from ..db import CafeCandidate
+    from ..services.market_screener import _PATTERN_LABELS
+    init_db()
+    cutoff = date.today() - timedelta(days=days)
+    with SessionLocal() as db:
+        rows = (db.query(CafeCandidate)
+                  .filter(CafeCandidate.trade_date >= cutoff)
+                  .order_by(desc(CafeCandidate.trade_date), CafeCandidate.rank.asc())
+                  .all())
+        bought = {(o.trade_date, o.code) for o in
+                  db.query(Order).filter(Order.strategy == "cafe",
+                                         Order.side == "BUY",
+                                         Order.trade_date >= cutoff).all()}
+        return CafeCandidatesResponse(candidates=[CafeCandidateRow(
+            trade_date=r.trade_date, code=r.code, name=r.name,
+            pattern=r.pattern,
+            pattern_label=_PATTERN_LABELS.get(r.pattern, r.pattern),
+            rank=r.rank, close=r.close, stop_px=r.stop_px,
+            bought=(r.trade_date, r.code) in bought,
+        ) for r in rows])
 
 
 @router.get("/pnl/daily", response_model=DailyPnLResponse)

@@ -237,10 +237,13 @@ export const api = {
     ),
   getTodayRealized: () =>
     fetchApi<TodayRealized>("/api/v1/live/realized/today"),
-  getLiveOrders: (limit = 100, includeSim = false) =>
+  getLiveOrders: (limit = 100, includeSim = false, strategy?: string) =>
     fetchApi<LiveOrdersResponse>(
-      `/api/v1/live/orders?limit=${limit}&include_sim=${includeSim}`,
+      `/api/v1/live/orders?limit=${limit}&include_sim=${includeSim}` +
+        (strategy ? `&strategy=${strategy}` : ""),
     ),
+  getCafeCandidates: (days = 7) =>
+    fetchApi<CafeCandidatesResponse>(`/api/v1/live/cafe/candidates?days=${days}`),
   getLiveDailyPnL: (days = 180) =>
     fetchApi<DailyPnLResponse>(`/api/v1/live/pnl/daily?days=${days}`),
   getLivePositionHistory: (limit = 60) =>
@@ -345,10 +348,27 @@ export interface LiveOrderRow {
   kis_order_id: string | null;
   realized_pnl: number | null;
   realized_est: boolean;
+  strategy: string;
 }
 
 export interface LiveOrdersResponse {
   orders: LiveOrderRow[];
+}
+
+export interface CafeCandidateRow {
+  trade_date: string;
+  code: string;
+  name: string | null;
+  pattern: string;
+  pattern_label: string;
+  rank: number;
+  close: number | null;
+  stop_px: number | null;
+  bought: boolean;
+}
+
+export interface CafeCandidatesResponse {
+  candidates: CafeCandidateRow[];
 }
 
 export interface ExitRow {

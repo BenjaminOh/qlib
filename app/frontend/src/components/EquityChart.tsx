@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import { DailyPnLRow } from "@/lib/api";
 
-const STRATEGY_COLORS: Record<string, string> = {
+export const STRATEGY_COLORS: Record<string, string> = {
   open: "#10b981",   // emerald — KIS real paper account
   close: "#6366f1",  // indigo — DB-only simulated portfolio
   flow: "#f59e0b",   // amber — close execution, 수급 재랭킹 픽
@@ -23,7 +23,7 @@ const STRATEGY_COLORS: Record<string, string> = {
   cafe: "#78716c",   // stone — recommender-mimic screener
 };
 
-const STRATEGY_LABELS: Record<string, string> = {
+export const STRATEGY_LABELS: Record<string, string> = {
   open: "시초가 매수 (open)",
   close: "종가 매수 · 익절 +10%/전저점 손절 (시뮬)",
   flow: "수급 추종 · 브래킷 (시뮬)",

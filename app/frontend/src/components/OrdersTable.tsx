@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { LiveOrderRow, parseUtc } from "@/lib/api";
+import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
 
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {
@@ -30,12 +31,19 @@ const STATUS_TITLES: Record<string, string> = {
   SIMULATED: "close/flow 등 시뮬 전략의 가상 체결 (실제 주문 아님)",
 };
 
+const STRATEGY_SHORT: Record<string, string> = {
+  open: "실계좌", close: "종가", flow: "수급", trail: "트레일",
+  scale: "사다리", limit: "지정가", cafe: "카페",
+};
+
 export default function OrdersTable({
   orders,
   compact = false,
+  showStrategy = false,
 }: {
   orders: LiveOrderRow[];
   compact?: boolean;
+  showStrategy?: boolean;
 }) {
   if (!orders || orders.length === 0) {
     return (
@@ -51,6 +59,7 @@ export default function OrdersTable({
         <thead className="bg-gray-50 text-gray-600">
           <tr>
             <th className="text-left px-3 py-2 font-medium">제출시각</th>
+            {showStrategy && <th className="text-left px-3 py-2 font-medium">전략</th>}
             <th className="text-left px-3 py-2 font-medium">방향</th>
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
@@ -81,6 +90,17 @@ export default function OrdersTable({
                     })}
                   </span>
                 </td>
+                {showStrategy && (
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <span
+                      className="px-1.5 py-0.5 rounded text-[11px] font-medium text-white cursor-help"
+                      style={{ backgroundColor: STRATEGY_COLORS[o.strategy] || "#6b7280" }}
+                      title={STRATEGY_LABELS[o.strategy] || o.strategy}
+                    >
+                      {STRATEGY_SHORT[o.strategy] || o.strategy}
+                    </span>
+                  </td>
+                )}
                 <td className="px-3 py-2">
                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${sideColor}`}>
                     {o.side === "BUY" ? "매수" : "매도"}
