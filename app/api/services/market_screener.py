@@ -22,7 +22,7 @@ import logging
 from datetime import date
 
 from ..config import settings
-from ..db import CafeCandidate, SessionLocal, STRATEGY_CAFE, init_db
+from ..db import CafeCandidate, Order, SessionLocal, STRATEGY_CAFE, init_db
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +192,13 @@ def submit_cafe_orders(trade_date: date | None = None) -> dict:
                        "top_features": [], "stop_px": c.stop_px}
             _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
                                     strategy=STRATEGY_CAFE, reasons=reasons)
+            # Out-of-universe KOSDAQ codes miss the kr_data name lookup —
+            # the ranking TR already gave us the real name, so pin it.
+            db.query(Order).filter(Order.trade_date == day,
+                                   Order.code == c.code,
+                                   Order.strategy == STRATEGY_CAFE,
+                                   Order.name.in_((None, c.code))).update(
+                {"name": c.name}, synchronize_session=False)
             cash -= qty * px
             bought.append({"code": c.code, "name": c.name, "pattern": c.pattern,
                            "qty": qty, "price": px, "stop_px": c.stop_px})
