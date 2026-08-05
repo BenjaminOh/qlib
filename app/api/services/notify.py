@@ -102,6 +102,7 @@ def _side_tag(side: str) -> str:
 
 
 STRATEGY_TITLES = {"open": "실계좌(KIS 모의투자)"}
+_DIV = "━━━━━━━━━━━━━━"
 
 
 def notify_open_orders(result: dict) -> None:
@@ -112,7 +113,7 @@ def notify_open_orders(result: dict) -> None:
     strategy = result.get("strategy", "open")
     head = (f"🌅 <b>qlib 아침 주문</b> ({as_of}) · "
             f"{STRATEGY_TITLES.get(strategy, strategy)}")
-    lines = [head]
+    lines = [head, ""]
     try:
         from datetime import date as _date
 
@@ -124,23 +125,26 @@ def notify_open_orders(result: dict) -> None:
                       .order_by(Order.side.desc(), Order.submitted_at.asc())
                       .all())
         for o in rows:
-            ord_type = "지정가" if o.price else "시장가 (개장 동시호가)"
+            ord_type = "지정가" if o.price else "시장가"
             status = ("✅ 접수" if o.status in ("SUBMITTED", "FILLED", "PARTIAL")
                       else f"❌ 거부: {_esc((o.error or '')[:80])}")
-            lines.append("──────────────")
-            lines.append(f"{_side_tag(o.side)} · <b>{_esc(o.name or o.code)}</b> ({o.code})")
             detail = f"📊 {ord_type} · {o.qty:,}주"
             if o.price:
                 detail += f" @ {_won(o.price)}원"
-            lines.append(detail)
-            lines.append(f"📌 상태: {status}")
+            block = [_DIV, "",
+                     f"{_side_tag(o.side)} · <b>{_esc(o.name or o.code)}</b> ({o.code})",
+                     "",
+                     detail,
+                     f"📌 상태: {status}"]
             basis = _order_basis(o)
             if basis:
-                lines.append(f"📝 사유: {_esc(basis)}")
+                block.append(f"📝 {_esc(basis)}")
+            block.append("")
+            lines.extend(block)
     except Exception as exc:  # noqa: BLE001
         log.warning("notify_open_orders detail failed: %s", exc)
         lines.append(f"제출 {result.get('submitted', 0)} · 거부 {result.get('rejected', 0)}")
-    lines.append("──────────────")
+    lines.extend([_DIV, ""])
     tail = f"제출 {result.get('submitted', 0)} · 거부 {result.get('rejected', 0)}"
     skipped = result.get("skipped_expensive") or []
     if skipped:
@@ -166,17 +170,21 @@ def notify_bracket_exits(strategy: str, result: dict) -> None:
     exits = result.get("exits") or []
     if not telegram_enabled() or not exits:
         return
-    lines = [f"📤 <b>{strategy} 시뮬 청산</b> ({result.get('trade_date', '')})"]
+    lines = [f"📤 <b>{strategy} 시뮬 청산</b> ({result.get('trade_date', '')})", ""]
     for e in exits:
         realised = e.get("realised") or 0
         sign = "+" if realised >= 0 else ""
         icon = "💰" if realised >= 0 else "💸"
-        lines.append("──────────────")
-        lines.append(f"{icon} <b>{_esc(e.get('name') or e['code'])}</b> ({e['code']}) — {e['kind']}")
-        lines.append(f"📊 매도 {e['qty']:,}주 @ {_won(e['price'])}원")
-        lines.append(f"💵 실현손익: {sign}{_won(realised)}원")
+        lines.extend([
+            _DIV, "",
+            f"{icon} <b>{_esc(e.get('name') or e['code'])}</b> ({e['code']}) — {e['kind']}",
+            "",
+            f"📊 매도 {e['qty']:,}주 @ {_won(e['price'])}원",
+            f"💵 실현손익: {sign}{_won(realised)}원",
+        ])
         if e.get("sl_px"):
             lines.append(f"🛡 손절 기준: {_won(e['sl_px'])}원 ({e.get('sl_kind', '')})")
+        lines.append("")
     send_telegram("\n".join(lines))
 
 
@@ -187,7 +195,7 @@ def notify_reconcile(summary: dict) -> None:
     pinned = summary.get("pinned") or summary.get("updated") or 0
     if not pinned:
         return
-    lines = [f"✅ <b>체결 확정</b> ({summary.get('trade_date', '')} 09:20 대사)"]
+    lines = [f"✅ <b>체결 확정</b> ({summary.get('trade_date', '')} 09:20 대사)", ""]
     try:
         from datetime import date as _date
 
@@ -203,15 +211,72 @@ def notify_reconcile(summary: dict) -> None:
                       .all())
         for o, f in rows:
             total = round((f.price or 0) * f.qty)
-            line = (f"{_side_tag(o.side)} <b>{_esc(o.name or o.code)}</b> "
-                    f"{f.qty:,}주 @ {_won(f.price)}원 = {total:,}원")
+            lines.extend([
+                f"{_side_tag(o.side)} <b>{_esc(o.name or o.code)}</b>",
+                f"💵 {f.qty:,}주 @ {_won(f.price)}원 = {total:,}원",
+            ])
             if o.side == "SELL" and f.pnl is not None:
                 sign = "+" if f.pnl >= 0 else ""
-                line += f" → 실현 {sign}{_won(f.pnl)}원"
-            lines.append(line)
+                lines.append(f"💰 실현손익: {sign}{_won(f.pnl)}원")
+            lines.append("")
         if not rows:
             lines.append(f"확정 {pinned}건")
     except Exception as exc:  # noqa: BLE001
         log.warning("notify_reconcile detail failed: %s", exc)
         lines.append(f"확정 {pinned}건")
+    send_telegram("\n".join(lines))
+
+
+def notify_signal(result: dict) -> None:
+    """Evening — next-day recommended picks: 종목·종가·종합점수 한 줄씩.
+
+    live_signal fires from the refresh chain AND a 16:20 fallback beat, so a
+    redis NX key dedupes per as_of (best-effort: no redis → send anyway)."""
+    if not telegram_enabled():
+        return
+    as_of = result.get("as_of")
+    if not as_of:
+        return
+    try:
+        import redis  # type: ignore[import-not-found]
+        r = redis.from_url(settings.celery_broker_url)
+        if not r.set(f"qlib:tg:signal:{as_of}", "1", nx=True, ex=86400):
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from collections import Counter
+        from datetime import date as _date
+
+        from ..db import SessionLocal, Signal
+        from .live_trader import _last_close
+        with SessionLocal() as db:
+            rows = (db.query(Signal)
+                      .filter(Signal.as_of == _date.fromisoformat(as_of),
+                              Signal.rank <= 10)
+                      .order_by(Signal.rank.asc())
+                      .all())
+        if not rows:
+            return
+        scores = [s.score for s in rows if s.score is not None]
+        mn, mx = min(scores), max(scores)
+        dup = {k for k, v in Counter(scores).items() if v > 1}
+        lines = [f"📌 <b>다음 거래일 추천 종목 TOP10</b> ({as_of})", ""]
+        for s in rows:
+            if s.score in dup:
+                tag = "동점"
+            elif mx > mn and s.score is not None:
+                tag = f"{round((s.score - mn) / (mx - mn) * 100)}점"
+            else:
+                tag = "—"
+            px = _last_close(s.code)
+            px_txt = f"{round(px):,}원" if px else "—"
+            lines.append(f"{s.rank}) {_esc(s.name or s.code)} · {px_txt} · {tag}")
+        n_dup = sum(1 for s in rows if s.score in dup)
+        if n_dup:
+            lines.extend(["", f"⚠️ 동점 {n_dup}종목 — 해당 순위는 모델 변별력 없음"])
+        lines.extend(["", "내일 15:20 시뮬 매수 · 익일 09:00 실주문에 사용됩니다."])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notify_signal failed: %s", exc)
+        return
     send_telegram("\n".join(lines))

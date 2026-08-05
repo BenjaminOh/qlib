@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-07-31T05:52:42.382Z",
+  "reason": "compaction",
+  "status": {
+    "version": "2.0",
+    "lastUpdated": "2026-07-29T07:50:00.000Z",
+    "activeFeatures": [
+      "kr-data-refresh",
+      "scenario-matrix"
+    ],
+    "primaryFeature": "scenario-matrix",
+    "features": {
+      "scenario-matrix": {
+        "phase": "design",
+        "createdAt": "2026-07-29T07:30:00.000Z",
+        "lastUpdated": "2026-07-29T07:50:00.000Z",
+        "planPath": "docs/01-plan/features/scenario-matrix.plan.md",
+        "designPath": "docs/02-design/features/scenario-matrix.design.md",
+        "analysisPath": null,
+        "reportPath": null,
+        "matchRate": null,
+        "iteration": 0,
+        "planNote": "1순위: 모델 학습 안정화(상수 예측 재발) 선행 후 N-시나리오 프레임워크",
+        "designNote": "진단 실측: lr=0.005+es=200이 4/4일 안정 (baseline 2/4일 퇴화). Phase A 채택 확정."
+      },
+      "kr-data-refresh": {
+        "phase": "check",
+        "createdAt": "2026-05-19T15:58:00.000Z",
+        "lastUpdated": "2026-07-22T06:00:00.000Z",
+        "planPath": "docs/01-plan/features/kr-data-refresh.plan.md",
+        "designPath": "docs/02-design/features/kr-data-refresh.design.md",
+        "analysisPath": "docs/03-check/features/kr-data-refresh.check.md",
+        "reportPath": null,
+        "matchRate": null,
+        "iteration": 0,
+        "doStatus": "deployed-check-complete-3-runtime-defects-found",
+        "checkNote": "프로덕션 실측(rocky-monitor) 진단 완료. 결함 3건(신호 미생성/KIS 잔고 500/dump_update 크래시) 발견. 수정 미착수(다음 작업)."
+      }
+    },
+    "pipeline": {
+      "currentPhase": 1,
+      "level": "Dynamic",
+      "phaseHistory": []
+    },
+    "session": {
+      "startedAt": "2026-03-19T08:10:36.791Z",
+      "onboardingCompleted": false,
+      "lastActivity": "2026-07-22T06:00:00.000Z"
+    },
+    "history": [
+      {
+        "feature": "kr-data-refresh",
+        "phase": "plan",
+        "timestamp": "2026-05-19T15:58:00.000Z",
+        "trigger": "/pdca plan kr-data-refresh"
+      },
+      {
+        "feature": "kr-data-refresh",
+        "phase": "check",
+        "timestamp": "2026-07-22T06:00:00.000Z",
+        "trigger": "production diagnosis (rocky-monitor read-only)"
+      }
+    ]
+  }
+}

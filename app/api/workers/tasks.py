@@ -35,8 +35,11 @@ def live_signal_task(self) -> dict:
     safe to double-fire — signal writes are idempotent per as_of.
     """
     from ..services.live_trader import generate_daily_signal
+    from ..services.notify import notify_signal
     self.update_state(state="RUNNING")
-    return generate_daily_signal()
+    result = generate_daily_signal()
+    notify_signal(result)
+    return result
 
 
 @celery_app.task(bind=True, name="live_orders")
