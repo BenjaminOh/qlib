@@ -64,7 +64,7 @@ export default function OrdersTable({
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
             <th className="text-right px-3 py-2 font-medium" title="지정가 주문의 주문가 또는 체결 확정 후 실체결 평균가">가격</th>
-            <th className="text-right px-3 py-2 font-medium" title="매도 시 확정 손익 (시장가는 당일 시가 추정)">손익</th>
+            <th className="text-right px-3 py-2 font-medium" title="매도 시 확정 손익과 수익률 (시장가는 당일 시가 추정)">손익 (수익률)</th>
             <th className="text-left px-3 py-2 font-medium">상태</th>
             {!compact && (
               <th className="text-left px-3 py-2 font-medium">KIS ID</th>
@@ -116,13 +116,28 @@ export default function OrdersTable({
                 <td className="px-3 py-2 text-right font-mono">
                   {o.price == null ? "시장가" : o.price.toLocaleString()}
                 </td>
-                <td className={`px-3 py-2 text-right font-mono ${
+                <td className={`px-3 py-2 text-right font-mono whitespace-nowrap ${
                   o.realized_pnl == null ? "text-gray-300"
                     : o.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700"
                 }`}>
-                  {o.realized_pnl != null
-                    ? `${o.realized_pnl >= 0 ? "+" : ""}${Math.round(o.realized_pnl).toLocaleString()}${o.realized_est ? "*" : ""}`
-                    : "—"}
+                  {o.realized_pnl != null ? (
+                    <>
+                      {`${o.realized_pnl >= 0 ? "+" : ""}${Math.round(o.realized_pnl).toLocaleString()}${o.realized_est ? "*" : ""}`}
+                      {(() => {
+                        // Back out the entry average from (sell price, qty, pnl)
+                        // so the return % needs no extra API field.
+                        if (o.price == null || o.qty <= 0) return null;
+                        const entry = o.price - o.realized_pnl / o.qty;
+                        if (entry <= 0) return null;
+                        const pct = (o.price / entry - 1) * 100;
+                        return (
+                          <span className="block text-[11px] opacity-80">
+                            {`${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%${o.realized_est ? "*" : ""}`}
+                          </span>
+                        );
+                      })()}
+                    </>
+                  ) : "—"}
                 </td>
                 <td className="px-3 py-2">
                   <span
