@@ -599,11 +599,58 @@ def reconcile_fills(trade_date: date | None = None,
                     o.price = float(px)
                     o.status = "FILLED"
                     updated += 1
+
+        # Pass 3 — persist Fill rows (+ realised pnl on sells) so `open`
+        # shares the sim strategies' fills-based accounting: DailyPnL sums
+        # Fill.pnl and Telegram can show per-order 손익. Idempotent.
+        filled_now = (db.query(Order)
+                        .filter(Order.trade_date == trade_date,
+                                Order.strategy == strategy,
+                                Order.status.in_(("FILLED", "PARTIAL")),
+                                Order.price.isnot(None))
+                        .all())
+        for o in filled_now:
+            if db.query(Fill).filter(Fill.order_id == o.id).first():
+                continue
+            pnl = None
+            if o.side == "SELL":
+                avg = _episode_avg(db, o)
+                if avg is not None:
+                    pnl = round((o.price - avg) * o.qty, 2)
+            db.add(Fill(order_id=o.id, filled_at=datetime.utcnow(), qty=o.qty,
+                        price=o.price, fee=0.0, pnl=pnl, strategy=strategy))
         db.commit()
     result = {"status": "ok", "trade_date": trade_date.isoformat(),
               "kis_fills": len(fills), "matched": matched, "updated": updated}
     log.info("reconcile_fills: %s", result)
     return result
+
+
+def _episode_avg(db: Session, sell_order: Order) -> float | None:
+    """Weighted-average entry price of the position a SELL order is closing.
+
+    Replays this strategy's filled orders for the code chronologically up to
+    (but excluding) the sell — buys update the weighted average, sells reduce
+    the position, a flat position resets the episode."""
+    rows = (db.query(Order)
+              .filter(Order.strategy == sell_order.strategy,
+                      Order.code == sell_order.code,
+                      Order.status.in_(("FILLED", "PARTIAL")),
+                      Order.price.isnot(None),
+                      Order.submitted_at < sell_order.submitted_at)
+              .order_by(Order.submitted_at.asc())
+              .all())
+    qty, avg = 0, 0.0
+    for o in rows:
+        if o.side == "BUY":
+            avg = ((avg * qty + o.price * o.qty) / (qty + o.qty)
+                   if qty + o.qty > 0 else o.price)
+            qty += o.qty
+        else:
+            qty = max(qty - o.qty, 0)
+            if qty == 0:
+                avg = 0.0
+    return avg if qty > 0 and avg > 0 else None
 
 
 # ─── Account sync + daily PnL roll-up ───────────────────────────────
