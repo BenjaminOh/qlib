@@ -536,19 +536,23 @@ def get_latest_signals():
 @router.get("/orders", response_model=LiveOrdersResponse)
 def get_orders(limit: int = Query(100, ge=1, le=500),
                include_sim: bool = Query(False),
-               strategy: str | None = Query(None)):
+               strategy: str | None = Query(None),
+               view: str = Query("real", pattern="^(all|real|sim)$")):
     """Recent orders (newest first) — SELL rows carry (estimated) realized pnl.
 
-    SIMULATED rows are hidden by default (they cluttered the order view) but
-    the DATA is preserved: pass include_sim=true to see them all, or pass
-    strategy=<name> to view one strategy — a sim strategy then shows its
-    SIMULATED rows automatically."""
+    `view` selects the ledger: 'real' = KIS test-account orders only (default),
+    'sim' = SIMULATED strategy fills only, 'all' = both. `strategy` narrows to
+    one strategy and composes with view. `include_sim=true` is the legacy
+    spelling of view=all."""
     init_db()
+    effective_view = "all" if (include_sim and view == "real") else view
 
     def _filtered(q):
         if strategy:
-            return q.filter(Order.strategy == strategy)
-        if not include_sim:
+            q = q.filter(Order.strategy == strategy)
+        if effective_view == "sim":
+            return q.filter(Order.status == "SIMULATED")
+        if effective_view == "real":
             return q.filter(Order.status != "SIMULATED")
         return q
 

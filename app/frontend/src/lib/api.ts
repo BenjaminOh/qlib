@@ -237,9 +237,9 @@ export const api = {
     ),
   getTodayRealized: () =>
     fetchApi<TodayRealized>("/api/v1/live/realized/today"),
-  getLiveOrders: (limit = 100, includeSim = false, strategy?: string) =>
+  getLiveOrders: (limit = 100, view: "all" | "real" | "sim" = "real", strategy?: string) =>
     fetchApi<LiveOrdersResponse>(
-      `/api/v1/live/orders?limit=${limit}&include_sim=${includeSim}` +
+      `/api/v1/live/orders?limit=${limit}&view=${view}` +
         (strategy ? `&strategy=${strategy}` : ""),
     ),
   getCafeCandidates: (days = 7) =>

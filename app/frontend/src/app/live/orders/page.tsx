@@ -8,9 +8,9 @@ import OrdersTable from "@/components/OrdersTable";
 
 type Filter = "ALL" | "BUY" | "SELL" | "REJECTED";
 
-/** Strategy filter chips — "" = 실계좌+숨김 규칙(기본), others = that strategy only. */
+/** Strategy filter chips — "" = every strategy, others = that strategy only. */
 const STRATEGY_TABS: { key: string; label: string }[] = [
-  { key: "", label: "기본(실계좌)" },
+  { key: "", label: "전체 전략" },
   { key: "open", label: "실계좌 open" },
   { key: "close", label: "종가" },
   { key: "flow", label: "수급" },
@@ -20,16 +20,32 @@ const STRATEGY_TABS: { key: string; label: string }[] = [
   { key: "cafe", label: "☕ 카페" },
 ];
 
+type View = "all" | "real" | "sim";
+
+const VIEW_TABS: { key: View; label: string; title: string }[] = [
+  { key: "all", label: "전체", title: "실거래 + 시뮬레이션 전부" },
+  { key: "real", label: "테스트(실거래)", title: "KIS 모의계좌에 실제 접수된 주문만" },
+  { key: "sim", label: "시뮬레이션", title: "시뮬 전략들의 가상 체결만 (실주문 아님)" },
+];
+
 export default function LiveOrdersPage() {
   const [filter, setFilter] = useState<Filter>("ALL");
   const [limit, setLimit] = useState(200);
-  const [includeSim, setIncludeSim] = useState(false);
+  const [view, setView] = useState<View>("real");
   const [strategy, setStrategy] = useState("");
   const { data, isLoading } = useQuery({
-    queryKey: ["live-orders-all", limit, includeSim, strategy],
-    queryFn: () => api.getLiveOrders(limit, includeSim, strategy || undefined),
+    queryKey: ["live-orders-all", limit, view, strategy],
+    queryFn: () => api.getLiveOrders(limit, view, strategy || undefined),
     refetchInterval: 30_000,
   });
+
+  // Picking a strategy auto-switches the ledger so the list is never
+  // empty-by-mismatch (open lives in 실거래, the rest are sim-only).
+  const pickStrategy = (key: string) => {
+    setStrategy(key);
+    if (key === "open") setView("real");
+    else if (key) setView("sim");
+  };
 
   const filtered = useMemo(() => {
     const all = data?.orders || [];
@@ -47,13 +63,34 @@ export default function LiveOrdersPage() {
         </Link>
       </div>
 
-      {/* Strategy tabs — sim strategies auto-include their SIMULATED rows */}
-      <div className="flex flex-wrap gap-1.5">
+      {/* Ledger selector — 전체 / 테스트(실거래) / 시뮬레이션 */}
+      <div className="flex flex-wrap gap-1.5 items-center">
+        <span className="text-xs text-gray-400 mr-1">구분</span>
+        {VIEW_TABS.map((v) => (
+          <button
+            key={v.key}
+            type="button"
+            title={v.title}
+            onClick={() => setView(v.key)}
+            className={`px-2.5 py-1 rounded-full text-xs border ${
+              view === v.key
+                ? "bg-violet-600 border-violet-600 text-white"
+                : "bg-white border-gray-200 text-gray-600 hover:border-violet-400"
+            }`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Strategy tabs — selecting one flips the ledger to where it lives */}
+      <div className="flex flex-wrap gap-1.5 items-center">
+        <span className="text-xs text-gray-400 mr-1">전략</span>
         {STRATEGY_TABS.map((t) => (
           <button
             key={t.key}
             type="button"
-            onClick={() => setStrategy(t.key)}
+            onClick={() => pickStrategy(t.key)}
             className={`px-2.5 py-1 rounded-full text-xs border ${
               strategy === t.key
                 ? "bg-emerald-600 border-emerald-600 text-white"
@@ -80,17 +117,6 @@ export default function LiveOrdersPage() {
             {f === "ALL" ? "전체" : f === "BUY" ? "매수만" : f === "SELL" ? "매도만" : "거부만"}
           </button>
         ))}
-        {!strategy && (
-          <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer"
-                 title="시뮬 전략(종가·수급·트레일·사다리·지정가·카페) 주문 전부 포함 — 기본 숨김, 데이터는 보존됩니다">
-            <input
-              type="checkbox"
-              checked={includeSim}
-              onChange={(e) => setIncludeSim(e.target.checked)}
-            />
-            시뮬 전체 포함
-          </label>
-        )}
         <span className="ml-auto text-sm text-gray-500">
           {filtered.length}건 / 전체 {data?.orders.length ?? 0}건
         </span>
@@ -115,7 +141,7 @@ export default function LiveOrdersPage() {
         {isLoading ? (
           <div className="text-center text-gray-400 py-8 text-sm">Loading...</div>
         ) : (
-          <OrdersTable orders={filtered} showStrategy={includeSim || !!strategy} />
+          <OrdersTable orders={filtered} showStrategy={view !== "real" || !!strategy} />
         )}
       </div>
     </div>
