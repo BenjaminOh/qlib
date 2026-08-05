@@ -466,7 +466,8 @@ def submit_daily_orders(today: date | None = None,
                 continue
             sell_why = _sell_reasons(db, today, code)
             if simulated:
-                px = _last_close(code) or holding.eval_price or holding.avg_price
+                px = (_sim_fill_price(code) or _last_close(code)
+                      or holding.eval_price or holding.avg_price)
                 if not px or px <= 0:
                     continue
                 realised = (px - holding.avg_price) * holding.qty
@@ -504,6 +505,10 @@ def submit_daily_orders(today: date | None = None,
         if to_buy:
             per_code_budget = min(cash / max(len(to_buy), 1), slot_budget)
             for code, px in to_buy:
+                if simulated:
+                    # px from the signal is the PREVIOUS close (kr_data lags
+                    # until 15:45) — fill sim entries at the live quote instead.
+                    px = _sim_fill_price(code) or px
                 qty = max(int(per_code_budget // px), 0)
                 if qty <= 0:
                     continue
@@ -1395,6 +1400,24 @@ def _stale_codes(codes: list[str], today: date, max_lag_days: int = 5) -> set[st
         if not s.empty and s.index.max().date() >= cutoff:
             stale.discard(str(code))
     return stale
+
+
+def _sim_fill_price(code: str) -> float | None:
+    """Live KIS quote for simulated 15:20 fills — the actually tradable price.
+
+    kr_data refreshes at 15:45, so at order time `_last_close` is the PREVIOUS
+    day's close: momentum picks gapped a full day and sim entries were filled
+    at prices that never existed (셀바스AI 2026-08-04: filled 9,710 vs day low
+    10,620). Sim data through 2026-08-05 carries that stale-fill bias; from
+    8/6 fills use this quote, falling back to _last_close only if KIS fails."""
+    try:
+        q = get_kis_client().get_quote(code) or {}
+        if q.get("halted"):
+            return None
+        px = q.get("price")
+        return float(px) if px and px > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _last_close(code: str) -> float | None:

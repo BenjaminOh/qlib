@@ -155,10 +155,13 @@ export default function LiveDashboardPage() {
                 ❓ 시뮬 전략별 매매 규칙 자세히 보기 (청산 규칙 실험 매트릭스)
               </summary>
               <div className="mt-1.5 bg-emerald-50/60 border border-emerald-100 rounded p-2.5 space-y-1">
-                <p>공통 — 매수는 매일 신호 top-10 미보유 상위 종목(종가 체결, 하루 최대 2),
+                <p>공통 — 매수는 매일 신호 top-10 미보유 상위 종목(15:20 실시간가 체결, 하루 최대 2),
                   시드 각 1,000만원. 시뮬엔 신호 이탈 매도가 없고 아래 가격 규칙으로만 청산.
                   <strong> 공통 손절</strong>: 전 저점(진입 전 10거래일 최저가 −1% 버퍼) 이탈,
                   최대 −10% 캡.</p>
+                <p className="text-amber-700">⚠️ <strong>2026-08-05 이전 시뮬 매수는 전일 종가로
+                  체결되던 편향</strong>(데이터 지연 버그)이 있어 수익률이 과대합니다 — 8/6부터
+                  실시간가 체결로 수정. 전략 비교는 8/6 이후 구간 기준으로 보세요.</p>
                 <p>• <strong>close</strong> — 익절 +10% 고정 · <strong>flow</strong> — 같은 규칙,
                   픽만 기관·외국인 순매수 재랭킹</p>
                 <p>• <strong>trail</strong> — 익절 없음, 최고 종가 대비 <strong>−7% 트레일링</strong> 청산</p>
