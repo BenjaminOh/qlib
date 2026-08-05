@@ -1004,7 +1004,8 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                     _persist_simulated_fill(db, day, h.code, "SELL", qty_s, px_s,
                                             strategy=strategy, pnl=realised_s,
                                             reasons=reasons_s)
-                    exits.append({"code": h.code, "kind": kind_s, "qty": qty_s,
+                    exits.append({"code": h.code, "name": _stock_name(h.code),
+                                  "kind": kind_s, "qty": qty_s,
                                   "price": round(px_s, 2), "realised": round(realised_s),
                                   "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
 
@@ -1115,7 +1116,8 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             _persist_simulated_fill(db, day, h.code, "SELL", sell_qty, px,
                                     strategy=strategy, pnl=realised,
                                     reasons=reasons)
-            exits.append({"code": h.code, "kind": kind, "qty": sell_qty,
+            exits.append({"code": h.code, "name": _stock_name(h.code),
+                          "kind": kind, "qty": sell_qty,
                           "price": round(px, 2), "realised": round(realised),
                           "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
         db.commit()

@@ -14,6 +14,7 @@ Telegram must never fail an order task.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import requests
@@ -73,24 +74,81 @@ def discover_chat_id() -> list[dict]:
         return []
 
 
-# ─── Formatting helpers (Korean, compact) ───────────────────────────
+# ─── Formatting helpers (Korean, detailed per-order blocks) ─────────
 
 
 def _won(v: float | None) -> str:
     return f"{round(v):,}" if v is not None else "—"
 
 
+def _esc(s: str | None) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _order_basis(order) -> str | None:
+    """Human sentence for why this order was placed (from reasons_json)."""
+    try:
+        why = json.loads(order.reasons_json) if order.reasons_json else {}
+    except Exception:  # noqa: BLE001
+        return None
+    basis = why.get("basis") or ""
+    summary = why.get("summary") or ""
+    text = " — ".join(p for p in (basis, summary) if p)
+    return text[:140] or None
+
+
+def _side_tag(side: str) -> str:
+    return "🔴 매수" if side == "BUY" else "🔵 매도"
+
+
+STRATEGY_TITLES = {"open": "실계좌(KIS 모의투자)"}
+
+
 def notify_open_orders(result: dict) -> None:
-    """09:00 open-strategy order summary."""
+    """09:00 — per-order detail blocks read back from today's Order rows."""
     if not telegram_enabled() or result.get("status") == "no_signal":
         return
-    lines = [f"🌅 <b>qlib 아침 주문</b> ({result.get('as_of', '')})"]
-    lines.append(f"제출 {result.get('submitted', 0)} · 거부 {result.get('rejected', 0)}")
+    as_of = result.get("as_of", "")
+    strategy = result.get("strategy", "open")
+    head = (f"🌅 <b>qlib 아침 주문</b> ({as_of}) · "
+            f"{STRATEGY_TITLES.get(strategy, strategy)}")
+    lines = [head]
+    try:
+        from datetime import date as _date
+
+        from ..db import Order, SessionLocal
+        with SessionLocal() as db:
+            rows = (db.query(Order)
+                      .filter(Order.trade_date == _date.fromisoformat(as_of),
+                              Order.strategy == strategy)
+                      .order_by(Order.side.desc(), Order.submitted_at.asc())
+                      .all())
+        for o in rows:
+            ord_type = "지정가" if o.price else "시장가 (개장 동시호가)"
+            status = ("✅ 접수" if o.status in ("SUBMITTED", "FILLED", "PARTIAL")
+                      else f"❌ 거부: {_esc((o.error or '')[:80])}")
+            lines.append("──────────────")
+            lines.append(f"{_side_tag(o.side)} · <b>{_esc(o.name or o.code)}</b> ({o.code})")
+            detail = f"📊 {ord_type} · {o.qty:,}주"
+            if o.price:
+                detail += f" @ {_won(o.price)}원"
+            lines.append(detail)
+            lines.append(f"📌 상태: {status}")
+            basis = _order_basis(o)
+            if basis:
+                lines.append(f"📝 사유: {_esc(basis)}")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notify_open_orders detail failed: %s", exc)
+        lines.append(f"제출 {result.get('submitted', 0)} · 거부 {result.get('rejected', 0)}")
+    lines.append("──────────────")
+    tail = f"제출 {result.get('submitted', 0)} · 거부 {result.get('rejected', 0)}"
     skipped = result.get("skipped_expensive") or []
     if skipped:
-        lines.append(f"고가주 스킵: {', '.join(skipped)}")
+        tail += f" · 고가주 스킵 {len(skipped)}"
+    lines.append(tail)
     if result.get("rejected"):
         lines.append("⚠️ 거부 발생 — 대시보드 확인 필요")
+    lines.append("⏰ 체결가·실현손익은 09:20 대사 후 다시 알려드립니다.")
     send_telegram("\n".join(lines))
 
 
@@ -99,30 +157,61 @@ def notify_order_detail(side: str, code: str, name: str | None, qty: int,
     """Per-order line for the open strategy (fired as each order lands)."""
     if not telegram_enabled():
         return
-    icon = "🔴" if side == "BUY" else "🔵"
     status = "접수" if ok else f"❌ 거부: {(error or '')[:80]}"
-    send_telegram(f"{icon} {side == 'BUY' and '매수' or '매도'} "
-                  f"{name or code} {qty:,}주 — {status}")
+    send_telegram(f"{_side_tag(side)} {name or code} {qty:,}주 — {status}")
 
 
 def notify_bracket_exits(strategy: str, result: dict) -> None:
-    """15:48 sim exit summary — only when something actually sold."""
+    """15:48 sim exit detail — only when something actually sold."""
     exits = result.get("exits") or []
     if not telegram_enabled() or not exits:
         return
     lines = [f"📤 <b>{strategy} 시뮬 청산</b> ({result.get('trade_date', '')})"]
     for e in exits:
-        sign = "+" if e.get("realised", 0) >= 0 else ""
-        lines.append(f"· {e['code']} {e['kind']} {e['qty']:,}주 @{_won(e['price'])} "
-                     f"→ {sign}{_won(e.get('realised'))}원")
+        realised = e.get("realised") or 0
+        sign = "+" if realised >= 0 else ""
+        icon = "💰" if realised >= 0 else "💸"
+        lines.append("──────────────")
+        lines.append(f"{icon} <b>{_esc(e.get('name') or e['code'])}</b> ({e['code']}) — {e['kind']}")
+        lines.append(f"📊 매도 {e['qty']:,}주 @ {_won(e['price'])}원")
+        lines.append(f"💵 실현손익: {sign}{_won(realised)}원")
+        if e.get("sl_px"):
+            lines.append(f"🛡 손절 기준: {_won(e['sl_px'])}원 ({e.get('sl_kind', '')})")
     send_telegram("\n".join(lines))
 
 
 def notify_reconcile(summary: dict) -> None:
-    """09:20 — fills pinned; only notify when orders exist today."""
+    """09:20 — actual fill prices + realised pnl per order."""
     if not telegram_enabled():
         return
     pinned = summary.get("pinned") or summary.get("updated") or 0
     if not pinned:
         return
-    send_telegram(f"✅ 체결가 확정 완료 — {pinned}건 (09:20 대사)")
+    lines = [f"✅ <b>체결 확정</b> ({summary.get('trade_date', '')} 09:20 대사)"]
+    try:
+        from datetime import date as _date
+
+        from ..db import Fill, Order, SessionLocal
+        td = _date.fromisoformat(summary["trade_date"]) if summary.get("trade_date") else _date.today()
+        with SessionLocal() as db:
+            rows = (db.query(Order, Fill)
+                      .join(Fill, Fill.order_id == Order.id)
+                      .filter(Order.trade_date == td,
+                              Order.strategy == "open",
+                              Order.status.in_(("FILLED", "PARTIAL")))
+                      .order_by(Order.side.desc())
+                      .all())
+        for o, f in rows:
+            total = round((f.price or 0) * f.qty)
+            line = (f"{_side_tag(o.side)} <b>{_esc(o.name or o.code)}</b> "
+                    f"{f.qty:,}주 @ {_won(f.price)}원 = {total:,}원")
+            if o.side == "SELL" and f.pnl is not None:
+                sign = "+" if f.pnl >= 0 else ""
+                line += f" → 실현 {sign}{_won(f.pnl)}원"
+            lines.append(line)
+        if not rows:
+            lines.append(f"확정 {pinned}건")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notify_reconcile detail failed: %s", exc)
+        lines.append(f"확정 {pinned}건")
+    send_telegram("\n".join(lines))
