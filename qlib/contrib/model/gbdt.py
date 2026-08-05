@@ -68,19 +68,25 @@ class LGBModel(ModelFT, LightGBMFInt):
             evals_result = {}  # in case of unsafety of Python default values
         ds_l = self._prepare_data(dataset, reweighter)
         ds, names = list(zip(*ds_l))
-        early_stopping_callback = lgb.early_stopping(
-            self.early_stopping_rounds if early_stopping_rounds is None else early_stopping_rounds
-        )
+        es_rounds = self.early_stopping_rounds if early_stopping_rounds is None else early_stopping_rounds
         # NOTE: if you encounter error here. Please upgrade your lightgbm
         verbose_eval_callback = lgb.log_evaluation(period=verbose_eval)
         evals_result_callback = lgb.record_evaluation(evals_result)
+        callbacks = [verbose_eval_callback, evals_result_callback]
+        # es_rounds=0/None trains the full num_boost_round with NO early
+        # stopping. The callback cannot simply be given a huge patience: it
+        # force-records best_iteration at the final round even when it never
+        # triggered, and predict()/dump_model() then silently truncate to
+        # that iteration (observed collapsing to a 1-tree model, 2026-08-05).
+        if es_rounds:
+            callbacks.insert(0, lgb.early_stopping(es_rounds))
         self.model = lgb.train(
             self.params,
             ds[0],  # training dataset
             num_boost_round=self.num_boost_round if num_boost_round is None else num_boost_round,
             valid_sets=ds,
             valid_names=names,
-            callbacks=[early_stopping_callback, verbose_eval_callback, evals_result_callback],
+            callbacks=callbacks,
             **kwargs,
         )
         for k in names:

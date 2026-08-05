@@ -106,7 +106,14 @@ LIVE_CONFIG = {
     # trained 63-216 trees with 8-10 distinct top-10 scores on all four
     # days. See scripts/diagnose_training_stability.py and the
     # scenario-matrix design doc for the full experiment table.
-    "model_kwargs": {"learning_rate": 0.005, "early_stopping_rounds": 200},
+    # Fixed-round training, NO early stopping (2026-08-05, user-approved):
+    # the valid-loss edge is noise-level (~0.03%), so early stopping picked
+    # best_iteration by luck — down to a 1-tree model on 8/4 (183 stocks →
+    # 6 distinct scores). 150 fixed rounds keeps scores differentiated
+    # (n_unique 130-145/185, top10 10/10 on all 4 diagnosed days).
+    # Diagnosis: docs/06-research/2026-08-05-signal-collapse-diagnosis.md
+    "model_kwargs": {"learning_rate": 0.005, "num_boost_round": 150,
+                     "early_stopping_rounds": 0},
     "handler_class": "Alpha158",
     "handler_module": "qlib.contrib.data.handler",
     "handler_kwargs": {},

@@ -41,6 +41,13 @@ VARIANTS = {
                          "model": {"early_stopping_rounds": 200, "learning_rate": 0.005}},
     "remedy_valid6m": {"valid_months": 6,
                        "model": {"early_stopping_rounds": 200, "learning_rate": 0.005}},
+    # Remedy: fixed 150 rounds with NO early-stopping callback at all.
+    # (A huge patience is NOT enough: lightgbm's callback force-records
+    # best_iteration at the final round and predict/dump then use only that
+    # many trees — verified 2026-08-05, scores came out identical to prod.)
+    # lgb.train is called directly so the callback never exists.
+    "remedy_fixed150": {"valid_months": 3, "no_es_rounds": 150,
+                        "model": {"learning_rate": 0.005}},
 }
 N_DAYS = 4          # last N calendar days (control 07-30/31 + degenerate 08-03/04)
 DAILY_STD_DAYS = 10  # H4: per-day cross-sectional label std lookback
@@ -151,10 +158,22 @@ def run_variant(handler, today: date, name: str, cfg: dict) -> dict:
     t0 = time.time()
     model = LGBModel(**cfg["model"])
     evals: dict = {}
-    try:
-        model.fit(dataset, evals_result=evals)
-    except TypeError:  # older qlib fit() without evals_result kwarg
-        model.fit(dataset)
+    if cfg.get("no_es_rounds"):
+        # bypass LGBModel.fit — it hard-wires an early_stopping callback
+        import lightgbm as lgb
+        ds_l = model._prepare_data(dataset, None)
+        ds, names = list(zip(*ds_l))
+        model.model = lgb.train(
+            model.params, ds[0],
+            num_boost_round=cfg["no_es_rounds"],
+            valid_sets=list(ds), valid_names=list(names),
+            callbacks=[lgb.log_evaluation(period=50),
+                       lgb.record_evaluation(evals)])
+    else:
+        try:
+            model.fit(dataset, evals_result=evals)
+        except TypeError:  # older qlib fit() without evals_result kwarg
+            model.fit(dataset)
     fit_s = round(time.time() - t0, 1)
 
     booster = model.model
@@ -163,6 +182,7 @@ def run_variant(handler, today: date, name: str, cfg: dict) -> dict:
         "variant": name,
         "fit_seconds": fit_s,
         "best_iteration": getattr(booster, "best_iteration", None),
+        "actual_trees": int(booster.num_trees()),
     }
 
     # H1: valid-loss trajectory — did boosting ever find improvement?
@@ -190,6 +210,8 @@ def run_variant(handler, today: date, name: str, cfg: dict) -> dict:
         "n_scored": int(len(snap)),
         "n_unique": int(len(counts)),
         "mode_share_pct": round(float(counts.iloc[0] / len(snap)) * 100, 1),
+        "top10_unique": int(snap.sort_values(ascending=False).head(10)
+                            .round(8).nunique()),
         "std": round(float(snap.std()), 8),
     }
 
