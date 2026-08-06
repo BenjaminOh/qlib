@@ -250,6 +250,9 @@ export const api = {
     fetchApi<PositionHistoryResponse>(`/api/v1/live/positions/history?limit=${limit}`),
 };
 
+/** Toss Securities chart page — opens the Toss app on mobile. */
+export const tossChartUrl = (code: string) => `https://tossinvest.com/stocks/A${code}`;
+
 // ─── Live trading types ──────────────────────────────────────
 
 export interface StockTradeReasons extends SignalReasons {

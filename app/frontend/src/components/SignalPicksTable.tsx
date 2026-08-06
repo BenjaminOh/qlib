@@ -5,6 +5,7 @@ import { LiveSignalRow } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
 import SignalCompareTable from "@/components/SignalCompareTable";
 import { buildThesis, compositeScores, thesisSegments } from "@/lib/thesis";
+import TossLink from "@/components/TossLink";
 
 function Thesis({ pick, picks }: { pick: LiveSignalRow; picks: LiveSignalRow[] }) {
   const text = buildThesis(pick, picks);
@@ -125,15 +126,18 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                   <CompositeBadge comp={composites.get(p.code)} />
                   <span className="font-mono text-gray-400">α {p.score == null ? "—" : p.score.toFixed(4)}</span>
                 </span>
-                <a
-                  href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  네이버 ↗
-                </a>
+                <span className="flex items-center gap-2">
+                  <TossLink code={p.code} />
+                  <a
+                    href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    네이버 ↗
+                  </a>
+                </span>
               </div>
             </div>
             {expanded && p.reasons && p.reasons.top_features.length > 0 && (
@@ -208,7 +212,8 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                       α {p.score == null ? "—" : p.score.toFixed(6)}
                     </div>
                   </td>
-                  <td className="px-3 py-2 align-top">
+                  <td className="px-3 py-2 align-top whitespace-nowrap">
+                    <TossLink code={p.code} className="mr-2" />
                     <a
                       href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
                       target="_blank"

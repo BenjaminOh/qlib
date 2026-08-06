@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import TossLink from "@/components/TossLink";
 
 const fmtKRW = (v: number) => {
   if (v == null) return "—";
@@ -75,6 +76,7 @@ export default function LivePositionsPage() {
                         <tr key={`${h.code}-${i}`} className="border-t border-gray-50">
                           <td className="px-3 py-1">
                             <span className="text-gray-900">{h.name ?? h.code}</span>
+                            <TossLink code={h.code} className="ml-1.5" />
                             {h.name && h.name !== h.code && (
                               <span className="font-mono text-xs text-gray-500 ml-2">({h.code})</span>
                             )}

@@ -97,6 +97,14 @@ def _order_basis(order) -> str | None:
     return text[:140] or None
 
 
+def _toss(code: str, name: str | None = None, bold: bool = False) -> str:
+    """Stock name as a Toss Securities chart link (opens the app on mobile)."""
+    label = _esc(name or code)
+    if bold:
+        label = f"<b>{label}</b>"
+    return f'<a href="https://tossinvest.com/stocks/A{code}">{label}</a>'
+
+
 def _side_tag(side: str) -> str:
     return "🔴 매수" if side == "BUY" else "🔵 매도"
 
@@ -132,7 +140,7 @@ def notify_open_orders(result: dict) -> None:
             if o.price:
                 detail += f" @ {_won(o.price)}원"
             block = [_DIV, "",
-                     f"{_side_tag(o.side)} · <b>{_esc(o.name or o.code)}</b> ({o.code})",
+                     f"{_side_tag(o.side)} · {_toss(o.code, o.name, bold=True)} ({o.code})",
                      "",
                      detail,
                      f"📌 상태: {status}"]
@@ -177,7 +185,7 @@ def notify_bracket_exits(strategy: str, result: dict) -> None:
         icon = "💰" if realised >= 0 else "💸"
         lines.extend([
             _DIV, "",
-            f"{icon} <b>{_esc(e.get('name') or e['code'])}</b> ({e['code']}) — {e['kind']}",
+            f"{icon} {_toss(e['code'], e.get('name'), bold=True)} ({e['code']}) — {e['kind']}",
             "",
             f"📊 매도 {e['qty']:,}주 @ {_won(e['price'])}원",
             f"💵 실현손익: {sign}{_won(realised)}원",
@@ -212,7 +220,7 @@ def notify_reconcile(summary: dict) -> None:
         for o, f in rows:
             total = round((f.price or 0) * f.qty)
             lines.extend([
-                f"{_side_tag(o.side)} <b>{_esc(o.name or o.code)}</b>",
+                f"{_side_tag(o.side)} {_toss(o.code, o.name, bold=True)}",
                 f"💵 {f.qty:,}주 @ {_won(f.price)}원 = {total:,}원",
             ])
             if o.side == "SELL" and f.pnl is not None:
@@ -248,7 +256,7 @@ def notify_scout(result: dict, *, slot_label: str, final: bool = False) -> None:
     for i, p in enumerate(picks, start=1):
         label = _SCOUT_PATTERNS.get(p.get("pattern"), p.get("pattern", ""))
         px = p.get("price") or p.get("close")
-        line = (f"{i}) {_esc(p.get('name') or p.get('code'))} · "
+        line = (f"{i}) {_toss(p.get('code', ''), p.get('name'))} · "
                 f"{p.get('pattern')} {label} · {_won(px)}원")
         if final and p.get("stop_px") is not None:
             line += f" · 손절 {_won(p['stop_px'])}원"
@@ -312,7 +320,7 @@ def notify_signal(result: dict) -> None:
                 tag = "—"
             px = _last_close(s.code)
             px_txt = f"{round(px):,}원" if px else "—"
-            lines.append(f"{s.rank}) {_esc(s.name or s.code)} · {px_txt} · {tag}")
+            lines.append(f"{s.rank}) {_toss(s.code, s.name)} · {px_txt} · {tag}")
         n_dup = sum(1 for s in rows if s.score in dup)
         if n_dup:
             lines.extend(["", f"⚠️ 동점 {n_dup}종목 — 해당 순위는 모델 변별력 없음"])
