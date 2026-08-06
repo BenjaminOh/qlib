@@ -626,6 +626,11 @@ def reconcile_fills(trade_date: date | None = None,
                     o.price = float(px)
                     o.status = "FILLED"
                     updated += 1
+        # Commit the pinned prices BEFORE pass 3: the session runs with
+        # autoflush=False, so the query below would otherwise still see
+        # price=NULL and silently create no Fill rows (2026-08-06 09:20 —
+        # the morning alert lost its 실현손익 because of exactly this).
+        db.commit()
 
         # Pass 3 — persist Fill rows (+ realised pnl on sells) so `open`
         # shares the sim strategies' fills-based accounting: DailyPnL sums
