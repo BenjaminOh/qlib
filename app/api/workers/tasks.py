@@ -200,6 +200,25 @@ def cafe_screen_task(self) -> dict:
     return run_screener()
 
 
+@celery_app.task(
+    bind=True,
+    name="cafe_scout",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=1,
+)
+def cafe_scout_task(self, slot: str) -> dict:
+    """14:30 / 15:00 KST — observation-only screener scans (no trades).
+
+    Accumulates early-scan candidates + prices to measure whether cafe
+    entries could move earlier than 15:28 (pick overlap + drift to close)."""
+    from ..services.market_screener import run_scout_scan
+    self.update_state(state="RUNNING")
+    return run_scout_scan(slot)
+
+
 @celery_app.task(bind=True, name="live_orders_cafe")
 def live_orders_cafe_task(self) -> dict:
     """15:28 KST — cafe strategy: sim-buy today's top candidates at the

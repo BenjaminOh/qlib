@@ -118,6 +118,18 @@ celery_app.conf.beat_schedule = {
     # cafe strategy: recommender-mimic screener. Screen the whole market at
     # 15:05 (KIS ranking TRs), sim-buy the top candidates at 15:28 near the
     # closing auction. Sync offset continues the SQLite writer stagger.
+    # Observation-only scout scans — measure early-entry feasibility
+    # (pick overlap + price drift into the close). No trades.
+    "cafe-scout-1430": {
+        "task": "cafe_scout",
+        "schedule": crontab(hour=14, minute=30, day_of_week="mon-fri"),
+        "args": ("1430",),
+    },
+    "cafe-scout-1500": {
+        "task": "cafe_scout",
+        "schedule": crontab(hour=15, minute=0, day_of_week="mon-fri"),
+        "args": ("1500",),
+    },
     "cafe-screen": {
         "task": "cafe_screen",
         "schedule": crontab(hour=15, minute=5, day_of_week="mon-fri"),

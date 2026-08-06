@@ -932,8 +932,11 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
               .all())
     cash = seed_cash
     pos: dict[str, dict] = {}  # code -> {qty, cost}
+    names: dict[str, str | None] = {}
     for fill, order in rows:
         value = fill.qty * fill.price
+        if order.name and order.name != order.code:
+            names[order.code] = order.name
         if order.side == "BUY":
             cash -= value
             p = pos.setdefault(order.code, {"qty": 0, "cost": 0.0})
@@ -954,12 +957,15 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
     for code, p in pos.items():
         if p["qty"] <= 0:
             continue
-        last_px = _last_close(code) or 0.0
         avg = (p["cost"] / p["qty"]) if p["qty"] else 0.0
+        # Out-of-universe codes (cafe picks) aren't in kr_data — fall back to
+        # the live KIS price, then to the entry average, so the evaluation
+        # never silently zeroes (cafe snapshot valued holdings at 0, 8/5).
+        last_px = _last_close(code) or _sim_fill_price(code) or avg
         ev_value = p["qty"] * last_px
         pnl = ev_value - p["cost"]
         pnl_pct = (pnl / p["cost"]) if p["cost"] else 0.0
-        holdings.append(Holding(code=code, name=_stock_name(code),
+        holdings.append(Holding(code=code, name=names.get(code) or _stock_name(code),
                                 qty=p["qty"], avg_price=avg,
                                 eval_price=last_px, eval_value=ev_value,
                                 pnl=pnl, pnl_pct=pnl_pct))

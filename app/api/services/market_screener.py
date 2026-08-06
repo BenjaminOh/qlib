@@ -22,7 +22,7 @@ import logging
 from datetime import date
 
 from ..config import settings
-from ..db import CafeCandidate, Order, SessionLocal, STRATEGY_CAFE, init_db
+from ..db import CafeCandidate, CafeScout, Order, SessionLocal, STRATEGY_CAFE, init_db
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +151,55 @@ _PATTERN_LABELS = {
     "B": "급등 타이트 눌림", "A": "신고가 돌파",
     "C": "급등 눌림 재진입", "D": "낙폭과대 반등",
 }
+
+
+def run_scout_scan(slot: str, trade_date: date | None = None) -> dict:
+    """Observation-only scan (14:30/15:00) — same pool + classifier as 15:05,
+    stores the top-5 with their at-scan price, trades NOTHING.
+
+    Purpose (user hypothesis 2026-08-06): the recommender buys intraday and
+    posts later, so entering earlier than the 15:28 slot may be possible.
+    These rows measure (a) pick overlap vs the 15:05 scan and (b) price drift
+    scan → close; the accumulated distribution decides whether cafe entries
+    move earlier. Idempotent per (day, slot, code)."""
+    from .kis_client import get_kis_client
+    init_db()
+    day = trade_date or date.today()
+    client = get_kis_client()
+    pool: dict[str, dict] = {}
+    for row in client.get_rank_fluctuation() + client.get_rank_volume():
+        if row["code"] not in pool and not _excluded(row["name"]):
+            pool[row["code"]] = row
+
+    matched: list[dict] = []
+    scanned = 0
+    for code, row in list(pool.items())[:MAX_POOL_BARS]:
+        scanned += 1
+        bars = client.get_daily_bars(code)
+        hit = _classify(bars) if bars else None
+        if hit:
+            matched.append({**hit, "code": code, "name": row["name"],
+                            "price": bars[-1]["close"]})
+    matched.sort(key=lambda c: PRIORITY.index(c["pattern"]))
+    picks = matched[:5]
+
+    with SessionLocal() as db:
+        for i, c in enumerate(picks, start=1):
+            exists = (db.query(CafeScout)
+                        .filter(CafeScout.trade_date == day,
+                                CafeScout.slot == slot,
+                                CafeScout.code == c["code"])
+                        .first())
+            if exists:
+                continue
+            db.add(CafeScout(trade_date=day, slot=slot, code=c["code"],
+                             name=c["name"], pattern=c["pattern"], rank=i,
+                             price=c["price"]))
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(), "slot": slot,
+            "pool": len(pool), "scanned": scanned, "matched": len(matched),
+            "picks": [{"code": c["code"], "name": c["name"],
+                       "pattern": c["pattern"], "price": c["price"]} for c in picks]}
 
 
 def submit_cafe_orders(trade_date: date | None = None) -> dict:

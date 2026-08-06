@@ -122,6 +122,32 @@ class CafeCandidate(Base):
     )
 
 
+class CafeScout(Base):
+    """Observation-only screener scans (14:30 / 15:00) — no trades.
+
+    Measures whether 종가 베팅 candidates are identifiable EARLIER in the
+    session (user hypothesis 2026-08-06): compare pick overlap vs the 15:05
+    scan and the price drift from scan time into the close. After 1-2 weeks
+    the distribution decides whether cafe entries move earlier and whether an
+    "early entry → sell into close" day-trade variant is worth a 9th curve.
+    """
+    __tablename__ = "cafe_scouts"
+
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    slot = Column(String(5), nullable=False)     # "1430" / "1500"
+    code = Column(String(8), nullable=False)
+    name = Column(String(64), nullable=True)
+    pattern = Column(String(2), nullable=False)
+    rank = Column(Integer, nullable=False)
+    price = Column(Float, nullable=True)         # price at scan time
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "slot", "code", name="uq_cafe_scout_date_slot_code"),
+    )
+
+
 class Order(Base):
     """One outbound order attempt (real KIS for 'open', simulated otherwise)."""
     __tablename__ = "orders"
