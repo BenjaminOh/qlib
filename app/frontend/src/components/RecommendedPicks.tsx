@@ -1,4 +1,5 @@
 import { RecommendedPick } from "@/lib/api";
+import TossLink from "@/components/TossLink";
 
 export default function RecommendedPicks({
   picks,
@@ -49,14 +50,7 @@ export default function RecommendedPicks({
                   {p.score == null ? "—" : p.score.toFixed(6)}
                 </td>
                 <td className="px-3 py-2">
-                  <a
-                    href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline text-xs"
-                  >
-                    네이버 금융 ↗
-                  </a>
+                  <TossLink code={p.code} />
                 </td>
               </tr>
             ))}

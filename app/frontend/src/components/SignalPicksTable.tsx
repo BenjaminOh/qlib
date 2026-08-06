@@ -126,18 +126,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                   <CompositeBadge comp={composites.get(p.code)} />
                   <span className="font-mono text-gray-400">α {p.score == null ? "—" : p.score.toFixed(4)}</span>
                 </span>
-                <span className="flex items-center gap-2">
-                  <TossLink code={p.code} />
-                  <a
-                    href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    네이버 ↗
-                  </a>
-                </span>
+                <TossLink code={p.code} />
               </div>
             </div>
             {expanded && p.reasons && p.reasons.top_features.length > 0 && (
@@ -213,16 +202,7 @@ export default function SignalPicksTable({ picks }: { picks: LiveSignalRow[] }) 
                     </div>
                   </td>
                   <td className="px-3 py-2 align-top whitespace-nowrap">
-                    <TossLink code={p.code} className="mr-2" />
-                    <a
-                      href={`https://finance.naver.com/item/main.naver?code=${p.code}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline text-xs"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      네이버 ↗
-                    </a>
+                    <TossLink code={p.code} />
                   </td>
                 </tr>
                 {expanded && p.reasons && p.reasons.top_features.length > 0 && (
