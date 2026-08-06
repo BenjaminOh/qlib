@@ -196,8 +196,11 @@ def cafe_screen_task(self) -> dict:
     """15:05 KST — recommender-mimic screener: KIS ranking pools → pattern
     classifier → today's cafe candidates (with structural stops)."""
     from ..services.market_screener import run_screener
+    from ..services.notify import notify_scout
     self.update_state(state="RUNNING")
-    return run_screener()
+    result = run_screener()
+    notify_scout(result, slot_label="15:05", final=True)
+    return result
 
 
 @celery_app.task(
@@ -215,8 +218,11 @@ def cafe_scout_task(self, slot: str) -> dict:
     Accumulates early-scan candidates + prices to measure whether cafe
     entries could move earlier than 15:28 (pick overlap + drift to close)."""
     from ..services.market_screener import run_scout_scan
+    from ..services.notify import notify_scout
     self.update_state(state="RUNNING")
-    return run_scout_scan(slot)
+    result = run_scout_scan(slot)
+    notify_scout(result, slot_label=f"{slot[:2]}:{slot[2:]}")
+    return result
 
 
 @celery_app.task(bind=True, name="live_orders_cafe")

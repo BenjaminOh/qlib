@@ -227,6 +227,40 @@ def notify_reconcile(summary: dict) -> None:
     send_telegram("\n".join(lines))
 
 
+_SCOUT_PATTERNS = {"B": "급등 타이트 눌림", "A": "신고가 돌파",
+                   "C": "급등 눌림 재진입", "D": "낙폭과대 반등"}
+
+
+def notify_scout(result: dict, *, slot_label: str, final: bool = False) -> None:
+    """14:30/15:00 scout scans + 15:05 regular screen — candidate list.
+
+    Scouts are observation-only; the 15:05 message marks the picks that the
+    15:28 slot will actually sim-buy."""
+    if not telegram_enabled() or result.get("status") != "ok":
+        return
+    picks = result.get("picks") or []
+    icon = "☕" if final else "🔭"
+    kind = "정규 스크린" if final else "정찰 스캔 (관측 전용)"
+    lines = [f"{icon} <b>카페 {kind} {slot_label}</b> ({result.get('trade_date', '')})", ""]
+    if not picks:
+        lines.append("매치된 후보 없음 (풀 "
+                     f"{result.get('pool', 0)}종목 스캔)")
+    for i, p in enumerate(picks, start=1):
+        label = _SCOUT_PATTERNS.get(p.get("pattern"), p.get("pattern", ""))
+        px = p.get("price") or p.get("close")
+        line = (f"{i}) {_esc(p.get('name') or p.get('code'))} · "
+                f"{p.get('pattern')} {label} · {_won(px)}원")
+        if final and p.get("stop_px") is not None:
+            line += f" · 손절 {_won(p['stop_px'])}원"
+        lines.append(line)
+    lines.append("")
+    if final:
+        lines.append(f"상위 {min(len(picks), 2)}종목을 15:28에 시뮬 매수합니다.")
+    else:
+        lines.append("매매 없음 — 15:05 정규 스크린·종가와 비교용 기록입니다.")
+    send_telegram("\n".join(lines))
+
+
 def notify_signal(result: dict) -> None:
     """Evening — next-day recommended picks: 종목·종가·종합점수 한 줄씩.
 
