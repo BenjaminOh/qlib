@@ -7,6 +7,7 @@ import TossLink from "@/components/TossLink";
 const PATTERN_BADGE: Record<string, string> = {
   A: "bg-rose-100 text-rose-700",
   B: "bg-orange-100 text-orange-700",
+  R: "bg-violet-100 text-violet-700",
   C: "bg-sky-100 text-sky-700",
   D: "bg-emerald-100 text-emerald-700",
 };

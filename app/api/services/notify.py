@@ -235,7 +235,7 @@ def notify_reconcile(summary: dict) -> None:
     send_telegram("\n".join(lines))
 
 
-_SCOUT_PATTERNS = {"B": "급등 타이트 눌림", "A": "신고가 돌파",
+_SCOUT_PATTERNS = {"B": "급등 타이트 눌림", "A": "신고가 돌파", "R": "저항대 돌파",
                    "C": "급등 눌림 재진입", "D": "낙폭과대 반등"}
 
 

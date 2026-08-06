@@ -32,7 +32,7 @@ _EXCLUDE_TOKENS = ("스팩", "ETF", "ETN", "리츠", "인버스", "레버리지"
 
 MAX_POOL_BARS = 25       # codes we spend daily-bar calls on (~30s at the gate)
 MAX_CANDIDATES = 2       # picks stored per day (recommender bets 1-2 names)
-PRIORITY = ("B", "A", "C", "D")
+PRIORITY = ("B", "A", "R", "C", "D")
 
 
 def _excluded(name: str) -> bool:
@@ -72,8 +72,21 @@ def _classify(bars: list[dict]) -> dict | None:
                         "metrics": {**m, "range_pct": round(day_range * 100, 1)}}
 
     # A — 신고가 돌파: today is the 30d closing high, ret20 ≥ +30%, ≥2× volume.
+    # Stop = the broken closing-high level itself ("돌파 기점 붕괴 시 무효" —
+    # TXR/JW신약 표본). The old today.low*0.95 hit −30% on wide surge days.
+    prev30_high = max(b["high"] for b in bars[-31:-1])
     if today["close"] >= max(closes[:-1]) and ret20 >= 0.30 and vol20 and today["volume"] >= 2 * vol20:
-        return {"pattern": "A", "stop_px": today["low"] * 0.95, "metrics": m}
+        return {"pattern": "A", "stop_px": max(closes[:-1]) * 0.97, "metrics": m}
+
+    # R — 저항대 돌파 (JW신약형): closes above the last-5-day resistance while
+    # still BELOW the 30d high, with a live 20d surge and volume expansion.
+    # The recommender's "돌파" fires here, one step earlier than a fresh high
+    # (validated 2026-08-06: caught JW신약, stop within 1% of his 2,020).
+    prev5_high = max(b["high"] for b in bars[-6:-1])
+    if today["close"] > prev5_high and today["high"] < prev30_high \
+            and ret20 >= 0.15 and vol20 and today["volume"] >= 2 * vol20:
+        return {"pattern": "R", "stop_px": prev5_high * 0.97,
+                "metrics": {**m, "broke_level": prev5_high}}
 
     # C — 급등 눌림 재진입: a ≥+25% surge within ~10 days, now −8~−25% off that
     # peak, today a green reversal bar. Stop = recent pullback low − 4%.
@@ -99,6 +112,16 @@ def _classify(bars: list[dict]) -> dict | None:
     return None
 
 
+def _effective(hit: dict, close: float) -> dict | None:
+    """Floor the structural stop at the −cap the exit engine enforces, so what
+    is stored/alerted equals what actually triggers. A stop at/above the price
+    means the setup is already invalid (broke back below its level) — drop it."""
+    stop = max(hit["stop_px"], close * (1 - settings.live_cafe_stop_cap))
+    if stop >= close:
+        return None
+    return {**hit, "stop_px": stop}
+
+
 def run_screener(trade_date: date | None = None) -> dict:
     """15:05 — scan KIS ranking pools, classify, store today's candidates."""
     from .kis_client import get_kis_client
@@ -119,6 +142,8 @@ def run_screener(trade_date: date | None = None) -> dict:
         scanned += 1
         bars = client.get_daily_bars(code)
         hit = _classify(bars) if bars else None
+        if hit:
+            hit = _effective(hit, bars[-1]["close"])
         if hit:
             matched.append({**hit, "code": code, "name": row["name"],
                             "close": bars[-1]["close"]})
@@ -148,7 +173,7 @@ def run_screener(trade_date: date | None = None) -> dict:
 
 
 _PATTERN_LABELS = {
-    "B": "급등 타이트 눌림", "A": "신고가 돌파",
+    "B": "급등 타이트 눌림", "A": "신고가 돌파", "R": "저항대 돌파",
     "C": "급등 눌림 재진입", "D": "낙폭과대 반등",
 }
 
@@ -177,6 +202,8 @@ def run_scout_scan(slot: str, trade_date: date | None = None) -> dict:
         scanned += 1
         bars = client.get_daily_bars(code)
         hit = _classify(bars) if bars else None
+        if hit:
+            hit = _effective(hit, bars[-1]["close"])
         if hit:
             matched.append({**hit, "code": code, "name": row["name"],
                             "price": bars[-1]["close"]})
