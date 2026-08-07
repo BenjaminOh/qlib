@@ -364,7 +364,8 @@ def submit_surge_orders(trade_date: date | None = None) -> dict:
                        "basis": (f"급등 전야 {c.rank}위 — 추세+눌림 프로파일 "
                                  f"(점수 {c.score})"),
                        "summary": "", "metrics": json.loads(c.metrics_json or "{}"),
-                       "top_features": []}
+                       "top_features": [],
+                       "fill_source": "quote" if q.get("price") else "fallback_scan_price"}
             _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
                                     strategy=STRATEGY_SURGE, reasons=reasons)
             db.query(Order).filter(Order.trade_date == day,
@@ -415,7 +416,8 @@ def submit_cafe_orders(trade_date: date | None = None) -> dict:
                        "basis": (f"카페 모사 — 패턴 {c.pattern}({label}), "
                                  f"손절 {round(c.stop_px):,}원"),
                        "summary": "", "metrics": json.loads(c.metrics_json or "{}"),
-                       "top_features": [], "stop_px": c.stop_px}
+                       "top_features": [], "stop_px": c.stop_px,
+                       "fill_source": "quote" if q.get("price") else "fallback_scan_price"}
             _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
                                     strategy=STRATEGY_CAFE, reasons=reasons)
             # Out-of-universe KOSDAQ codes miss the kr_data name lookup —

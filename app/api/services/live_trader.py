@@ -512,15 +512,19 @@ def submit_daily_orders(today: date | None = None,
         if to_buy:
             per_code_budget = min(cash / max(len(to_buy), 1), slot_budget)
             for code, px in to_buy:
+                fill_source = None
                 if simulated:
                     # px from the signal is the PREVIOUS close (kr_data lags
                     # until 15:45) — fill sim entries at the live quote instead.
-                    px = _sim_fill_price(code) or px
+                    qpx = _sim_fill_price(code)
+                    fill_source = "quote" if qpx else "fallback_prev_close"
+                    px = qpx or px
                 qty = max(int(per_code_budget // px), 0)
                 if qty <= 0:
                     continue
                 buy_why = _buy_reasons(db, today, code, flow=flow_metrics.get(code))
                 if simulated:
+                    buy_why = {**(buy_why or {}), "fill_source": fill_source}
                     _persist_simulated_fill(db, today, code, "BUY", qty, px,
                                             strategy=strategy, reasons=buy_why)
                     submitted += 1
