@@ -492,6 +492,14 @@ export function parseUtc(ts: string): Date {
   return new Date(/Z|[+-]\d{2}:?\d{2}$/.test(ts) ? ts : ts + "Z");
 }
 
+/** Project-wide datetime format: `YYYY-MM-DD HH:MM` in KST. */
+export function fmtDateTime(d: Date): string {
+  const kst = new Date(d.getTime() + 9 * 3600 * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${kst.getUTCFullYear()}-${p(kst.getUTCMonth() + 1)}-${p(kst.getUTCDate())} ` +
+         `${p(kst.getUTCHours())}:${p(kst.getUTCMinutes())}`;
+}
+
 export interface DailyPnLRow {
   trade_date: string;
   strategy: string;

@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { api, BacktestListItem, JobStatus } from "@/lib/api";
+import { api, BacktestListItem, JobStatus, fmtDateTime } from "@/lib/api";
 
 const statusColors: Record<JobStatus, string> = {
   PENDING: "bg-yellow-100 text-yellow-800",
@@ -102,7 +102,7 @@ export default function DashboardPage() {
                     {job.backtest_start} ~ {job.backtest_end}
                   </td>
                   <td className="px-4 py-3 text-gray-500">
-                    {new Date(job.created_at).toLocaleString("ko-KR")}
+                    {fmtDateTime(new Date(job.created_at))}
                   </td>
                 </tr>
               ))}

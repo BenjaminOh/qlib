@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { LiveOrderRow, parseUtc } from "@/lib/api";
+import { LiveOrderRow, fmtDateTime, parseUtc } from "@/lib/api";
 import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
 import TossLink from "@/components/TossLink";
 
@@ -79,17 +79,7 @@ export default function OrdersTable({
             return (
               <tr key={o.id} className="border-t border-gray-100 hover:bg-gray-50">
                 <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
-                  <span className="hidden sm:inline">
-                    {parseUtc(o.submitted_at).toLocaleString("ko-KR", {
-                      hour12: false, timeZone: "Asia/Seoul",
-                    })}
-                  </span>
-                  <span className="sm:hidden">
-                    {parseUtc(o.submitted_at).toLocaleString("ko-KR", {
-                      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-                      hour12: false, timeZone: "Asia/Seoul",
-                    })}
-                  </span>
+                  {fmtDateTime(parseUtc(o.submitted_at))}
                 </td>
                 {showStrategy && (
                   <td className="px-3 py-2 whitespace-nowrap">
