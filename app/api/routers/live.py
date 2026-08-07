@@ -641,10 +641,22 @@ class RetroIC(BaseModel):
     rank_ic: float
 
 
+class SurgeSelectionRow(BaseModel):
+    trade_date: str
+    rank: int
+    code: str
+    name: str | None = None
+    close: float | None = None
+    score: float
+    next_ret_pct: float | None = None
+    hit: bool | None = None
+
+
 class RetroResponse(BaseModel):
     episodes: list[RetroEpisode]
     scoreboard: list[RetroHypothesis]
     daily_ic: list[RetroIC]
+    surge_selection: list[SurgeSelectionRow] | None = None
 
 
 @router.get("/retro", response_model=RetroResponse)

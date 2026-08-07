@@ -14,11 +14,23 @@ const pctCls = (v: number | null | undefined) =>
   v == null ? "text-gray-400" : v >= 0 ? "text-emerald-700" : "text-red-700";
 
 /** 매매 회고 — 에피소드 원장 + 가설 스코어보드 + 신호 IC. */
+const RETRO_TABS: { key: string; label: string }[] = [
+  { key: "open", label: "실계좌 open" },
+  { key: "surge", label: "⚡ 급등" },
+  { key: "cafe", label: "☕ 카페" },
+  { key: "close", label: "종가" },
+  { key: "flow", label: "수급" },
+  { key: "trail", label: "트레일" },
+  { key: "scale", label: "사다리" },
+  { key: "limit", label: "지정가" },
+];
+
 export default function RetroPage() {
   const [open, setOpen] = useState<string | null>(null);
+  const [strategy, setStrategy] = useState("open");
   const { data, isLoading } = useQuery({
-    queryKey: ["retro"],
-    queryFn: () => api.getRetro("open"),
+    queryKey: ["retro", strategy],
+    queryFn: () => api.getRetro(strategy),
     refetchInterval: 300_000,
   });
 
@@ -39,6 +51,23 @@ export default function RetroPage() {
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-bold text-gray-900">🔁 매매 회고</h1>
         <Link href="/live" className="text-blue-600 hover:underline text-sm">← 대시보드</Link>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {RETRO_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setStrategy(t.key)}
+            className={`px-2.5 py-1 rounded-full text-xs border ${
+              strategy === t.key
+                ? "bg-emerald-600 border-emerald-600 text-white"
+                : "bg-white border-gray-200 text-gray-600 hover:border-emerald-400"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {isLoading ? (
@@ -99,7 +128,7 @@ export default function RetroPage() {
 
           {/* Episode ledger */}
           <section className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-lg font-semibold mb-1">에피소드 원장 (실계좌 open)</h2>
+            <h2 className="text-lg font-semibold mb-1">에피소드 원장 ({strategy})</h2>
             <p className="text-xs text-gray-500 mb-3">
               종목을 클릭하면 그 종목의 전체 매매 이력·판단 근거가 펼쳐집니다. 토스↗로 차트 확인.
             </p>
@@ -167,6 +196,56 @@ export default function RetroPage() {
               </table>
             </div>
           </section>
+
+          {/* Surge selection power */}
+          {strategy === "surge" && (data?.surge_selection?.length ?? 0) > 0 && (
+            <section className="bg-white rounded-lg border border-pink-200 p-4">
+              <h2 className="text-lg font-semibold mb-1">⚡ TOP10 선정력 (매수 여부 무관)</h2>
+              <p className="text-xs text-gray-500 mb-3">
+                선정된 10종목 전체의 익일 성과 — 전략 손익과 분리된 &ldquo;선정 자체가 급등을
+                맞추는가&rdquo;의 채점표. 적중 = 익일 +8% 이상.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs sm:text-sm whitespace-nowrap">
+                  <thead className="text-gray-500">
+                    <tr>
+                      <th className="text-left py-1.5 pr-3 font-medium">선정일</th>
+                      <th className="text-left py-1.5 pr-3 font-medium">순위</th>
+                      <th className="text-left py-1.5 pr-3 font-medium">종목</th>
+                      <th className="text-right py-1.5 pr-3 font-medium">점수</th>
+                      <th className="text-right py-1.5 pr-3 font-medium">익일 수익률</th>
+                      <th className="text-left py-1.5 font-medium">적중</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data?.surge_selection ?? []).map((s) => (
+                      <tr key={`${s.trade_date}-${s.code}`} className="border-t border-gray-100">
+                        <td className="py-1.5 pr-3 font-mono text-xs text-gray-500">{s.trade_date}</td>
+                        <td className="py-1.5 pr-3 font-semibold text-pink-700">#{s.rank}</td>
+                        <td className="py-1.5 pr-3">
+                          <span className="text-gray-900">{s.name ?? s.code}</span>
+                          <TossLink code={s.code} className="ml-1.5" />
+                        </td>
+                        <td className="py-1.5 pr-3 text-right font-mono">{s.score.toFixed(1)}</td>
+                        <td className={`py-1.5 pr-3 text-right font-mono ${pctCls(s.next_ret_pct)}`}>
+                          {pct(s.next_ret_pct)}
+                        </td>
+                        <td className="py-1.5">
+                          {s.hit == null ? (
+                            <span className="text-[11px] text-gray-400">라벨 대기</span>
+                          ) : s.hit ? (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[11px] font-medium">🎯 적중</span>
+                          ) : (
+                            <span className="text-[11px] text-gray-400">미달</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
           {/* Daily IC */}
           <section className="bg-white rounded-lg border border-gray-200 p-4">

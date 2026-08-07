@@ -14,7 +14,7 @@ import json
 import logging
 from datetime import date
 
-from ..db import SessionLocal, Order, Signal, init_db
+from ..db import SessionLocal, Order, Signal, SurgePick, init_db
 
 log = logging.getLogger(__name__)
 
@@ -179,8 +179,46 @@ def daily_ic() -> list[dict]:
     return out
 
 
+def surge_selection_review(days: int = 30) -> list[dict]:
+    """Score the WHOLE surge TOP10 (bought or not) against next-day closes.
+
+    Measures the SELECTION's hit power separately from the strategy's PnL:
+    per pick — next-day return and a 'surged ≥+8%' hit label; rows without a
+    next-day bar yet stay labelled pending."""
+    init_db()
+    from datetime import timedelta
+    out: list[dict] = []
+    with SessionLocal() as db:
+        rows = (db.query(SurgePick)
+                  .filter(SurgePick.trade_date >= date.today() - timedelta(days=days))
+                  .order_by(SurgePick.trade_date.desc(), SurgePick.rank.asc())
+                  .all())
+    for r in rows:
+        closes = _close_series(r.code)
+        ds = sorted(closes)
+        key = r.trade_date.isoformat()
+        nxt = next((d for d in ds if d > key), None)
+        base = closes.get(key) or r.close
+        item = {"trade_date": key, "rank": r.rank, "code": r.code,
+                "name": r.name, "close": r.close, "score": r.score,
+                "next_ret_pct": None, "hit": None}
+        if nxt and base:
+            ret = closes[nxt] / base - 1
+            item["next_ret_pct"] = round(ret * 100, 2)
+            item["hit"] = bool(ret >= 0.08)
+        out.append(item)
+    return out
+
+
 def build_retro(strategy: str = "open") -> dict:
     eps = [enrich_episode(e) for e in build_episodes(strategy)]
     eps.sort(key=lambda e: (e.get("exit_date") or "9999", e.get("entry_date") or ""),
              reverse=True)
-    return {"episodes": eps, "scoreboard": scoreboard(eps), "daily_ic": daily_ic()}
+    out = {"episodes": eps, "scoreboard": scoreboard(eps), "daily_ic": daily_ic()}
+    if strategy == "surge":
+        try:
+            out["surge_selection"] = surge_selection_review()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("surge_selection_review failed: %s", exc)
+            out["surge_selection"] = []
+    return out

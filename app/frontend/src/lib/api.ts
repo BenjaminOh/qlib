@@ -426,10 +426,22 @@ export interface RetroIC {
   rank_ic: number;
 }
 
+export interface SurgeSelectionRow {
+  trade_date: string;
+  rank: number;
+  code: string;
+  name: string | null;
+  close: number | null;
+  score: number;
+  next_ret_pct: number | null;
+  hit: boolean | null;
+}
+
 export interface RetroResponse {
   episodes: RetroEpisode[];
   scoreboard: RetroHypothesis[];
   daily_ic: RetroIC[];
+  surge_selection?: SurgeSelectionRow[] | null;
 }
 
 export interface ExitRow {
