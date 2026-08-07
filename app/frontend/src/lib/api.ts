@@ -244,6 +244,8 @@ export const api = {
     ),
   getCafeCandidates: (days = 7) =>
     fetchApi<CafeCandidatesResponse>(`/api/v1/live/cafe/candidates?days=${days}`),
+  getSurgePicks: (days = 7) =>
+    fetchApi<SurgePicksResponse>(`/api/v1/live/surge/picks?days=${days}`),
   getRetro: (strategy = "open") =>
     fetchApi<RetroResponse>(`/api/v1/live/retro?strategy=${strategy}`),
   getLiveDailyPnL: (days = 180) =>
@@ -374,6 +376,20 @@ export interface CafeCandidateRow {
 
 export interface CafeCandidatesResponse {
   candidates: CafeCandidateRow[];
+}
+
+export interface SurgePickRow {
+  trade_date: string;
+  rank: number;
+  code: string;
+  name: string | null;
+  close: number | null;
+  score: number;
+  bought: boolean;
+}
+
+export interface SurgePicksResponse {
+  picks: SurgePickRow[];
 }
 
 export interface RetroEpisode {

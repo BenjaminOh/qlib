@@ -138,6 +138,20 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders_cafe",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
+    # surge strategy: surge-eve profile TOP10 (reads the pool snapshots the
+    # 15:05 screen just stored — no extra KIS calls), sim-buys the top 2.
+    "surge-screen": {
+        "task": "surge_screen",
+        "schedule": crontab(hour=15, minute=12, day_of_week="mon-fri"),
+    },
+    "live-orders-at-close-surge": {
+        "task": "live_orders_surge",
+        "schedule": crontab(hour=15, minute=29, day_of_week="mon-fri"),
+    },
+    "live-sync-surge-after-close": {
+        "task": "live_sync_surge",
+        "schedule": crontab(hour=15, minute=47, day_of_week="mon-fri"),
+    },
     "live-sync-cafe-after-close": {
         "task": "live_sync_cafe",
         "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),

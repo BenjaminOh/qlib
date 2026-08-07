@@ -32,6 +32,7 @@ STRATEGY_TRAIL = "trail"
 STRATEGY_SCALE = "scale"
 STRATEGY_LIMIT = "limit"
 STRATEGY_CAFE = "cafe"
+STRATEGY_SURGE = "surge"
 
 
 class User(Base):
@@ -169,11 +170,34 @@ class MarketPoolSnapshot(Base):
     pos_vs_5d_high = Column(Float, nullable=True)
     off_30d_high = Column(Float, nullable=True)
     green = Column(Integer, nullable=True)
+    ma20_gap = Column(Float, nullable=True)
     matched_pattern = Column(String(2), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("trade_date", "code", name="uq_pool_snapshot_date_code"),
+    )
+
+
+class SurgePick(Base):
+    """Daily surge-eve TOP10 — the mined profile scored over the 15:05 pool.
+
+    Selection reads market_pool_snapshots (no extra KIS calls); the surge sim
+    strategy buys the top 2 at 15:29. Research-born, simulation-only."""
+    __tablename__ = "surge_picks"
+
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    rank = Column(Integer, nullable=False)
+    code = Column(String(8), nullable=False)
+    name = Column(String(64), nullable=True)
+    close = Column(Float, nullable=True)
+    score = Column(Float, nullable=False)
+    metrics_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "code", name="uq_surge_pick_date_code"),
     )
 
 

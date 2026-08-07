@@ -23,7 +23,7 @@ from datetime import date
 
 from ..config import settings
 from ..db import (CafeCandidate, CafeScout, MarketPoolSnapshot, Order,
-                  SessionLocal, STRATEGY_CAFE, init_db)
+                  SessionLocal, STRATEGY_CAFE, STRATEGY_SURGE, SurgePick, init_db)
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +123,7 @@ def _eve_features(bars: list[dict]) -> dict:
     vol20 = sum(vols[-21:-1]) / 20 if len(vols) >= 21 else 0
     prev5_high = max(b["high"] for b in bars[-6:-1]) if len(bars) >= 6 else None
     prev30_high = max(b["high"] for b in bars[-31:-1]) if len(bars) >= 6 else None
+    ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
     return {
         "close": today["close"],
         "ret5": round(today["close"] / closes[-6] - 1, 4) if len(closes) >= 6 else None,
@@ -131,6 +132,7 @@ def _eve_features(bars: list[dict]) -> dict:
         "pos_vs_5d_high": round(today["close"] / prev5_high - 1, 4) if prev5_high else None,
         "off_30d_high": round(today["close"] / prev30_high - 1, 4) if prev30_high else None,
         "green": int(today["close"] > today["open"]),
+        "ma20_gap": round(today["close"] / ma20 - 1, 4) if ma20 else None,
     }
 
 
@@ -207,6 +209,7 @@ def run_screener(trade_date: date | None = None) -> dict:
                 close=s["close"], ret5=s["ret5"], ret20=s["ret20"],
                 vol_x=s["vol_x"], pos_vs_5d_high=s["pos_vs_5d_high"],
                 off_30d_high=s["off_30d_high"], green=s["green"],
+                ma20_gap=s.get("ma20_gap"),
                 matched_pattern=s["pattern"]))
         db.commit()
     return {"status": "ok", "trade_date": day.isoformat(), "pool": len(pool),
@@ -271,6 +274,109 @@ def run_scout_scan(slot: str, trade_date: date | None = None) -> dict:
             "pool": len(pool), "scanned": scanned, "matched": len(matched),
             "picks": [{"code": c["code"], "name": c["name"],
                        "pattern": c["pattern"], "price": c["price"]} for c in picks]}
+
+
+def surge_score(s) -> float | None:
+    """Transparent scoring of the mined surge-eve profile (2026-08-07 study):
+    strongest odds tomorrow = already trending (+ret20), pulled −3~−15% off
+    the 5d high (sweet spot ≈ −6.5%), above MA20, volume already expanded.
+    Returns None when the row fails the profile's hard gates."""
+    if s.ret20 is None or s.pos_vs_5d_high is None:
+        return None
+    pull = s.pos_vs_5d_high * 100
+    if s.ret20 < 0.05 or pull > -1 or pull < -15:
+        return None
+    score = s.ret20 * 100
+    score += 10 - abs(pull + 6.5)
+    score += min(s.vol_x or 0, 5) * 2
+    score += 5 if (s.ma20_gap or 0) > 0 else -5
+    return round(score, 2)
+
+
+def run_surge_screen(trade_date: date | None = None) -> dict:
+    """15:12 — score today's pool snapshots with the surge-eve profile and
+    store the TOP10. Reads market_pool_snapshots only (zero extra KIS calls)."""
+    init_db()
+    day = trade_date or date.today()
+    with SessionLocal() as db:
+        snaps = (db.query(MarketPoolSnapshot)
+                   .filter(MarketPoolSnapshot.trade_date == day)
+                   .all())
+        scored = []
+        for s in snaps:
+            sc = surge_score(s)
+            if sc is not None:
+                scored.append((sc, s))
+        scored.sort(key=lambda x: -x[0])
+        picks = scored[:10]
+        for i, (sc, s) in enumerate(picks, start=1):
+            exists = (db.query(SurgePick)
+                        .filter(SurgePick.trade_date == day, SurgePick.code == s.code)
+                        .first())
+            if exists:
+                continue
+            db.add(SurgePick(
+                trade_date=day, rank=i, code=s.code, name=s.name,
+                close=s.close, score=sc,
+                metrics_json=json.dumps({
+                    "ret20": s.ret20, "pos_vs_5d_high": s.pos_vs_5d_high,
+                    "vol_x": s.vol_x, "ma20_gap": s.ma20_gap}, ensure_ascii=False)))
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(),
+            "pool": len(snaps), "matched": len(scored),
+            "picks": [{"rank": i + 1, "code": s.code, "name": s.name,
+                       "close": s.close, "score": sc}
+                      for i, (sc, s) in enumerate(picks)]}
+
+
+def submit_surge_orders(trade_date: date | None = None) -> dict:
+    """15:29 — sim-buy today's top surge picks at the live KIS quote."""
+    from .kis_client import get_kis_client
+    from .live_trader import _persist_simulated_fill, _simulated_balance
+    init_db()
+    day = trade_date or date.today()
+    client = get_kis_client()
+    seed_slots = max(settings.live_surge_slots, 1)
+    bought: list[dict] = []
+    with SessionLocal() as db:
+        cands = (db.query(SurgePick)
+                   .filter(SurgePick.trade_date == day)
+                   .order_by(SurgePick.rank.asc())
+                   .all())
+        if not cands:
+            return {"status": "no_candidates", "trade_date": day.isoformat()}
+        snapshot = _simulated_balance(db, strategy=STRATEGY_SURGE)
+        held = {h.code for h in snapshot.holdings}
+        slot_budget = max(snapshot.total_eval, snapshot.cash) / seed_slots
+        cash = snapshot.cash
+        for c in cands:
+            if c.code in held or len(bought) >= settings.live_surge_max_buys:
+                continue
+            q = client.get_quote(c.code)
+            px = q.get("price") or c.close
+            if not px or px <= 0 or q.get("halted"):
+                continue
+            budget = min(cash, slot_budget)
+            qty = int(budget // px)
+            if qty <= 0:
+                continue
+            reasons = {"action": "buy",
+                       "basis": (f"급등 전야 {c.rank}위 — 추세+눌림 프로파일 "
+                                 f"(점수 {c.score})"),
+                       "summary": "", "metrics": json.loads(c.metrics_json or "{}"),
+                       "top_features": []}
+            _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
+                                    strategy=STRATEGY_SURGE, reasons=reasons)
+            db.query(Order).filter(Order.trade_date == day,
+                                   Order.code == c.code,
+                                   Order.strategy == STRATEGY_SURGE,
+                                   Order.name.in_((None, c.code))).update(
+                {"name": c.name}, synchronize_session=False)
+            cash -= qty * px
+            bought.append({"code": c.code, "name": c.name, "rank": c.rank,
+                           "qty": qty, "price": px})
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(), "buys": bought}
 
 
 def submit_cafe_orders(trade_date: date | None = None) -> dict:

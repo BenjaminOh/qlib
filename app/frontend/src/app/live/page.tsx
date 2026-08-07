@@ -10,6 +10,7 @@ import StockCurvesChart from "@/components/StockCurvesChart";
 import HoldingsTable from "@/components/HoldingsTable";
 import OrdersTable from "@/components/OrdersTable";
 import CafeCandidates from "@/components/CafeCandidates";
+import SurgePicks from "@/components/SurgePicks";
 import SignalPicksTable from "@/components/SignalPicksTable";
 import ExitsTable from "@/components/ExitsTable";
 
@@ -174,6 +175,7 @@ export default function LiveDashboardPage() {
                 <p>• <strong>limit</strong> — 매수부터 다름: 후보 5종목에 <strong>전일 종가 −3%
                   지정가 예약</strong>, 당일 저가가 닿은 것만 랭크순 최대 2개 체결(미체결 당일 취소),
                   익절 +10% (예약 매도 모델)</p>
+                <p>• <strong>surge</strong> — 급등 전야 프로파일(추세+눌림+거래량) 상위 2종목 매수, 청산은 close와 동일 브래킷</p>
                 <p>• <strong>cafe</strong> — 종목 선정부터 다름: 카페 추천자 역설계 스크리너가
                   15:05 전 시장을 스캔(급등 눌림·신고가 돌파·재진입·낙폭 반등 4패턴), 상위 1~2종목을
                   15:28 종가 매수. 손절은 패턴별 <strong>구조적 손절선</strong>(캡 −15%), 익절 +10%</p>
@@ -250,6 +252,9 @@ export default function LiveDashboardPage() {
 
       {/* Cafe screener candidates */}
       <CafeCandidates />
+
+      {/* Surge-eve picks */}
+      <SurgePicks />
 
       {/* Recent orders */}
       <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">

@@ -225,6 +225,41 @@ def cafe_scout_task(self, slot: str) -> dict:
     return result
 
 
+@celery_app.task(
+    bind=True,
+    name="surge_screen",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=1,
+)
+def surge_screen_task(self) -> dict:
+    """15:12 KST — score today's pool snapshots with the surge-eve profile,
+    store the TOP10 (reads DB only — no KIS calls)."""
+    from ..services.market_screener import run_surge_screen
+    from ..services.notify import notify_surge_picks
+    self.update_state(state="RUNNING")
+    result = run_surge_screen()
+    notify_surge_picks(result)
+    return result
+
+
+@celery_app.task(bind=True, name="live_orders_surge")
+def live_orders_surge_task(self) -> dict:
+    """15:29 KST — surge strategy: sim-buy today's top surge picks."""
+    from ..services.market_screener import submit_surge_orders
+    self.update_state(state="RUNNING")
+    return submit_surge_orders()
+
+
+@celery_app.task(bind=True, name="live_sync_surge")
+def live_sync_surge_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="surge")
+
+
 @celery_app.task(bind=True, name="live_orders_cafe")
 def live_orders_cafe_task(self) -> dict:
     """15:28 KST — cafe strategy: sim-buy today's top candidates at the

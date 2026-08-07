@@ -269,6 +269,23 @@ def notify_scout(result: dict, *, slot_label: str, final: bool = False) -> None:
     send_telegram("\n".join(lines))
 
 
+def notify_surge_picks(result: dict) -> None:
+    """15:12 — surge-eve TOP10 (연구 프로파일 점수순, 상위 2 시뮬 매수 예고)."""
+    if not telegram_enabled() or result.get("status") != "ok":
+        return
+    picks = result.get("picks") or []
+    lines = [f"⚡ <b>급등 전야 후보 TOP10</b> ({result.get('trade_date', '')})", ""]
+    if not picks:
+        lines.append(f"프로파일 통과 종목 없음 (풀 {result.get('pool', 0)}종목)")
+    for p in picks:
+        lines.append(f"{p['rank']}) {_toss(p['code'], p.get('name'))} · "
+                     f"{_won(p.get('close'))}원 · {p['score']}점")
+    lines.append("")
+    lines.append("추세+눌림+거래량 프로파일(3.5년 2,356건 학습) 점수순 — "
+                 f"상위 {min(len(picks), 2)}종목을 15:29에 시뮬 매수합니다.")
+    send_telegram("\n".join(lines))
+
+
 def notify_signal(result: dict) -> None:
     """Evening — next-day recommended picks: 종목·종가·종합점수 한 줄씩.
 

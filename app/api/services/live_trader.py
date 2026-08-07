@@ -30,7 +30,8 @@ from ..core import kr_universes
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
-    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE, init_db,
+    STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
+    STRATEGY_SURGE, init_db,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
@@ -49,6 +50,7 @@ def _seed_for(strategy: str) -> float:
         STRATEGY_SCALE: settings.live_seed_cash_scale,
         STRATEGY_LIMIT: settings.live_seed_cash_limit,
         STRATEGY_CAFE: settings.live_seed_cash_cafe,
+        STRATEGY_SURGE: settings.live_seed_cash_surge,
     }
     return seeds.get(strategy, settings.live_seed_cash_open)
 
@@ -61,7 +63,8 @@ def _seed_for(strategy: str) -> float:
 #   scale      : TP +7% sells HALF, remainder rides the −7% trail
 #   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
-                      STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE)
+                      STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
+                      STRATEGY_SURGE)
 
 EXIT_RULES: dict[str, dict] = {
     STRATEGY_CLOSE: {"tp": 0.10},
@@ -77,6 +80,10 @@ EXIT_RULES: dict[str, dict] = {
     # cafe: TP +10%; the stop is the screener's STRUCTURAL level stored on
     # the entry order (reasons_json.stop_px), capped at −live_cafe_stop_cap.
     STRATEGY_CAFE:  {"tp": 0.10, "stop_source": "entry"},
+    # surge: entry rule is the mined surge-eve profile; exits stay the
+    # STANDARD bracket (TP +10% / prev-low stop) so the curve isolates
+    # the entry idea with no other variable.
+    STRATEGY_SURGE: {"tp": 0.10},
 }
 
 

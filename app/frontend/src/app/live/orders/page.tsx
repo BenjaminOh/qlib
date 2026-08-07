@@ -18,6 +18,7 @@ const STRATEGY_TABS: { key: string; label: string }[] = [
   { key: "scale", label: "사다리" },
   { key: "limit", label: "지정가" },
   { key: "cafe", label: "☕ 카페" },
+  { key: "surge", label: "⚡ 급등" },
 ];
 
 type View = "all" | "real" | "sim";

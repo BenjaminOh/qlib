@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     live_cafe_slots: int = 4
     live_cafe_max_buys: int = 2
     live_cafe_stop_cap: float = 0.15
+    live_seed_cash_surge: float = 10_000_000.0
+    live_surge_slots: int = 4
+    live_surge_max_buys: int = 2
 
     # Telegram trade alerts (existing 'trading' BotFather bot +
     # 시스템트레이딩알림 group). Empty = notifications disabled.

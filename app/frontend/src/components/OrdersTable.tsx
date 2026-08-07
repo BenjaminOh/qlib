@@ -34,7 +34,7 @@ const STATUS_TITLES: Record<string, string> = {
 
 const STRATEGY_SHORT: Record<string, string> = {
   open: "실계좌", close: "종가", flow: "수급", trail: "트레일",
-  scale: "사다리", limit: "지정가", cafe: "카페",
+  scale: "사다리", limit: "지정가", cafe: "카페", surge: "급등",
 };
 
 export default function OrdersTable({

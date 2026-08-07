@@ -655,6 +655,42 @@ def get_retro(strategy: str = Query("open")):
     return RetroResponse(**build_retro(strategy))
 
 
+class SurgePickRow(BaseModel):
+    trade_date: date
+    rank: int
+    code: str
+    name: str | None = None
+    close: float | None = None
+    score: float
+    bought: bool = False
+
+
+class SurgePicksResponse(BaseModel):
+    picks: list[SurgePickRow]
+
+
+@router.get("/surge/picks", response_model=SurgePicksResponse)
+def get_surge_picks(days: int = Query(7, ge=1, le=60)):
+    """Recent surge-eve TOP10 picks + whether the 15:29 sim bought them."""
+    from ..db import SurgePick
+    init_db()
+    cutoff = date.today() - timedelta(days=days)
+    with SessionLocal() as db:
+        rows = (db.query(SurgePick)
+                  .filter(SurgePick.trade_date >= cutoff)
+                  .order_by(desc(SurgePick.trade_date), SurgePick.rank.asc())
+                  .all())
+        bought = {(o.trade_date, o.code) for o in
+                  db.query(Order).filter(Order.strategy == "surge",
+                                         Order.side == "BUY",
+                                         Order.trade_date >= cutoff).all()}
+        return SurgePicksResponse(picks=[SurgePickRow(
+            trade_date=r.trade_date, rank=r.rank, code=r.code, name=r.name,
+            close=r.close, score=r.score,
+            bought=(r.trade_date, r.code) in bought,
+        ) for r in rows])
+
+
 class CafeCandidatesResponse(BaseModel):
     candidates: list[CafeCandidateRow]
 
@@ -703,6 +739,7 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                 "scale": settings.live_seed_cash_scale,
                 "limit": settings.live_seed_cash_limit,
                 "cafe": settings.live_seed_cash_cafe,
+                "surge": settings.live_seed_cash_surge,
             },
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,
