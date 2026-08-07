@@ -90,6 +90,9 @@ export default function LiveDashboardPage() {
           )}
         </div>
         <div className="space-x-4 text-sm">
+          <Link href="/live/retro" className="text-blue-600 hover:underline">
+            🔁 매매 회고
+          </Link>
           <Link href="/live/orders" className="text-blue-600 hover:underline">
             전체 주문 →
           </Link>

@@ -15,7 +15,7 @@ const fmtKRW = (v: number) => {
 };
 const fmtPct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
-function TradeHistory({ code }: { code: string }) {
+export function TradeHistory({ code }: { code: string }) {
   const [detail, setDetail] = useState<number | null>(null);
   const trades = useQuery({
     queryKey: ["stock-trades", code],

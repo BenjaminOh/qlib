@@ -244,6 +244,8 @@ export const api = {
     ),
   getCafeCandidates: (days = 7) =>
     fetchApi<CafeCandidatesResponse>(`/api/v1/live/cafe/candidates?days=${days}`),
+  getRetro: (strategy = "open") =>
+    fetchApi<RetroResponse>(`/api/v1/live/retro?strategy=${strategy}`),
   getLiveDailyPnL: (days = 180) =>
     fetchApi<DailyPnLResponse>(`/api/v1/live/pnl/daily?days=${days}`),
   getLivePositionHistory: (limit = 60) =>
@@ -372,6 +374,46 @@ export interface CafeCandidateRow {
 
 export interface CafeCandidatesResponse {
   candidates: CafeCandidateRow[];
+}
+
+export interface RetroEpisode {
+  code: string;
+  name: string | null;
+  strategy: string;
+  entry_date: string | null;
+  exit_date: string | null;
+  avg: number;
+  exit_px: number | null;
+  qty: number;
+  ret_pct: number | null;
+  unreal_pct: number | null;
+  max_unreal_pct: number | null;
+  give_back_pp: number | null;
+  post5_drift_pct: number | null;
+  hold_days: number | null;
+  entry_metrics: Record<string, number | null | undefined>;
+  entry_basis: string;
+}
+
+export interface RetroHypothesis {
+  key: string;
+  label: string;
+  evidence: string;
+  support: number;
+  refute: number;
+  threshold: string;
+}
+
+export interface RetroIC {
+  as_of: string;
+  n: number;
+  rank_ic: number;
+}
+
+export interface RetroResponse {
+  episodes: RetroEpisode[];
+  scoreboard: RetroHypothesis[];
+  daily_ic: RetroIC[];
 }
 
 export interface ExitRow {

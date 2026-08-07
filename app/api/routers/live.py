@@ -607,6 +607,54 @@ class CafeCandidateRow(BaseModel):
     bought: bool = False
 
 
+class RetroEpisode(BaseModel):
+    code: str
+    name: str | None = None
+    strategy: str
+    entry_date: str | None = None
+    exit_date: str | None = None
+    avg: float
+    exit_px: float | None = None
+    qty: int
+    ret_pct: float | None = None
+    unreal_pct: float | None = None
+    max_unreal_pct: float | None = None
+    give_back_pp: float | None = None
+    post5_drift_pct: float | None = None
+    hold_days: int | None = None
+    entry_metrics: dict = {}
+    entry_basis: str = ""
+
+
+class RetroHypothesis(BaseModel):
+    key: str
+    label: str
+    evidence: str
+    support: int
+    refute: int
+    threshold: str
+
+
+class RetroIC(BaseModel):
+    as_of: str
+    n: int
+    rank_ic: float
+
+
+class RetroResponse(BaseModel):
+    episodes: list[RetroEpisode]
+    scoreboard: list[RetroHypothesis]
+    daily_ic: list[RetroIC]
+
+
+@router.get("/retro", response_model=RetroResponse)
+def get_retro(strategy: str = Query("open")):
+    """Trade retrospective — closed episodes joined with entry evidence and
+    outcomes, hypothesis scoreboard, and the signal's daily rank-IC."""
+    from ..services.retrospective import build_retro
+    return RetroResponse(**build_retro(strategy))
+
+
 class CafeCandidatesResponse(BaseModel):
     candidates: list[CafeCandidateRow]
 
