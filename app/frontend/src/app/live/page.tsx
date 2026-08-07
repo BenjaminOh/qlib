@@ -221,7 +221,7 @@ export default function LiveDashboardPage() {
           <p className="text-xs text-gray-500 mb-3">
             신호 top-10 이탈 등으로 전량 매도되어 보유 목록에서 빠진 종목 — 매도 사유와
             확정 손익입니다. (* = 시장가 매도라 당일 시가 기준 추정) ·{" "}
-            <a href="/guide/strategy" className="text-blue-600 underline">매도 기준 설명 →</a>
+            <a href="/guide#strategies" className="text-blue-600 underline">매도 기준 설명 →</a>
           </p>
           <ExitsTable exits={exits.data || []} />
         </section>
@@ -245,7 +245,7 @@ export default function LiveDashboardPage() {
         )}
         <p className="text-[11px] text-emerald-800/60 mt-2">
           행을 클릭하면 모델이 그 종목 점수에 반영한 상위 지표(기여도)를 볼 수 있습니다.
-          어떤 기준으로 매수가 결정되는지는 <a href="/guide/strategy" className="underline font-medium">전략 설명서</a>,
+          어떤 기준으로 매수가 결정되는지는 <a href="/guide#strategies" className="underline font-medium">전략 설명서</a>,
           일일 스케줄·방법론은 <a href="/guide" className="underline">가이드</a> 참고.
         </p>
       </section>
