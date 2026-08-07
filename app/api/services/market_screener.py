@@ -22,7 +22,8 @@ import logging
 from datetime import date
 
 from ..config import settings
-from ..db import CafeCandidate, CafeScout, Order, SessionLocal, STRATEGY_CAFE, init_db
+from ..db import (CafeCandidate, CafeScout, MarketPoolSnapshot, Order,
+                  SessionLocal, STRATEGY_CAFE, init_db)
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +113,27 @@ def _classify(bars: list[dict]) -> dict | None:
     return None
 
 
+def _eve_features(bars: list[dict]) -> dict:
+    """Close-time features for the surge-eve research (Track 2) — mirrors
+    scripts/mine_surge_eve.py so the forward small-cap data joins the
+    universe backtest table."""
+    today = bars[-1]
+    closes = [b["close"] for b in bars]
+    vols = [b["volume"] for b in bars]
+    vol20 = sum(vols[-21:-1]) / 20 if len(vols) >= 21 else 0
+    prev5_high = max(b["high"] for b in bars[-6:-1]) if len(bars) >= 6 else None
+    prev30_high = max(b["high"] for b in bars[-31:-1]) if len(bars) >= 6 else None
+    return {
+        "close": today["close"],
+        "ret5": round(today["close"] / closes[-6] - 1, 4) if len(closes) >= 6 else None,
+        "ret20": round(today["close"] / closes[-21] - 1, 4) if len(closes) >= 21 else None,
+        "vol_x": round(today["volume"] / vol20, 2) if vol20 else None,
+        "pos_vs_5d_high": round(today["close"] / prev5_high - 1, 4) if prev5_high else None,
+        "off_30d_high": round(today["close"] / prev30_high - 1, 4) if prev30_high else None,
+        "green": int(today["close"] > today["open"]),
+    }
+
+
 def _effective(hit: dict, close: float) -> dict | None:
     """Floor the structural stop at the −cap the exit engine enforces, so what
     is stored/alerted equals what actually triggers. A stop at/above the price
@@ -138,15 +160,22 @@ def run_screener(trade_date: date | None = None) -> dict:
     # Rate-gated daily-bar fetches — cap the spend.
     matched: list[dict] = []
     scanned = 0
+    pool_snaps: list[dict] = []
     for code, row in list(pool.items())[:MAX_POOL_BARS]:
         scanned += 1
         bars = client.get_daily_bars(code)
-        hit = _classify(bars) if bars else None
+        if not bars:
+            continue
+        hit = _classify(bars)
         if hit:
             hit = _effective(hit, bars[-1]["close"])
         if hit:
             matched.append({**hit, "code": code, "name": row["name"],
                             "close": bars[-1]["close"]})
+        if len(bars) >= 6:
+            pool_snaps.append({"code": code, "name": row["name"],
+                               "pattern": hit["pattern"] if hit else None,
+                               **_eve_features(bars)})
 
     matched.sort(key=lambda c: PRIORITY.index(c["pattern"]))
     picks = matched[:MAX_CANDIDATES]
@@ -164,6 +193,21 @@ def run_screener(trade_date: date | None = None) -> dict:
                 pattern=c["pattern"], rank=i, close=c["close"],
                 stop_px=round(c["stop_px"], 2),
                 metrics_json=json.dumps(c["metrics"], ensure_ascii=False)))
+        # Track 2 (surge-eve research): snapshot the WHOLE scanned pool —
+        # next-day labels are joined at analysis time, nothing trades on this.
+        for s in pool_snaps:
+            exists = (db.query(MarketPoolSnapshot)
+                        .filter(MarketPoolSnapshot.trade_date == day,
+                                MarketPoolSnapshot.code == s["code"])
+                        .first())
+            if exists:
+                continue
+            db.add(MarketPoolSnapshot(
+                trade_date=day, code=s["code"], name=s["name"],
+                close=s["close"], ret5=s["ret5"], ret20=s["ret20"],
+                vol_x=s["vol_x"], pos_vs_5d_high=s["pos_vs_5d_high"],
+                off_30d_high=s["off_30d_high"], green=s["green"],
+                matched_pattern=s["pattern"]))
         db.commit()
     return {"status": "ok", "trade_date": day.isoformat(), "pool": len(pool),
             "scanned": scanned, "matched": len(matched),

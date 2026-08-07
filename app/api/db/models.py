@@ -148,6 +148,35 @@ class CafeScout(Base):
     )
 
 
+class MarketPoolSnapshot(Base):
+    """Daily close-time feature snapshot of the whole 15:05 ranking pool.
+
+    Surge-eve research Track 2 (2026-08-07): every scanned code — matched or
+    not, incl. out-of-universe small caps — gets its eve features stored so
+    "what did tomorrow's surgers look like today?" can be answered for the
+    full market. Next-day labels are joined at analysis time from KIS bars;
+    NOTHING trades on this table."""
+    __tablename__ = "market_pool_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    code = Column(String(8), nullable=False)
+    name = Column(String(64), nullable=True)
+    close = Column(Float, nullable=True)
+    ret5 = Column(Float, nullable=True)
+    ret20 = Column(Float, nullable=True)
+    vol_x = Column(Float, nullable=True)
+    pos_vs_5d_high = Column(Float, nullable=True)
+    off_30d_high = Column(Float, nullable=True)
+    green = Column(Integer, nullable=True)
+    matched_pattern = Column(String(2), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "code", name="uq_pool_snapshot_date_code"),
+    )
+
+
 class Order(Base):
     """One outbound order attempt (real KIS for 'open', simulated otherwise)."""
     __tablename__ = "orders"
