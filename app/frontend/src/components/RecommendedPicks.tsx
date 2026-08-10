@@ -1,5 +1,5 @@
 import { RecommendedPick } from "@/lib/api";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 export default function RecommendedPicks({
   picks,
@@ -50,7 +50,7 @@ export default function RecommendedPicks({
                   {p.score == null ? "—" : p.score.toFixed(6)}
                 </td>
                 <td className="px-3 py-2">
-                  <TossLink code={p.code} />
+                  <ChartLink code={p.code} />
                 </td>
               </tr>
             ))}

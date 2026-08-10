@@ -236,7 +236,7 @@ export default function GuidePage() {
               <tr><th className="px-3 py-2 text-left border-b">시각</th><th className="px-3 py-2 text-left border-b">알림</th><th className="px-3 py-2 text-left border-b">내용</th></tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5">🌅 아침 주문</td><td className="px-3 py-1.5">종목별 매수/매도·수량·상태·사유 (토스 링크)</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5">🌅 아침 주문</td><td className="px-3 py-1.5">종목별 매수/매도·수량·상태·사유 (차트 링크)</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:20</td><td className="px-3 py-1.5">✅ 체결 확정</td><td className="px-3 py-1.5">실체결가·총액·매도 실현손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">14:30·15:00</td><td className="px-3 py-1.5">🔭 정찰</td><td className="px-3 py-1.5">카페 규칙 후보 미리보기 (관측 전용)</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:05</td><td className="px-3 py-1.5">☕ 정규 스크린</td><td className="px-3 py-1.5">확정 후보 + 실효 손절가 + 매수 예고</td></tr>
@@ -247,7 +247,7 @@ export default function GuidePage() {
           </table>
         </div>
         <p className="text-xs text-gray-400 mt-3">
-          모든 알림의 종목명은 토스증권 차트 링크입니다. 대시보드: <a href="/live" className="text-blue-600 underline">/live</a> ·
+          모든 알림의 종목명은 트레이딩뷰 차트 링크입니다. 대시보드: <a href="/live" className="text-blue-600 underline">/live</a> ·
           회고: <a href="/live/retro" className="text-blue-600 underline">/live/retro</a> ·
           주문 이력: <a href="/live/orders" className="text-blue-600 underline">/live/orders</a>
         </p>

@@ -97,12 +97,12 @@ def _order_basis(order) -> str | None:
     return text[:140] or None
 
 
-def _toss(code: str, name: str | None = None, bold: bool = False) -> str:
-    """Stock name as a Toss Securities chart link (opens the app on mobile)."""
+def _chart(code: str, name: str | None = None, bold: bool = False) -> str:
+    """Stock name as a TradingView chart link (KRX:code, KOSPI+KOSDAQ)."""
     label = _esc(name or code)
     if bold:
         label = f"<b>{label}</b>"
-    return f'<a href="https://tossinvest.com/stocks/A{code}">{label}</a>'
+    return f'<a href="https://kr.tradingview.com/chart/?symbol=KRX%3A{code}">{label}</a>'
 
 
 def _side_tag(side: str) -> str:
@@ -140,7 +140,7 @@ def notify_open_orders(result: dict) -> None:
             if o.price:
                 detail += f" @ {_won(o.price)}원"
             block = [_DIV, "",
-                     f"{_side_tag(o.side)} · {_toss(o.code, o.name, bold=True)} ({o.code})",
+                     f"{_side_tag(o.side)} · {_chart(o.code, o.name, bold=True)} ({o.code})",
                      "",
                      detail,
                      f"📌 상태: {status}"]
@@ -185,7 +185,7 @@ def notify_bracket_exits(strategy: str, result: dict) -> None:
         icon = "💰" if realised >= 0 else "💸"
         lines.extend([
             _DIV, "",
-            f"{icon} {_toss(e['code'], e.get('name'), bold=True)} ({e['code']}) — {e['kind']}",
+            f"{icon} {_chart(e['code'], e.get('name'), bold=True)} ({e['code']}) — {e['kind']}",
             "",
             f"📊 매도 {e['qty']:,}주 @ {_won(e['price'])}원",
             f"💵 실현손익: {sign}{_won(realised)}원",
@@ -220,7 +220,7 @@ def notify_reconcile(summary: dict) -> None:
         for o, f in rows:
             total = round((f.price or 0) * f.qty)
             lines.extend([
-                f"{_side_tag(o.side)} {_toss(o.code, o.name, bold=True)}",
+                f"{_side_tag(o.side)} {_chart(o.code, o.name, bold=True)}",
                 f"💵 {f.qty:,}주 @ {_won(f.price)}원 = {total:,}원",
             ])
             if o.side == "SELL" and f.pnl is not None:
@@ -256,7 +256,7 @@ def notify_scout(result: dict, *, slot_label: str, final: bool = False) -> None:
     for i, p in enumerate(picks, start=1):
         label = _SCOUT_PATTERNS.get(p.get("pattern"), p.get("pattern", ""))
         px = p.get("price") or p.get("close")
-        line = (f"{i}) {_toss(p.get('code', ''), p.get('name'))} · "
+        line = (f"{i}) {_chart(p.get('code', ''), p.get('name'))} · "
                 f"{p.get('pattern')} {label} · {_won(px)}원")
         if final and p.get("stop_px") is not None:
             line += f" · 손절 {_won(p['stop_px'])}원"
@@ -278,7 +278,7 @@ def notify_surge_picks(result: dict) -> None:
     if not picks:
         lines.append(f"프로파일 통과 종목 없음 (풀 {result.get('pool', 0)}종목)")
     for p in picks:
-        lines.append(f"{p['rank']}) {_toss(p['code'], p.get('name'))} · "
+        lines.append(f"{p['rank']}) {_chart(p['code'], p.get('name'))} · "
                      f"{_won(p.get('close'))}원 · {p['score']}점")
     lines.append("")
     lines.append("추세+눌림+거래량 프로파일(3.5년 2,356건 학습) 점수순 — "
@@ -337,7 +337,7 @@ def notify_signal(result: dict) -> None:
                 tag = "—"
             px = _last_close(s.code)
             px_txt = f"{round(px):,}원" if px else "—"
-            lines.append(f"{s.rank}) {_toss(s.code, s.name)} · {px_txt} · {tag}")
+            lines.append(f"{s.rank}) {_chart(s.code, s.name)} · {px_txt} · {tag}")
         n_dup = sum(1 for s in rows if s.score in dup)
         if n_dup:
             lines.extend(["", f"⚠️ 동점 {n_dup}종목 — 해당 순위는 모델 변별력 없음"])

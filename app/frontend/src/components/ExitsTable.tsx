@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, ExitRow, StockTrade } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 /** Full buy→sell timeline for an exited stock (same data as holdings drill-down). */
 function ExitTimeline({ code }: { code: string }) {
@@ -64,7 +64,7 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
                 <span className="text-sm font-medium text-gray-900 truncate">
                   {e.name ?? e.code}
                   <span className="font-mono text-[11px] text-gray-400 ml-1.5">({e.code})</span>
-                  <TossLink code={e.code} className="ml-1.5" />
+                  <ChartLink code={e.code} className="ml-1.5" />
                 </span>
                 <span className="font-mono text-[11px] text-gray-500 shrink-0">{e.last_sell_date}</span>
               </div>
@@ -126,7 +126,7 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className="text-gray-900">{e.name ?? e.code}</span>
                     <span className="font-mono text-xs text-gray-500 ml-2">({e.code})</span>
-                    <TossLink code={e.code} className="ml-2" />
+                    <ChartLink code={e.code} className="ml-2" />
                     <span className="text-[10px] text-gray-400 ml-2">{expanded ? "▲" : "▼ 이력"}</span>
                   </td>
                   <td className="px-3 py-2 font-mono text-xs">{e.last_sell_date}</td>

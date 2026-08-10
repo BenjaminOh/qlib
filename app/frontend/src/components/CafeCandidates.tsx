@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 const PATTERN_BADGE: Record<string, string> = {
   A: "bg-rose-100 text-rose-700",
@@ -54,7 +54,7 @@ export default function CafeCandidates() {
                   <td className="py-1.5 pr-3">
                     <span className="text-stone-900">{c.name ?? c.code}</span>
                     <span className="font-mono text-[11px] text-stone-400 ml-1.5">({c.code})</span>
-                    <TossLink code={c.code} className="ml-1.5" />
+                    <ChartLink code={c.code} className="ml-1.5" />
                   </td>
                   <td className="py-1.5 pr-3">
                     <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${PATTERN_BADGE[c.pattern] || "bg-stone-100 text-stone-600"}`}>

@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 /** Daily surge-eve TOP10 (15:12 scan → top 2 sim-bought at 15:29). */
 export default function SurgePicks() {
@@ -47,7 +47,7 @@ export default function SurgePicks() {
                   <td className="py-1.5 pr-3">
                     <span className="text-gray-900">{p.name ?? p.code}</span>
                     <span className="font-mono text-[11px] text-gray-400 ml-1.5">({p.code})</span>
-                    <TossLink code={p.code} className="ml-1.5" />
+                    <ChartLink code={p.code} className="ml-1.5" />
                   </td>
                   <td className="py-1.5 pr-3 text-right font-mono">
                     {p.close != null ? `${p.close.toLocaleString()}원` : "—"}

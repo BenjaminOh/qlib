@@ -2,7 +2,7 @@
 
 import { LiveSignalRow } from "@/lib/api";
 import { compositeScores } from "@/lib/thesis";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 /**
  * Side-by-side evaluation matrix for the recommended picks:
@@ -87,7 +87,7 @@ export default function SignalCompareTable({ picks }: { picks: LiveSignalRow[] }
               <td className="sticky left-0 bg-white px-2 py-1.5 z-10">
                 <span className="font-semibold text-emerald-700 mr-1.5">#{p.rank}</span>
                 <span className="text-gray-900">{p.name ?? p.code}</span>
-                <TossLink code={p.code} className="ml-1.5" />
+                <ChartLink code={p.code} className="ml-1.5" />
               </td>
               <td className="text-right px-2 py-1.5 font-semibold tabular-nums">
                 {(() => {

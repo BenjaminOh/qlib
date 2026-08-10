@@ -254,8 +254,8 @@ export const api = {
     fetchApi<PositionHistoryResponse>(`/api/v1/live/positions/history?limit=${limit}`),
 };
 
-/** Toss Securities chart page — opens the Toss app on mobile. */
-export const tossChartUrl = (code: string) => `https://tossinvest.com/stocks/A${code}`;
+/** TradingView chart for a Korean stock (KRX:code covers KOSPI+KOSDAQ). */
+export const chartUrl = (code: string) => `https://kr.tradingview.com/chart/?symbol=KRX%3A${code}`;
 
 // ─── Live trading types ──────────────────────────────────────
 

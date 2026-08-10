@@ -5,7 +5,7 @@ import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, RetroEpisode } from "@/lib/api";
 import { TradeHistory } from "@/components/HoldingsTable";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 const pct = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(digits)}%`;
@@ -130,7 +130,7 @@ export default function RetroPage() {
           <section className="bg-white rounded-lg border border-gray-200 p-4">
             <h2 className="text-lg font-semibold mb-1">에피소드 원장 ({strategy})</h2>
             <p className="text-xs text-gray-500 mb-3">
-              종목을 클릭하면 그 종목의 전체 매매 이력·판단 근거가 펼쳐집니다. 토스↗로 차트 확인.
+              종목을 클릭하면 그 종목의 전체 매매 이력·판단 근거가 펼쳐집니다. 차트↗로 트레이딩뷰 확인.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-xs sm:text-sm whitespace-nowrap">
@@ -161,7 +161,7 @@ export default function RetroPage() {
                           <td className="py-1.5 pr-3">
                             <span className="text-gray-900">{e.name ?? e.code}</span>
                             <span className="font-mono text-[11px] text-gray-400 ml-1.5">({e.code})</span>
-                            <TossLink code={e.code} className="ml-1.5" />
+                            <ChartLink code={e.code} className="ml-1.5" />
                             <span className="text-[10px] text-gray-400 ml-1.5">{expanded ? "▲" : "▼ 이력"}</span>
                           </td>
                           <td className={`py-1.5 pr-3 text-right font-mono ${
@@ -224,7 +224,7 @@ export default function RetroPage() {
                         <td className="py-1.5 pr-3 font-semibold text-pink-700">#{s.rank}</td>
                         <td className="py-1.5 pr-3">
                           <span className="text-gray-900">{s.name ?? s.code}</span>
-                          <TossLink code={s.code} className="ml-1.5" />
+                          <ChartLink code={s.code} className="ml-1.5" />
                         </td>
                         <td className="py-1.5 pr-3 text-right font-mono">{s.score.toFixed(1)}</td>
                         <td className={`py-1.5 pr-3 text-right font-mono ${pctCls(s.next_ret_pct)}`}>

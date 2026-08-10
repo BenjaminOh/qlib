@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LiveOrderRow, fmtDateTime, parseUtc } from "@/lib/api";
 import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {
@@ -102,7 +102,7 @@ export default function OrdersTable({
                   {o.name && o.name !== o.code && (
                     <span className="font-mono text-xs text-gray-500 ml-2">({o.code})</span>
                   )}
-                  <TossLink code={o.code} className="ml-2" />
+                  <ChartLink code={o.code} className="ml-2" />
                 </td>
                 <td className="px-3 py-2 text-right font-mono">{o.qty.toLocaleString()}</td>
                 <td className="px-3 py-2 text-right font-mono">

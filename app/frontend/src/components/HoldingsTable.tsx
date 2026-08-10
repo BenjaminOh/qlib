@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, LiveHolding, StockTrade } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
-import TossLink from "@/components/TossLink";
+import ChartLink from "@/components/ChartLink";
 
 const fmtKRW = (v: number) => {
   const a = Math.abs(v);
@@ -167,7 +167,7 @@ export default function HoldingsTable({
                 <span className="text-sm font-medium text-gray-900 truncate">
                   {h.name ?? h.code}
                   <span className="font-mono text-[11px] text-gray-400 ml-1.5">({h.code})</span>
-                  <TossLink code={h.code} className="ml-1.5" />
+                  <ChartLink code={h.code} className="ml-1.5" />
                 </span>
                 <span className={`text-sm font-mono font-semibold shrink-0 ${c}`}>{fmtPct(h.pnl_pct)}</span>
               </div>
@@ -233,7 +233,7 @@ export default function HoldingsTable({
                     {h.name && h.name !== h.code && (
                       <span className="font-mono text-xs text-gray-500 ml-2">({h.code})</span>
                     )}
-                    <TossLink code={h.code} className="ml-2" />
+                    <ChartLink code={h.code} className="ml-2" />
                     <span className="text-[10px] text-gray-400 ml-2">{expanded ? "▲" : "▼ 매매이력"}</span>
                   </td>
                   <td className="px-3 py-2 text-right font-mono">{h.qty.toLocaleString()}</td>
