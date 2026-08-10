@@ -577,12 +577,25 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
                 .order_by(desc(Order.submitted_at))
                 .limit(limit)
                 .all())
+        # Exit SELLs of out-of-universe codes were stored with the code in the
+        # name column — borrow the real name from any other row of the same code.
+        nameless = {o.code for o in rows if not o.name or o.name == o.code}
+        names: dict[str, str] = {}
+        if nameless:
+            for code, nm in (db.query(Order.code, Order.name)
+                             .filter(Order.code.in_(nameless),
+                                     Order.name.isnot(None),
+                                     Order.name != Order.code)
+                             .order_by(desc(Order.submitted_at))
+                             .all()):
+                names.setdefault(code, nm)
         return LiveOrdersResponse(orders=[LiveOrderRow(
             id=o.id,
             submitted_at=o.submitted_at,
             trade_date=o.trade_date,
             code=o.code,
-            name=o.name,
+            name=(o.name if o.name and o.name != o.code
+                  else names.get(o.code, o.name)),
             side=o.side,
             qty=o.qty,
             price=o.price,

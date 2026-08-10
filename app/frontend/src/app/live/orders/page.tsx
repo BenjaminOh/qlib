@@ -32,7 +32,7 @@ const VIEW_TABS: { key: View; label: string; title: string }[] = [
 export default function LiveOrdersPage() {
   const [filter, setFilter] = useState<Filter>("ALL");
   const [limit, setLimit] = useState(200);
-  const [view, setView] = useState<View>("real");
+  const [view, setView] = useState<View>("all");
   const [strategy, setStrategy] = useState("");
   const { data, isLoading } = useQuery({
     queryKey: ["live-orders-all", limit, view, strategy],
@@ -46,6 +46,7 @@ export default function LiveOrdersPage() {
     setStrategy(key);
     if (key === "open") setView("real");
     else if (key) setView("sim");
+    else setView("all");
   };
 
   const filtered = useMemo(() => {
