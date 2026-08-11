@@ -6,9 +6,32 @@
  * 정적 문서 — API 호출 없음. (구 /guide/strategy는 이 페이지로 리다이렉트)
  */
 
+import ChartLink from "@/components/ChartLink";
+
 const CURVE = (c: string) => (
   <span className="inline-block w-3 h-3 rounded-full mr-1.5 align-middle" style={{ backgroundColor: c }} />
 );
+
+/** 카페 추천자 실측 표본 이력 — docs/06-research 기록 기준 (est = 손절가 미기재분 프로파일 역산). */
+const CAFE_SAMPLES: {
+  date: string; name: string; code: string; grammar: string;
+  base: number; stop: string; note: string;
+}[] = [
+  { date: "2026-07-30", name: "뉴엔AI", code: "463020", grammar: "D 낙폭과대 반등", base: 7400, stop: "—", note: "표본 1호" },
+  { date: "2026-07-31", name: "씨피시스템", code: "413630", grammar: "C 급등 눌림 재진입", base: 3865, stop: "3,500", note: "2호" },
+  { date: "2026-08-03", name: "위닉스", code: "044340", grammar: "A 신고가 돌파 당일", base: 5860, stop: "—", note: "3호" },
+  { date: "2026-08-04", name: "씨피시스템", code: "413630", grammar: "눌림 재배팅", base: 4225, stop: "3,800 (래칫↑)", note: "2-b 재추천" },
+  { date: "2026-08-04", name: "티엑스알로보틱스", code: "484810", grammar: "B 상한가 후 타이트 눌림", base: 17150, stop: "14,900 (전고점)", note: "4호" },
+  { date: "2026-08-04", name: "위닉스", code: "044340", grammar: "한 번 더 파동", base: 5780, stop: "5,000 (돌파일 저가−5%)", note: "3-b 재추천" },
+  { date: "2026-08-05", name: "뉴엔AI", code: "463020", grammar: "신고가 돌파 전야", base: 10320, stop: "9,060~9,200 (추정)", note: "1-b 재추천" },
+  { date: "2026-08-06", name: "씨피시스템", code: "413630", grammar: "종목명만 (본전 눌림)", base: 4225, stop: "3,800 유지 (추정)", note: "2-c 3차" },
+  { date: "2026-08-06", name: "JW신약", code: "067290", grammar: "R 저항대 돌파", base: 2330, stop: "2,020 (돌파 기점)", note: "5호" },
+  { date: "2026-08-07", name: "이랜시스", code: "264850", grammar: "눌림 저점 버퍼", base: 6470, stop: "5,850", note: "6호 ★스크리너 1일 선행" },
+  { date: "2026-08-07", name: "솔트룩스", code: "304100", grammar: "5일선 눌림목", base: 17090, stop: "14,900", note: "7호" },
+  { date: "2026-08-10", name: "JW신약", code: "067290", grammar: "본전 재배팅", base: 2340, stop: "2,000 (라운드화)", note: "5-b 재추천" },
+  { date: "2026-08-10", name: "티엑스알로보틱스", code: "484810", grammar: "본전 이하 첫 재배팅", base: 16330, stop: "15,340 (당일 저점)", note: "4-b 재추천" },
+  { date: "2026-08-10", name: "지엔씨에너지", code: "119850", grammar: "C 눌림 흡수 종가 베팅", base: 52800, stop: "48,150 (추정)", note: "8호" },
+];
 
 export default function GuidePage() {
   return (
@@ -154,9 +177,10 @@ export default function GuidePage() {
       <section id="cafe" className="not-prose bg-stone-50 border border-stone-200 rounded-lg p-5">
         <h2 className="text-2xl font-bold text-stone-800 mb-2">☕ 카페 역설계 — 추천자의 시스템을 규칙으로</h2>
         <p className="text-sm text-gray-700 mb-3">
-          실존 추천자의 표본(뉴엔AI·씨피시스템·위닉스·TXR·JW신약·이랜시스 + 재추천 4건)을
-          역설계한 결과: <strong>&ldquo;주도 테마 + 기술적 이벤트 날 종가 진입 + 구조적 손절 + 래칫 +
+          실존 추천자의 표본 <strong>8종목 14표본(재추천 6건 포함)</strong>을 역설계한 결과:
+          <strong>&ldquo;주도 테마 + 기술적 이벤트 날 종가 진입 + 구조적 손절 + 래칫 +
           동일 종목 재배팅&rdquo;</strong>. 이를 5개 패턴으로 코딩해 매일 전 시장을 스캔합니다.
+          아래 표본 이력의 차트↗로 당시 봉을 직접 검증할 수 있습니다.
         </p>
         <div className="overflow-x-auto mb-3">
           <table className="min-w-full bg-white border border-stone-200 text-sm">
@@ -172,6 +196,45 @@ export default function GuidePage() {
             </tbody>
           </table>
         </div>
+        <details className="mb-3 bg-white border border-stone-200 rounded" open>
+          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-stone-800 bg-stone-100">
+            📜 실제 추천 표본 이력 (역설계 원천 데이터 — 종목·추천일·손절 앵커)
+          </summary>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm whitespace-nowrap">
+              <thead className="bg-stone-50 text-stone-600">
+                <tr>
+                  <th className="px-3 py-2 text-left border-b">추천일</th>
+                  <th className="px-3 py-2 text-left border-b">종목 (코드)</th>
+                  <th className="px-3 py-2 text-left border-b">문법/유형</th>
+                  <th className="px-3 py-2 text-right border-b">기준가</th>
+                  <th className="px-3 py-2 text-left border-b">손절 (앵커)</th>
+                  <th className="px-3 py-2 text-left border-b">표본</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {CAFE_SAMPLES.map((s, i) => (
+                  <tr key={`${s.date}-${s.code}-${i}`}>
+                    <td className="px-3 py-1.5 font-mono text-xs text-stone-500">{s.date}</td>
+                    <td className="px-3 py-1.5">
+                      <span className="text-gray-900">{s.name}</span>
+                      <span className="font-mono text-xs text-gray-400 ml-1.5">({s.code})</span>
+                      <ChartLink code={s.code} className="ml-1.5" />
+                    </td>
+                    <td className="px-3 py-1.5">{s.grammar}</td>
+                    <td className="px-3 py-1.5 text-right font-mono">{s.base.toLocaleString()}</td>
+                    <td className="px-3 py-1.5">{s.stop}</td>
+                    <td className="px-3 py-1.5 text-xs text-stone-600">{s.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="px-3 py-2 text-xs text-stone-500 border-t border-stone-100">
+            기준가 = 추천일 종가(일부 장중 기록가). &ldquo;추정&rdquo; = 추천자가 2026-08-06부터
+            손절가를 미기재 — 확보된 앵커 문법(전저점·전고점·돌파 기점·당일 저점 ±버퍼)으로 역산한 값.
+          </p>
+        </details>
         <ul className="list-disc pl-6 text-sm text-gray-700 space-y-1">
           <li>표시·저장되는 손절가 = 청산 엔진이 실제로 쓰는 <strong>실효값</strong> (캡 −15% 바닥)</li>
           <li>🔭 정찰(14:30·15:00)은 &ldquo;종가 후보를 더 일찍 알 수 있는가&rdquo;의 측정용 — 매매 없음</li>

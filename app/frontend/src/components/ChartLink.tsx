@@ -1,3 +1,5 @@
+"use client";
+
 import { chartUrl } from "@/lib/api";
 
 /** Tiny TradingView chart link, safe inside clickable rows. */
