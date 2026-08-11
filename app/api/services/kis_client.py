@@ -58,6 +58,10 @@ _MIN_INTERVAL_MS = {"real": 250, "paper": 1200}
 # Rejection markers that mean "rate limited, order NOT accepted" — the only
 # rejections that are safe (and correct) to retry verbatim.
 _THROTTLE_MARKERS = ("초당 거래건수", "EGW00201")
+# EGW00123: the token was invalidated (another process issued a new one for
+# this appkey). Like a throttle rejection, KIS never accepted the order — so
+# re-auth + retry cannot double-execute.
+_TOKEN_MARKERS = ("기간이 만료된 token", "EGW00123")
 
 
 # ─── Domain models ──────────────────────────────────────────────────
@@ -194,9 +198,13 @@ class KISClient:
             return "MOCK_TOKEN"
         with self._lock:
             now = time.time()
-            if self._token and self._token_expires_at - now > 600:  # >10min left
-                return self._token
             r_client = self._redis()
+            # Redis is the authority — never the local copy. KIS kills the
+            # previous token the instant a new one is issued for this appkey,
+            # so a local token that is nowhere near its own expiry can already
+            # be dead. Trusting it is what lost the 09:00 buys on 2026-08-11:
+            # the sells 14s earlier went through on the same cached token.
+            # The local copy is only a fallback for when redis is unreachable.
             if r_client is not None:
                 try:
                     cached = r_client.get(self._redis_token_key)
@@ -208,6 +216,10 @@ class KISClient:
                             return self._token
                 except Exception as exc:  # noqa: BLE001
                     log.warning("KIS token redis read failed: %s", exc)
+                    if self._token and self._token_expires_at - now > 600:
+                        return self._token
+            elif self._token and self._token_expires_at - now > 600:  # >10min left
+                return self._token
             url = f"{self.host}/oauth2/tokenP"
             payload = {"grant_type": "client_credentials",
                        "appkey": self.app_key, "appsecret": self.app_secret}
@@ -712,6 +724,12 @@ class KISClient:
             msg_cd = str(d.get("msg_cd") or "")
             last = OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
                                price=price, raw=d, error=err)
+            if attempt < 2 and any(m in err or m in msg_cd for m in _TOKEN_MARKERS):
+                log.warning("KIS token rejection %s %s x%d (attempt %d/3) — re-auth and retry: %s",
+                            side, code, qty, attempt + 1, err)
+                self._drop_token()  # force a fresh issue on the next _headers()
+                time.sleep(1.0)
+                continue
             if attempt < 2 and any(m in err or m in msg_cd for m in _THROTTLE_MARKERS):
                 log.warning("KIS throttle rejection %s %s x%d (attempt %d/3) — retrying in 2.5s: %s",
                             side, code, qty, attempt + 1, err)
