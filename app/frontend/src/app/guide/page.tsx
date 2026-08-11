@@ -31,6 +31,7 @@ const CAFE_SAMPLES: {
   { date: "2026-08-10", name: "JW신약", code: "067290", grammar: "본전 재배팅", base: 2340, stop: "2,000 (라운드화)", note: "5-b 재추천" },
   { date: "2026-08-10", name: "티엑스알로보틱스", code: "484810", grammar: "본전 이하 첫 재배팅", base: 16330, stop: "15,340 (당일 저점)", note: "4-b 재추천" },
   { date: "2026-08-10", name: "지엔씨에너지", code: "119850", grammar: "C 눌림 흡수 종가 베팅", base: 52800, stop: "48,150 (추정)", note: "8호" },
+  { date: "2026-08-11", name: "신스틸", code: "162300", grammar: "상한가 소화 후 재돌파 (첫 장중 추천)", base: 2195, stop: "1,930", note: "9호" },
 ];
 
 export default function GuidePage() {
@@ -177,7 +178,7 @@ export default function GuidePage() {
       <section id="cafe" className="not-prose bg-stone-50 border border-stone-200 rounded-lg p-5">
         <h2 className="text-2xl font-bold text-stone-800 mb-2">☕ 카페 역설계 — 추천자의 시스템을 규칙으로</h2>
         <p className="text-sm text-gray-700 mb-3">
-          실존 추천자의 표본 <strong>8종목 14표본(재추천 6건 포함)</strong>을 역설계한 결과:
+          실존 추천자의 표본 <strong>9종목 15표본(재추천 6건 포함)</strong>을 역설계한 결과:
           <strong>&ldquo;주도 테마 + 기술적 이벤트 날 종가 진입 + 구조적 손절 + 래칫 +
           동일 종목 재배팅&rdquo;</strong>. 이를 5개 패턴으로 코딩해 매일 전 시장을 스캔합니다.
           아래 표본 이력의 차트↗로 당시 봉을 직접 검증할 수 있습니다.
