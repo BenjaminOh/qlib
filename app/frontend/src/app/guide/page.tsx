@@ -31,7 +31,7 @@ const CAFE_SAMPLES: {
   { date: "2026-08-10", name: "JW신약", code: "067290", grammar: "본전 재배팅", base: 2340, stop: "2,000 (라운드화)", note: "5-b 재추천" },
   { date: "2026-08-10", name: "티엑스알로보틱스", code: "484810", grammar: "본전 이하 첫 재배팅", base: 16330, stop: "15,340 (당일 저점)", note: "4-b 재추천" },
   { date: "2026-08-10", name: "지엔씨에너지", code: "119850", grammar: "C 눌림 흡수 종가 베팅", base: 52800, stop: "48,150 (추정)", note: "8호" },
-  { date: "2026-08-11", name: "신스틸", code: "162300", grammar: "상한가 소화 후 재돌파 (첫 장중 추천)", base: 2195, stop: "1,930", note: "9호" },
+  { date: "2026-08-11", name: "신스틸", code: "162300", grammar: "상한가 소화 후 재돌파 (첫 장중 추천)", base: 2195, stop: "1,930 / 1,880 (2단)", note: "9호" },
 ];
 
 export default function GuidePage() {
