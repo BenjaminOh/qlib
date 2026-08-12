@@ -29,7 +29,22 @@ const STATUS_TITLES: Record<string, string> = {
   FILLED: "실체결가 확정 완료",
   PARTIAL: "주문 수량 중 일부만 체결",
   REJECTED: "KIS가 주문을 거부 — 사유는 행의 오류 메시지 참고",
-  SIMULATED: "close/flow 등 시뮬 전략의 가상 체결 (실제 주문 아님)",
+  SIMULATED: "시뮬 전략의 장부상 가상 체결 — KIS에 주문이 나가지 않습니다",
+};
+
+// What the 가격 column actually means, per order kind. Derived server-side from
+// status + ord_dvsn: a reconciled 시장가 order carries a price too, so `price`
+// alone cannot tell these apart.
+const KIND_LABELS: Record<string, string> = {
+  market: "시장가 실체결",
+  limit: "지정가 주문가",
+  sim: "시뮬 체결가",
+};
+
+const KIND_TITLES: Record<string, string> = {
+  market: "시장가 주문 — 표시 가격은 09:20 대사에서 확정된 실체결 평균가입니다",
+  limit: "지정가 주문 — 표시 가격은 주문 지정가입니다",
+  sim: "시뮬레이션 장부 체결가 — KIS에 주문이 나가지 않았으므로 지정가/시장가 구분이 없습니다",
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
@@ -64,7 +79,7 @@ export default function OrdersTable({
             <th className="text-left px-3 py-2 font-medium">방향</th>
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
-            <th className="text-right px-3 py-2 font-medium" title="지정가 주문의 주문가 또는 체결 확정 후 실체결 평균가">가격</th>
+            <th className="text-right px-3 py-2 font-medium" title="실주문 — 시장가는 대사 후 실체결 평균가, 지정가는 주문가 · 시뮬 — 장부상 가상 체결가(실제 주문 아님)">가격</th>
             <th className="text-right px-3 py-2 font-medium" title="매도 시 확정 손익과 수익률 (시장가는 당일 시가 추정)">손익 (수익률)</th>
             <th className="text-left px-3 py-2 font-medium">상태</th>
             {!compact && (
@@ -106,7 +121,34 @@ export default function OrdersTable({
                 </td>
                 <td className="px-3 py-2 text-right font-mono">{o.qty.toLocaleString()}</td>
                 <td className="px-3 py-2 text-right font-mono">
-                  {o.price == null ? "시장가" : o.price.toLocaleString()}
+                  {o.price == null ? (
+                    <span className="cursor-help" title={KIND_TITLES[o.order_kind]}>시장가</span>
+                  ) : (
+                    <>
+                      <span className="cursor-help" title={o.basis || KIND_TITLES[o.order_kind]}>
+                        {o.price.toLocaleString()}
+                      </span>
+                      <span
+                        className="block text-[11px] text-gray-400 cursor-help"
+                        title={KIND_TITLES[o.order_kind]}
+                      >
+                        {KIND_LABELS[o.order_kind] ?? o.order_kind}
+                      </span>
+                      {o.discount_pct != null && (
+                        // Blue-for-down (KR convention), deliberately NOT the
+                        // emerald/red PnL palette — a deeper discount is good,
+                        // so PnL sign-colouring would invert the meaning.
+                        <span
+                          className={`block text-[11px] ${
+                            o.discount_pct < 0 ? "text-blue-600" : "text-gray-500"
+                          }`}
+                          title={`전일종가 ${o.prev_close?.toLocaleString() ?? "—"} 대비 실제 체결 할인율 — 예약가보다 깊으면 갭하락 시가에 체결된 것입니다`}
+                        >
+                          {`${o.discount_pct.toFixed(1)}% vs 전일`}
+                        </span>
+                      )}
+                    </>
+                  )}
                 </td>
                 <td className={`px-3 py-2 text-right font-mono whitespace-nowrap ${
                   o.realized_pnl == null ? "text-gray-300"

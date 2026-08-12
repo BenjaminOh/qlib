@@ -356,10 +356,18 @@ export interface LiveOrderRow {
   realized_pnl: number | null;
   realized_est: boolean;
   strategy: string;
+  // True order kind — not inferable from `price`, since a reconciled market
+  // order also carries one.
+  order_kind: "market" | "limit" | "sim";
+  basis: string | null;
+  // 지정가 entries only: prev close and the ACTUAL discount vs it.
+  prev_close: number | null;
+  discount_pct: number | null;
 }
 
 export interface LiveOrdersResponse {
   orders: LiveOrderRow[];
+  limit_discount: number;
 }
 
 export interface CafeCandidateRow {

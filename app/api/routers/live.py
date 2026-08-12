@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -81,10 +82,22 @@ class LiveOrderRow(BaseModel):
     # Market orders estimate the fill from the day open ('realized_est').
     realized_pnl: float | None = None
     realized_est: bool = False
+    # True order kind — 'market' | 'limit' | 'sim'. NOT inferable from `price`:
+    # sync_fills pins the reconciled average fill onto market orders.
+    order_kind: str = "market"
+    # reasons_json["basis"] — the decision basis captured at order time.
+    basis: str | None = None
+    # limit-strategy BUY rows only: previous trading day's close and the ACTUAL
+    # fill discount vs it (negative = bought below prev close). A gap-down open
+    # fills deeper than the configured discount, and that shows up here.
+    prev_close: float | None = None
+    discount_pct: float | None = None
 
 
 class LiveOrdersResponse(BaseModel):
     orders: list[LiveOrderRow]
+    # The configured 지정가 discount (0.03 = −3%), so the UI need not hardcode it.
+    limit_discount: float = 0.03
 
 
 class DailyPnLRow(BaseModel):
@@ -253,6 +266,21 @@ def _close_safe(code: str) -> float | None:
     try:
         from ..services.live_trader import _last_close
         return _last_close(code)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@lru_cache(maxsize=512)
+def _prev_close_cached(code: str, day: date) -> float | None:
+    """Close of the last trading day strictly before `day` — memoised.
+
+    Reuses live_trader._prev_close_before so the 지정가 discount shown in the
+    orders table is computed with exactly the same semantics the entry rule
+    used. Cached because one page can repeat the same (code, day) pair.
+    """
+    try:
+        from ..services.live_trader import _prev_close_before
+        return _prev_close_before(code, day)
     except Exception:  # noqa: BLE001
         return None
 
@@ -589,7 +617,33 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
                              .order_by(desc(Order.submitted_at))
                              .all()):
                 names.setdefault(code, nm)
-        return LiveOrdersResponse(orders=[LiveOrderRow(
+        # 지정가 entries: how far below the previous close did we ACTUALLY fill?
+        # Recomputed from the price store rather than parsed out of the display
+        # string in reasons_json, so it also covers rows written before the
+        # basis wording existed. Limited to limit-BUYs (≤2/day) so the qlib
+        # lookups stay cheap; failures degrade to no discount line.
+        prev_closes: dict[tuple[str, date], float] = {}
+        for key in {(o.code, o.trade_date) for o in rows
+                    if o.strategy == "limit" and o.side == "BUY" and o.price}:
+            pc = _prev_close_cached(*key)
+            if pc:
+                prev_closes[key] = pc
+
+        def _basis(o: Order) -> str | None:
+            if not o.reasons_json:
+                return None
+            try:
+                return (json.loads(o.reasons_json) or {}).get("basis")
+            except Exception:  # noqa: BLE001
+                return None
+
+        def _discount(o: Order) -> float | None:
+            pc = prev_closes.get((o.code, o.trade_date))
+            if not pc or not o.price:
+                return None
+            return round((o.price / pc - 1.0) * 100, 2)
+
+        rows_out = [LiveOrderRow(
             id=o.id,
             submitted_at=o.submitted_at,
             trade_date=o.trade_date,
@@ -605,7 +659,13 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
             realized_est=(realized_by_id.get(o.id) or (None, False))[1],
             kis_order_id=o.kis_order_id,
             strategy=o.strategy or "open",
-        ) for o in rows])
+            order_kind=o.kind,
+            basis=_basis(o),
+            prev_close=prev_closes.get((o.code, o.trade_date)),
+            discount_pct=_discount(o),
+        ) for o in rows]
+        return LiveOrdersResponse(orders=rows_out,
+                                  limit_discount=settings.live_limit_discount)
 
 
 class CafeCandidateRow(BaseModel):

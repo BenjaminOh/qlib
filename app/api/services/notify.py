@@ -133,7 +133,10 @@ def notify_open_orders(result: dict) -> None:
                       .order_by(Order.side.desc(), Order.submitted_at.asc())
                       .all())
         for o in rows:
-            ord_type = "지정가" if o.price else "시장가"
+            # From o.kind, not o.price: sync_fills pins the reconciled average
+            # fill onto market orders, so a re-run after 09:20 대사 would flip
+            # every line to "지정가" if this keyed off price.
+            ord_type = {"limit": "지정가", "sim": "시뮬", "market": "시장가"}[o.kind]
             status = ("✅ 접수" if o.status in ("SUBMITTED", "FILLED", "PARTIAL")
                       else f"❌ 거부: {_esc((o.error or '')[:80])}")
             detail = f"📊 {ord_type} · {o.qty:,}주"

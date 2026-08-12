@@ -920,6 +920,7 @@ def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
     o = _persist_order(db, trade_date, code, side, qty, price, res, strategy=strategy,
                        reasons=reasons)
     o.status = "SIMULATED"
+    o.ord_dvsn = Order.ORD_DVSN_SIM  # no KIS order was sent — 지정가/시장가 is meaningless
     db.add(Fill(
         order_id=o.id,
         strategy=strategy,

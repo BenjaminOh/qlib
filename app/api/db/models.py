@@ -214,7 +214,7 @@ class Order(Base):
     side = Column(String(4), nullable=False)  # BUY / SELL
     qty = Column(Integer, nullable=False)
     price = Column(Float, nullable=True)  # null = market order
-    ord_dvsn = Column(String(2), nullable=False, default="01")  # 00 지정가 / 01 시장가
+    ord_dvsn = Column(String(2), nullable=False, default="01")  # 00 지정가 / 01 시장가 / SM 시뮬(비-KIS)
     kis_order_id = Column(String(40), nullable=True, index=True)
     # SIMULATED is used by the 'close' strategy — no KIS round-trip, fill is
     # written immediately from the kr_data last close.
@@ -228,6 +228,22 @@ class Order(Base):
     raw_response = Column(Text, nullable=True)
 
     fills = relationship("Fill", back_populates="order", cascade="all, delete-orphan")
+
+    ORD_DVSN_SIM = "SM"  # not a KIS code — marks a DB-only paper fill
+
+    @property
+    def kind(self) -> str:
+        """True order kind: 'market' | 'limit' | 'sim'.
+
+        NOT derivable from `price`: sync_fills pins the reconciled average fill
+        price onto market orders, so a non-null price does not imply 지정가.
+        `status` wins over `ord_dvsn` because rows written before 2026-08-12
+        carry a bogus ord_dvsn='00' — _persist_order derived it from "a price
+        was passed", which is true of every simulated fill.
+        """
+        if self.status == "SIMULATED":
+            return "sim"
+        return "limit" if self.ord_dvsn == "00" else "market"
 
 
 class Fill(Base):

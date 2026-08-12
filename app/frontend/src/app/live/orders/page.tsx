@@ -56,6 +56,25 @@ export default function LiveOrdersPage() {
     return all.filter((o) => o.side === filter);
   }, [data, filter]);
 
+  // 지정가 전략만: 예약가 대비 실제로 얼마나 싸게 담겼는지. 갭하락 시가에
+  // 체결된 건은 설정 할인율보다 깊게 찍히므로 그 건수를 따로 센다.
+  const limitStats = useMemo(() => {
+    if (strategy !== "limit") return null;
+    const ds = filtered
+      .map((o) => o.discount_pct)
+      .filter((d): d is number => d != null);
+    if (!ds.length) return null;
+    const nominal = -(data?.limit_discount ?? 0.03) * 100;
+    return {
+      n: ds.length,
+      avg: ds.reduce((a, b) => a + b, 0) / ds.length,
+      deepest: Math.min(...ds),
+      // 0.2%p slack absorbs tick rounding on the resting price.
+      gapped: ds.filter((d) => d < nominal - 0.2).length,
+      nominal,
+    };
+  }, [filtered, strategy, data]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-baseline justify-between">
@@ -138,6 +157,16 @@ export default function LiveOrdersPage() {
         <strong>체결</strong> = 실체결가 확정 · <strong>시뮬</strong> = 시뮬레이션 체결 ·
         배지에 마우스를 올리면 상세 설명이 보입니다.
       </p>
+
+      {limitStats && (
+        <p className="text-xs text-gray-600 bg-blue-50 border border-blue-100 rounded px-3 py-2 -mt-2">
+          지정가 체결 <strong>{limitStats.n}건</strong> · 평균 할인{" "}
+          <strong>{limitStats.avg.toFixed(1)}%</strong> · 최대 할인{" "}
+          <strong>{limitStats.deepest.toFixed(1)}%</strong> · 갭하락으로 예약가(
+          {limitStats.nominal.toFixed(1)}%)보다 깊게 체결{" "}
+          <strong>{limitStats.gapped}건</strong>
+        </p>
+      )}
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {isLoading ? (
