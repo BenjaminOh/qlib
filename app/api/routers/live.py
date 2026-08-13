@@ -11,7 +11,7 @@ import json
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import desc
 
@@ -174,6 +174,9 @@ class StockTradeRow(BaseModel):
     ret_pct: float | None = None    # (close - avg) / avg
     pnl_amt: float | None = None    # (close - avg) * cum_qty
     realized_pnl: float | None = None  # sells only: (sell - avg) * qty
+    # Sells only: the episode average price BEFORE this sell. `avg_price`
+    # above is the post-event value, which is None once the position closes.
+    avg_price_before: float | None = None
     # Decision basis captured at order time: {"action","basis","summary",
     # "metrics","top_features"} — buys carry that day's signal reasons,
     # sells carry the top-K-exit snapshot.
@@ -249,6 +252,7 @@ def _position_timeline(code: str, strategy: str,
                         pos_cost += r.qty * px
                     else:  # SELL
                         avg_before = (pos_cost / pos_qty) if pos_qty else 0.0
+                        item.avg_price_before = avg_before or None
                         item.realized_pnl = (px - avg_before) * min(r.qty, pos_qty)
                         pos_cost -= avg_before * min(r.qty, pos_qty)
                         pos_qty = max(pos_qty - r.qty, 0)
@@ -666,6 +670,458 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
         ) for o in rows]
         return LiveOrdersResponse(orders=rows_out,
                                   limit_discount=settings.live_limit_discount)
+
+
+# ─── Order story (row-click detail: why this buy/sell happened) ──────
+
+
+class StoryBar(BaseModel):
+    open: float
+    high: float
+    low: float
+    close: float
+    source: str  # "recorded" | "qlib" | "kis"
+
+
+class StoryRuleLine(BaseModel):
+    kind: str  # "tp" | "sl" | "trail" | "ladder_rung"
+    label: str
+    px: float | None = None
+    # Whether the day's bar crossed this line (tp/rung: high>=px, stops: low<=px).
+    hit: bool | None = None
+
+
+class StoryRules(BaseModel):
+    strategy: str
+    exit_model: str  # "bracket" | "ladder" | "trail" | "rank_dropout" | "none"
+    lines: list[StoryRuleLine] = []
+    sl_kind: str | None = None  # prev_low | cap | entry_stop | trail | ladder_floor
+    # True = rebuilt from CURRENT rules/config, not the values recorded at
+    # judgment time — pre-2026-08-13 orders have no structured record.
+    reconstructed: bool = False
+
+
+class StoryEntry(BaseModel):
+    order_id: int | None = None
+    trade_date: date | None = None
+    exec_price: float | None = None
+    qty: int | None = None
+    # SELL stories: the episode average at the moment of sale.
+    avg_at_sale: float | None = None
+    basis: str | None = None
+    reasons: dict | None = None
+    rank: int | None = None  # signal rank on the entry day, if any
+
+
+class StoryJudgment(BaseModel):
+    mode: str  # "sim_daily_bar" | "real_order"
+    text: str
+    recorded_at: datetime | None = None
+
+
+class RankPoint(BaseModel):
+    as_of: date
+    rank: int | None = None  # None = outside the stored top-30
+
+
+class PricePoint(BaseModel):
+    trade_date: date
+    close: float
+
+
+class LimitEntryStory(BaseModel):
+    limit_px: float | None = None
+    prev_close: float | None = None
+    fill_px: float | None = None
+    discount_pct: float | None = None
+    gap_down_fill: bool = False
+
+
+class OrderStory(BaseModel):
+    order: LiveOrderRow
+    reasons: dict | None = None
+    entry: StoryEntry | None = None
+    rules: StoryRules | None = None
+    bar: StoryBar | None = None
+    judgment: StoryJudgment
+    position_before: int | None = None
+    position_after: int | None = None
+    stage: int | None = None  # ladder: this was the n-th sell of the episode
+    rank_history: list[RankPoint] = []
+    topk: int = 10
+    rank_store_n: int = 30
+    post_closes: list[PricePoint] = []
+    give_back_pct: float | None = None  # last post-close vs the exit price
+    limit_entry: LimitEntryStory | None = None
+    notes: list[str] = []
+
+
+_SL_LABELS = {"prev_low": "손절선 (전 저점 기준)", "cap": "손절선 (리스크 캡)",
+              "entry_stop": "손절선 (스크리너 구조적)", "trail": "트레일링 청산선",
+              "ladder_floor": "사다리 플로어"}
+
+
+def _trade_consts() -> tuple[int, int]:
+    try:
+        from ..services.live_trader import LIVE_CONFIG, SIGNAL_STORE_TOP_N
+        return int(LIVE_CONFIG["strategy_kwargs"]["topk"]), int(SIGNAL_STORE_TOP_N)
+    except Exception:  # noqa: BLE001
+        return 10, 30
+
+
+def _exit_rule(strategy: str) -> dict:
+    try:
+        from ..services.live_trader import EXIT_RULES
+        return EXIT_RULES.get(strategy) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _day_ohlc_safe(code: str, day: date) -> dict | None:
+    try:
+        from ..services.live_trader import _day_ohlc
+        return _day_ohlc(code, day)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _prev_low_safe(code: str, entry_date: date, window: int) -> float | None:
+    try:
+        from ..services.live_trader import _prev_low
+        return _prev_low(code, entry_date, window)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _peak_close_safe(code: str, entry_date: date, day: date) -> float | None:
+    try:
+        from ..services.live_trader import _peak_close
+        return _peak_close(code, entry_date, day)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _round_to_tick_safe(px: float) -> float:
+    try:
+        from ..services.kis_client import round_to_tick
+        return float(round_to_tick(px))
+    except Exception:  # noqa: BLE001
+        return round(px)
+
+
+@lru_cache(maxsize=128)
+def _kis_bars_cached(code: str, cache_day: str) -> tuple:
+    """KIS daily bars memoised per (code, calendar day).
+
+    Completed daily bars are immutable, so the day-keyed cache is safe and
+    keeps the story endpoint at ≤1 gated KIS call per code per day. Only
+    reached when the qlib store has no bar (out-of-universe codes)."""
+    try:
+        return tuple(get_kis_client().get_daily_bars(code) or ())
+    except Exception:  # noqa: BLE001
+        return ()
+
+
+def _build_order_story(o: Order) -> OrderStory:  # noqa: C901 — linear narrative
+    notes: list[str] = []
+    today = date.today()
+    strategy = o.strategy or "open"
+    topk, store_n = _trade_consts()
+
+    reasons: dict | None = None
+    if o.reasons_json:
+        try:
+            reasons = json.loads(o.reasons_json) or None
+        except Exception:  # noqa: BLE001
+            notes.append("사유 기록 파싱 실패 — 원본이 손상되었습니다")
+    if reasons is None and o.reasons_json is None:
+        notes.append("이 주문에는 사유 기록이 없습니다 (기능 도입 전 주문)")
+    exit_ns = reasons.get("exit") if isinstance(reasons, dict) and isinstance(reasons.get("exit"), dict) else None
+    entry_ns = reasons.get("entry") if isinstance(reasons, dict) and isinstance(reasons.get("entry"), dict) else None
+
+    # ── Episode walk over the shared timeline (same math as realized pnl).
+    timeline: list[StockTradeRow] = []
+    try:
+        timeline = _position_timeline(o.code, strategy)
+    except Exception:  # noqa: BLE001
+        notes.append("포지션 타임라인 재구성 실패")
+    target = next((t for t in timeline if t.order_id == o.id), None)
+
+    entry_row: StockTradeRow | None = None
+    stage: int | None = None
+    position_before: int | None = None
+    position_after: int | None = None
+    avg_at_sale: float | None = None
+    if target is not None:
+        prev_cum = 0
+        sells_before = 0
+        for t in timeline:
+            if t.order_id == o.id:
+                break
+            if t.cum_qty is None:  # not executed — no position effect
+                continue
+            if t.side == "BUY" and prev_cum == 0:
+                entry_row, sells_before = t, 0
+            elif t.side == "SELL":
+                sells_before += 1
+                if t.cum_qty == 0:  # episode fully closed before our order
+                    entry_row, sells_before = None, 0
+            prev_cum = t.cum_qty
+        if o.side == "SELL":
+            avg_at_sale = target.avg_price_before
+            if target.cum_qty is not None:
+                position_after = target.cum_qty
+                position_before = target.cum_qty + o.qty
+            if _exit_rule(strategy).get("ladder"):
+                stage = sells_before + 1
+        else:
+            entry_row = target
+    elif o.side == "SELL":
+        notes.append("타임라인에서 주문을 찾지 못해 진입 매칭을 생략했습니다")
+
+    entry: StoryEntry | None = None
+    if entry_row is not None:
+        entry_rank = None
+        try:
+            with SessionLocal() as db:
+                sig = (db.query(Signal)
+                         .filter(Signal.code == o.code,
+                                 Signal.as_of == entry_row.trade_date)
+                         .first())
+                entry_rank = sig.rank if sig else None
+        except Exception:  # noqa: BLE001
+            pass
+        entry = StoryEntry(order_id=entry_row.order_id,
+                           trade_date=entry_row.trade_date,
+                           exec_price=entry_row.exec_price, qty=entry_row.qty,
+                           avg_at_sale=avg_at_sale,
+                           basis=(entry_row.reasons or {}).get("basis"),
+                           reasons=entry_row.reasons, rank=entry_rank)
+    elif o.side == "SELL" and target is not None:
+        notes.append("선행 매수 기록이 없어 진입 맥락을 표시할 수 없습니다")
+
+    # ── The day's bar: recorded → qlib → KIS (completed days only).
+    bar: StoryBar | None = None
+    if exit_ns and isinstance(exit_ns.get("bar"), dict):
+        try:
+            b = exit_ns["bar"]
+            bar = StoryBar(open=b["open"], high=b["high"], low=b["low"],
+                           close=b["close"], source="recorded")
+        except Exception:  # noqa: BLE001
+            pass
+    if bar is None:
+        b = _day_ohlc_safe(o.code, o.trade_date)
+        if b:
+            bar = StoryBar(**b, source="qlib")
+    if bar is None:
+        if o.trade_date >= today:
+            notes.append("당일 봉은 15:45 데이터 갱신 후 표시됩니다")
+        else:
+            for kb in _kis_bars_cached(o.code, today.isoformat()):
+                if kb.get("date") == o.trade_date.isoformat():
+                    try:
+                        if all(float(kb[k]) > 0 for k in ("open", "high", "low", "close")):
+                            bar = StoryBar(open=kb["open"], high=kb["high"],
+                                           low=kb["low"], close=kb["close"],
+                                           source="kis")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    break
+            if bar is None:
+                notes.append("당일 봉 데이터를 찾지 못했습니다")
+
+    # ── Rule lines (recorded values first; else rebuilt from CURRENT rules).
+    rules: StoryRules | None = None
+    rule = _exit_rule(strategy)
+    if strategy == "open":
+        rules = StoryRules(strategy=strategy, exit_model="rank_dropout")
+    elif rule:
+        lines: list[StoryRuleLine] = []
+        sl_kind: str | None = None
+        exit_model = ("ladder" if rule.get("ladder")
+                      else "trail" if rule.get("trail") and not rule.get("tp")
+                      else "bracket")
+        entry_avg: float | None = None
+        if exit_ns and exit_ns.get("entry_avg"):
+            entry_avg = float(exit_ns["entry_avg"])
+        elif avg_at_sale:
+            entry_avg = avg_at_sale
+        elif entry is not None and entry.exec_price:
+            entry_avg = entry.exec_price
+
+        def _line(kind: str, label: str, px: float | None) -> None:
+            # hit only makes sense on the sell day — the entry day's range
+            # predates the modeled close-entry, so BUY previews stay neutral.
+            hit = None
+            if px is not None and bar is not None and o.side == "SELL":
+                hit = bar.high >= px if kind in ("tp", "ladder_rung") else bar.low <= px
+            lines.append(StoryRuleLine(kind=kind, label=label,
+                                       px=round(px, 2) if px else None, hit=hit))
+
+        if exit_ns is not None:
+            sl_kind = exit_ns.get("sl_kind")
+            if exit_ns.get("tp_px"):
+                tp_pct = rule.get("tp")
+                _line("tp", f"익절선 +{tp_pct * 100:.0f}%" if tp_pct else "익절선",
+                      float(exit_ns["tp_px"]))
+            if entry_avg:
+                for i, r_pct in enumerate(exit_ns.get("ladder") or []):
+                    _line("ladder_rung", f"사다리 {i + 1}차 +{r_pct * 100:.0f}%",
+                          entry_avg * (1 + r_pct))
+            if exit_ns.get("sl_px"):
+                _line("trail" if sl_kind == "trail" else "sl",
+                      _SL_LABELS.get(sl_kind or "", "손절선"), float(exit_ns["sl_px"]))
+            rules = StoryRules(strategy=strategy, exit_model=exit_model,
+                               lines=lines, sl_kind=sl_kind, reconstructed=False)
+        elif entry_avg:
+            tp_pct = rule.get("tp")
+            if tp_pct and not rule.get("ladder"):
+                _line("tp", f"익절선 +{tp_pct * 100:.0f}%", entry_avg * (1 + tp_pct))
+            for i, r_pct in enumerate(rule.get("ladder") or []):
+                _line("ladder_rung", f"사다리 {i + 1}차 +{r_pct * 100:.0f}%",
+                      entry_avg * (1 + r_pct))
+            entry_reasons = (entry.reasons if entry else None) or {}
+            if rule.get("stop_source") == "entry":
+                cap = entry_avg * (1 - settings.live_cafe_stop_cap)
+                stop_px = entry_reasons.get("stop_px")
+                if stop_px and cap < float(stop_px) < entry_avg:
+                    sl_px, sl_kind = float(stop_px), "entry_stop"
+                else:
+                    sl_px, sl_kind = cap, "cap"
+            else:
+                cap = entry_avg * (1 - settings.live_close_bracket_sl)
+                prev_low = (_prev_low_safe(o.code, entry.trade_date,
+                                           settings.live_close_bracket_low_window)
+                            if entry is not None and entry.trade_date else None)
+                low_stop = (prev_low * (1 - settings.live_close_bracket_low_buffer)
+                            if prev_low else None)
+                if low_stop and cap < low_stop < entry_avg:
+                    sl_px, sl_kind = low_stop, "prev_low"
+                else:
+                    sl_px, sl_kind = cap, "cap"
+            trail_pct = rule.get("trail")
+            if trail_pct and entry is not None and entry.trade_date:
+                peak = _peak_close_safe(o.code, entry.trade_date, o.trade_date)
+                if peak and peak * (1 - trail_pct) > sl_px:
+                    sl_px, sl_kind = peak * (1 - trail_pct), "trail"
+            _line("trail" if sl_kind == "trail" else "sl",
+                  _SL_LABELS.get(sl_kind or "", "손절선"), sl_px)
+            rules = StoryRules(strategy=strategy, exit_model=exit_model,
+                               lines=lines, sl_kind=sl_kind, reconstructed=True)
+        else:
+            rules = StoryRules(strategy=strategy, exit_model=exit_model)
+            notes.append("평단을 특정할 수 없어 규칙 선을 생략했습니다")
+
+    # ── Signal rank history around the order (rank None = outside top-30).
+    rank_history: list[RankPoint] = []
+    try:
+        with SessionLocal() as db:
+            as_ofs = [r[0] for r in (db.query(Signal.as_of).distinct()
+                                       .filter(Signal.as_of <= o.trade_date)
+                                       .order_by(desc(Signal.as_of))
+                                       .limit(10).all())]
+            ranks = dict(db.query(Signal.as_of, Signal.rank)
+                           .filter(Signal.code == o.code,
+                                   Signal.as_of.in_(as_ofs)).all())
+        rank_history = [RankPoint(as_of=d, rank=ranks.get(d))
+                        for d in sorted(as_ofs)]
+        if not ranks:
+            rank_history = []  # never ranked (cafe/surge out-of-signal codes)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── Post-trade closes (qlib store; reuse already-cached KIS bars only).
+    post_closes: list[PricePoint] = []
+    try:
+        series = _price_series(o.code)
+        pts = [(d, c) for d, (_, c) in sorted(series.items())
+               if c is not None and d > o.trade_date.isoformat()]
+        if not pts and bar is not None and bar.source == "kis":
+            pts = [(kb["date"], float(kb["close"]))
+                   for kb in _kis_bars_cached(o.code, today.isoformat())
+                   if kb.get("date") and kb["date"] > o.trade_date.isoformat()
+                   and kb.get("close")]
+        post_closes = [PricePoint(trade_date=date.fromisoformat(d), close=c)
+                       for d, c in pts[:5]]
+    except Exception:  # noqa: BLE001
+        pass
+    give_back_pct = None
+    exit_px = o.price or (target.exec_price if target else None)
+    if o.side == "SELL" and post_closes and exit_px:
+        give_back_pct = round((post_closes[-1].close / exit_px - 1) * 100, 2)
+
+    # ── How the fill came to exist.
+    if o.status == "REJECTED":
+        judgment = StoryJudgment(mode="real_order", recorded_at=o.submitted_at,
+                                 text=f"주문 거부 — {o.error or '사유 미기록'}")
+    elif o.status == "SIMULATED":
+        judgment = StoryJudgment(
+            mode="sim_daily_bar", recorded_at=o.submitted_at,
+            text="시뮬 전략 — KIS 실주문 없이, 장 마감 후(15:45 데이터 갱신 뒤) "
+                 "당일 봉으로 규칙 통과 여부를 판정해 장부에 기록한 체결입니다.")
+    else:
+        kind_txt = {"market": "시장가", "limit": "지정가"}.get(o.kind, o.kind)
+        judgment = StoryJudgment(
+            mode="real_order", recorded_at=o.submitted_at,
+            text=f"KIS 실주문({kind_txt}) — 시장가 실체결가는 09:20 대사에서 확정됩니다.")
+
+    # ── Header row (same construction rules as /orders).
+    prev_close_v = disc = None
+    if strategy == "limit" and o.side == "BUY" and o.price:
+        pc = _prev_close_cached(o.code, o.trade_date)
+        if pc:
+            prev_close_v = pc
+            disc = round((o.price / pc - 1.0) * 100, 2)
+    order_row = LiveOrderRow(
+        id=o.id, submitted_at=o.submitted_at, trade_date=o.trade_date,
+        code=o.code,
+        name=(o.name if o.name and o.name != o.code
+              else _stock_name_safe(o.code) or o.name),
+        side=o.side, qty=o.qty, price=o.price, status=o.status, error=o.error,
+        realized_pnl=target.realized_pnl if target else None,
+        realized_est=target.price_est if target else False,
+        kis_order_id=o.kis_order_id, strategy=strategy, order_kind=o.kind,
+        basis=(reasons or {}).get("basis"),
+        prev_close=prev_close_v, discount_pct=disc)
+
+    limit_entry: LimitEntryStory | None = None
+    if strategy == "limit" and o.side == "BUY":
+        if entry_ns:
+            lp = entry_ns.get("limit_px")
+            pcv = entry_ns.get("prev_close")
+            fp = entry_ns.get("fill_px") or o.price
+        else:
+            pcv = prev_close_v
+            lp = _round_to_tick_safe(pcv * (1 - settings.live_limit_discount)) if pcv else None
+            fp = o.price
+        if lp or pcv:
+            dpct = round((fp / pcv - 1) * 100, 2) if fp and pcv else None
+            limit_entry = LimitEntryStory(
+                limit_px=lp, prev_close=pcv, fill_px=fp, discount_pct=dpct,
+                gap_down_fill=bool(fp and lp and fp < lp - 1e-9))
+
+    return OrderStory(order=order_row, reasons=reasons, entry=entry,
+                      rules=rules, bar=bar, judgment=judgment,
+                      position_before=position_before,
+                      position_after=position_after, stage=stage,
+                      rank_history=rank_history, topk=topk,
+                      rank_store_n=store_n, post_closes=post_closes,
+                      give_back_pct=give_back_pct, limit_entry=limit_entry,
+                      notes=notes)
+
+
+@router.get("/orders/{order_id}/story", response_model=OrderStory)
+def get_order_story(order_id: int):
+    """Row-click detail: the full narrative behind one order — entry context,
+    rule lines, the day's bar, how the judgment was made, and what happened
+    after. Sections degrade independently; the core row always returns."""
+    init_db()
+    with SessionLocal() as db:
+        o = db.query(Order).filter(Order.id == order_id).first()
+        if o is None:
+            raise HTTPException(status_code=404, detail="order not found")
+        db.expunge(o)
+    return _build_order_story(o)
 
 
 class CafeCandidateRow(BaseModel):

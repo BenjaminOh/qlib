@@ -1090,7 +1090,15 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 def _ladder_sell(qty_s: int, px_s: float, kind_s: str, basis_s: str) -> None:
                     realised_s = (px_s - h.avg_price) * qty_s
                     reasons_s = {"action": "sell", "basis": basis_s,
-                                 "summary": "", "metrics": {}, "top_features": []}
+                                 "summary": "", "metrics": {}, "top_features": [],
+                                 # Structured judgment snapshot for the order-story
+                                 # view — observation only, never read by the engine.
+                                 "exit": {"judged": "sim_daily_bar", "bar": bar,
+                                          "sl_px": round(sl_px, 2), "sl_kind": sl_kind,
+                                          "entry_avg": h.avg_price,
+                                          "entry_date": entry.trade_date.isoformat(),
+                                          "entry_order_id": entry.id,
+                                          "ladder": ladder, "stage": stage}}
                     try:
                         from .signal_reasons import build_intuitive_metrics, summarize
                         m_s = build_intuitive_metrics([h.code]).get(h.code, {})
@@ -1202,7 +1210,15 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                              f"평단 {round(h.avg_price):,} → 체결 {round(px):,}")
             realised = (px - h.avg_price) * sell_qty
             reasons = {"action": "sell", "basis": basis,
-                       "summary": "", "metrics": {}, "top_features": []}
+                       "summary": "", "metrics": {}, "top_features": [],
+                       # Structured judgment snapshot for the order-story view —
+                       # observation only, never read by the engine.
+                       "exit": {"judged": "sim_daily_bar", "bar": bar,
+                                "tp_px": round(tp_px, 2) if tp_px else None,
+                                "sl_px": round(sl_px, 2), "sl_kind": sl_kind,
+                                "entry_avg": h.avg_price,
+                                "entry_date": entry.trade_date.isoformat(),
+                                "entry_order_id": entry.id}}
             try:
                 from .signal_reasons import build_intuitive_metrics, summarize
                 m = build_intuitive_metrics([h.code]).get(h.code, {})
@@ -1293,6 +1309,11 @@ def evaluate_limit_entries(trade_date: date | None = None) -> dict:
                 else:
                     buy_why = {"action": "buy", "basis": base,
                                "summary": "", "metrics": {}, "top_features": []}
+                # Structured resting-limit snapshot for the order-story view.
+                buy_why["entry"] = {"limit_px": f["limit_px"],
+                                    "prev_close": f["prev_close"],
+                                    "fill_px": f["fill_px"], "rank": f["rank"],
+                                    "discount": discount}
                 _persist_simulated_fill(db, day, f["code"], "BUY", qty, f["fill_px"],
                                         strategy=STRATEGY_LIMIT, reasons=buy_why)
         db.commit()

@@ -1,7 +1,11 @@
+"use client";
+
+import { Fragment, useState } from "react";
 import Link from "next/link";
 import { LiveOrderRow, fmtDateTime, parseUtc } from "@/lib/api";
 import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
 import ChartLink from "@/components/ChartLink";
+import OrderStoryPanel from "@/components/OrderStoryPanel";
 
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {
@@ -61,6 +65,9 @@ export default function OrdersTable({
   compact?: boolean;
   showStrategy?: boolean;
 }) {
+  // Row-click → inline story expansion (same pattern as HoldingsTable).
+  const [openId, setOpenId] = useState<number | null>(null);
+  const nCols = 7 + (showStrategy ? 1 : 0) + (compact ? 0 : 1);
   if (!orders || orders.length === 0) {
     return (
       <div className="text-center text-gray-400 py-8 text-sm">
@@ -91,9 +98,16 @@ export default function OrdersTable({
           {orders.map((o) => {
             const sideColor =
               o.side === "BUY" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700";
+            const expanded = openId === o.id;
             return (
-              <tr key={o.id} className="border-t border-gray-100 hover:bg-gray-50">
+              <Fragment key={o.id}>
+              <tr
+                className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer"
+                onClick={() => setOpenId(expanded ? null : o.id)}
+                title="클릭하면 이 주문의 상세 스토리(진입 근거·규칙 선·당일 봉·판정)를 보여줍니다"
+              >
                 <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                  <span className="text-gray-400 mr-1">{expanded ? "▲" : "▼"}</span>
                   {fmtDateTime(parseUtc(o.submitted_at))}
                 </td>
                 {showStrategy && (
@@ -192,6 +206,14 @@ export default function OrdersTable({
                   </td>
                 )}
               </tr>
+              {expanded && (
+                <tr className="border-t border-gray-100 bg-gray-50/40">
+                  <td colSpan={nCols} className="px-3 py-2">
+                    <OrderStoryPanel order={o} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             );
           })}
         </tbody>

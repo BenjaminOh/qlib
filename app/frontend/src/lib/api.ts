@@ -242,6 +242,8 @@ export const api = {
       `/api/v1/live/orders?limit=${limit}&view=${view}` +
         (strategy ? `&strategy=${strategy}` : ""),
     ),
+  getOrderStory: (orderId: number) =>
+    fetchApi<OrderStory>(`/api/v1/live/orders/${orderId}/story`),
   getCafeCandidates: (days = 7) =>
     fetchApi<CafeCandidatesResponse>(`/api/v1/live/cafe/candidates?days=${days}`),
   getSurgePicks: (days = 7) =>
@@ -368,6 +370,86 @@ export interface LiveOrderRow {
 export interface LiveOrdersResponse {
   orders: LiveOrderRow[];
   limit_discount: number;
+}
+
+// ─── Order story (row-click "why did this trade happen" detail) ─────
+
+export interface StoryBar {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  source: "recorded" | "qlib" | "kis";
+}
+
+export interface StoryRuleLine {
+  kind: "tp" | "sl" | "trail" | "ladder_rung";
+  label: string;
+  px: number | null;
+  hit: boolean | null;
+}
+
+export interface StoryRules {
+  strategy: string;
+  exit_model: "bracket" | "ladder" | "trail" | "rank_dropout" | "none";
+  lines: StoryRuleLine[];
+  sl_kind: string | null;
+  /** True = rebuilt from CURRENT rules, not the values recorded at the time. */
+  reconstructed: boolean;
+}
+
+export interface StoryEntry {
+  order_id: number | null;
+  trade_date: string | null;
+  exec_price: number | null;
+  qty: number | null;
+  avg_at_sale: number | null;
+  basis: string | null;
+  reasons: (StockTradeReasons & { stop_px?: number | null }) | null;
+  rank: number | null;
+}
+
+export interface StoryJudgment {
+  mode: "sim_daily_bar" | "real_order";
+  text: string;
+  recorded_at: string | null;
+}
+
+export interface RankPoint {
+  as_of: string;
+  rank: number | null; // null = outside the stored top-30
+}
+
+export interface PricePoint {
+  trade_date: string;
+  close: number;
+}
+
+export interface LimitEntryStory {
+  limit_px: number | null;
+  prev_close: number | null;
+  fill_px: number | null;
+  discount_pct: number | null;
+  gap_down_fill: boolean;
+}
+
+export interface OrderStory {
+  order: LiveOrderRow;
+  reasons: (StockTradeReasons & { stop_px?: number | null }) | null;
+  entry: StoryEntry | null;
+  rules: StoryRules | null;
+  bar: StoryBar | null;
+  judgment: StoryJudgment;
+  position_before: number | null;
+  position_after: number | null;
+  stage: number | null;
+  rank_history: RankPoint[];
+  topk: number;
+  rank_store_n: number;
+  post_closes: PricePoint[];
+  give_back_pct: number | null;
+  limit_entry: LimitEntryStory | null;
+  notes: string[];
 }
 
 export interface CafeCandidateRow {
