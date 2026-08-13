@@ -33,6 +33,7 @@ const CAFE_SAMPLES: {
   { date: "2026-08-10", name: "지엔씨에너지", code: "119850", grammar: "C 눌림 흡수 종가 베팅", base: 52800, stop: "48,150 (추정)", note: "8호" },
   { date: "2026-08-11", name: "신스틸", code: "162300", grammar: "상한가 소화 후 재돌파 (첫 장중 추천)", base: 2195, stop: "1,930 / 1,880 (2단)", note: "9호" },
   { date: "2026-08-11", name: "매드업", code: "0039P0", grammar: "상한가 후 3음봉 눌림·5일선 밑꼬리 (종베)", base: 9050, stop: "7,700 (돌파 기점)", note: "10호 신규상장주" },
+  { date: "2026-08-13", name: "레메디", code: "387690", grammar: "보호예수 해제일 눌림·10일선 밑꼬리 지지 (종베)", base: 10340, stop: "9,200 (파동 기점 9,210)", note: "11호 신규상장주" },
 ];
 
 export default function GuidePage() {
