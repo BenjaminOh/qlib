@@ -55,15 +55,16 @@ class Settings(BaseSettings):
     live_limit_candidates: int = 5
     live_limit_max_fills: int = 2
 
-    # cafe strategy: recommender-mimic screener sim. Concentrated slots
-    # (seed/4) reflect the recommender's 1-2 name style; the stop comes from
-    # the screener's structural level, capped at −stop_cap below entry.
+    # cafe strategy: recommender-mimic screener sim. The stop comes from the
+    # screener's structural level, capped at −stop_cap below entry.
+    # 2026-08-13 사용자 지시: slots 4 → 10 (종목당 25% → 10%) — 집중 베팅
+    # 리스크 축소, 회당 계좌 리스크 3.75% → 1.5%. 곡선 해석 주의 (INSIGHTS §2).
     live_seed_cash_cafe: float = 10_000_000.0
-    live_cafe_slots: int = 4
+    live_cafe_slots: int = 10
     live_cafe_max_buys: int = 2
     live_cafe_stop_cap: float = 0.15
     live_seed_cash_surge: float = 10_000_000.0
-    live_surge_slots: int = 4
+    live_surge_slots: int = 10
     live_surge_max_buys: int = 2
 
     # Telegram trade alerts (existing 'trading' BotFather bot +
