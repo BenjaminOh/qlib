@@ -109,6 +109,13 @@ def enrich_episode(ep: dict) -> dict:
         after = [closes[d] for d in dates if d > ep["exit_date"]][:5]
         if after and ep.get("exit_px"):
             ep["post5_drift_pct"] = round((after[-1] / ep["exit_px"] - 1) * 100, 2)
+        # Overnight slice of the exit: prev trading day's close → the actual
+        # fill. Only meaningful for `open` (09:00 market sell after the
+        # evening signal drop) — sim strategies fill at bar levels, so their
+        # number is not an overnight move; scoreboard filters by strategy.
+        before = [closes[d] for d in dates if d < ep["exit_date"]]
+        if before and ep.get("exit_px"):
+            ep["overnight_pct"] = round((ep["exit_px"] / before[-1] - 1) * 100, 2)
     else:
         last = closes[dates[-1]]
         ep["unreal_pct"] = round((last / ep["avg"] - 1) * 100, 2)
@@ -122,6 +129,10 @@ def scoreboard(episodes: list[dict]) -> list[dict]:
     cool = [e for e in closed if (e["entry_metrics"].get("ret5") or 0) < 0]
     drifted = [e for e in closed if e.get("post5_drift_pct") is not None]
     rose = [e for e in drifted if e["post5_drift_pct"] > 0]
+    # Overnight is only a real overnight move for `open` (09:00 market sell).
+    overnight = [e for e in closed if e.get("overnight_pct") is not None
+                 and e.get("strategy") == "open"]
+    gapped_down = [e for e in overnight if e["overnight_pct"] < 0]
 
     def avg(rows, key="ret_pct"):
         vals = [r[key] for r in rows if r.get(key) is not None]
@@ -144,6 +155,17 @@ def scoreboard(episodes: list[dict]) -> list[dict]:
         {"key": "H-재개주", "label": "관리종목·거래재개 30일 내 픽은 고위험",
          "evidence": "콘텐트리중앙(8/7 진입)부터 관찰",
          "support": 0, "refute": 0, "threshold": "표본 5건"},
+        # 2026-08-13 사용자 제안: 15:00 예비 신호로 이탈 종목을 마감 전 선매도
+        # → 오버나이트 무노출. 참이려면 이탈 종목이 밤사이 하락해야 한다.
+        {"key": "H-오버나이트",
+         "label": "이탈 종목은 밤사이(전일 종가→익일 시초 체결) 하락한다 — 참이면 마감 전 선매도 유리",
+         "evidence": (f"이탈 매도 {len(overnight)}건 평균 오버나이트 "
+                      f"{avg(overnight, 'overnight_pct')}% "
+                      f"(하락 {len(gapped_down)}/{len(overnight)}건)"),
+         "support": len(gapped_down),
+         "refute": len(overnight) - len(gapped_down),
+         "threshold": ("표본 15건 & 평균 음수 — 도달 시 '15:00 예비 신호 선매도' "
+                       "시나리오 설계 제안 (예비/공식 신호 불일치 왕복 비용 포함 검증)")},
     ]
 
 
