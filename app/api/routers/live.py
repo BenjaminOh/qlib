@@ -18,8 +18,9 @@ from sqlalchemy import desc
 from ..auth import get_current_user
 from ..config import settings
 from ..db import (
-    DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal, init_db,
+    DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
 )
+from ..services.balance_cache import get_balance_for_read
 from ..services.kis_client import get_kis_client
 
 router = APIRouter(prefix="/live", tags=["live"], dependencies=[Depends(get_current_user)])
@@ -43,8 +44,15 @@ class LiveBalanceResponse(BaseModel):
     cash: float
     total_eval: float
     holdings: list[LiveHolding]
+    # When the numbers were actually read from KIS — NOT the response time.
+    # For a stale/db fallback this is the last-known-good timestamp.
     fetched_at: datetime
     mode: str  # "real" | "paper" | "mock"
+    # Freshness of this payload: "live" | "cache" | "stale" | "db" | "empty".
+    source: str = "live"
+    # True when KIS was unreachable and these are last-known-good numbers.
+    # The UI shows the `fetched_at` time rather than hiding the card.
+    stale: bool = False
 
 
 class LiveSignalRow(BaseModel):
@@ -123,10 +131,14 @@ class DailyPnLResponse(BaseModel):
 
 @router.get("/balance", response_model=LiveBalanceResponse)
 def get_balance():
-    """Current KIS balance + holdings (live fetch)."""
-    init_db()
+    """Current KIS balance + holdings, through the read-path cache.
+
+    Never 500s on a KIS outage — degrades to the last-known-good snapshot and
+    flags it via `stale`, so the dashboard shows numbers with a timestamp
+    instead of an empty card after a 10s block.
+    """
     client = get_kis_client()
-    snap = client.get_balance()
+    snap, source, as_of = get_balance_for_read()
     return LiveBalanceResponse(
         cash=snap.cash,
         total_eval=snap.total_eval,
@@ -140,8 +152,10 @@ def get_balance():
             pnl=h.pnl,
             pnl_pct=h.pnl_pct,
         ) for h in snap.holdings],
-        fetched_at=datetime.utcnow(),
+        fetched_at=as_of,
         mode=("mock" if client.is_mock else client.env),
+        source=source,
+        stale=source in ("stale", "db", "empty"),
     )
 
 
@@ -293,7 +307,7 @@ def _kis_holding_prices(code: str) -> tuple[float | None, float | None]:
     """(avg_price, live quote) from the KIS balance — intraday fallback for
     dates whose bar hasn't landed in kr_data yet (arrives at 15:45)."""
     try:
-        snap = get_kis_client().get_balance()
+        snap, _, _ = get_balance_for_read()
         h = next((h for h in snap.holdings if h.code == code), None)
         if h is not None:
             return h.avg_price or None, h.eval_price or None
@@ -305,7 +319,6 @@ def _kis_holding_prices(code: str) -> tuple[float | None, float | None]:
 @router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
 def get_stock_trades(code: str, strategy: str = Query("open")):
     """Per-stock trade timeline (see _position_timeline)."""
-    init_db()
     kis_avg, kis_now = _kis_holding_prices(code) if strategy == "open" else (None, None)
     return _position_timeline(code, strategy, kis_avg=kis_avg, kis_now=kis_now)
 
@@ -346,7 +359,6 @@ def get_stock_curves(strategy: str = Query("open"),
     price in effect on each day, so adding to a position bends the line at
     the new avg. Sell-day points use that day's CLOSE — the exits card owns
     the exact realized figure (actual fill price)."""
-    init_db()
     cutoff = date.today() - timedelta(days=days)
     with SessionLocal() as db:
         rows = (db.query(Order)
@@ -450,10 +462,9 @@ def get_recent_exits(days: int = Query(30, ge=1, le=180), strategy: str = Query(
     the holdings card, with why they were sold and the (estimated) realized
     pnl. Market sells have no recorded fill price until fill reconciliation
     exists, so exec/realized values use the day-open estimate."""
-    init_db()
     cutoff = date.today() - timedelta(days=days)
     try:
-        held = {h.code for h in get_kis_client().get_balance().holdings} if strategy == "open" else set()
+        held = {h.code for h in get_balance_for_read()[0].holdings} if strategy == "open" else set()
     except Exception:  # noqa: BLE001
         held = set()
     with SessionLocal() as db:
@@ -504,7 +515,6 @@ def get_recent_exits(days: int = Query(30, ge=1, le=180), strategy: str = Query(
 def get_today_realized(strategy: str = Query("open")):
     """Sum of (estimated) realized pnl over today's sells — feeds the
     '당일 실현 손익' card, which previously ignored open-strategy sells."""
-    init_db()
     today = date.today()
     with SessionLocal() as db:
         codes = [r[0] for r in (db.query(Order.code)
@@ -529,7 +539,6 @@ def get_today_realized(strategy: str = Query("open")):
 @router.get("/signals", response_model=LiveSignalsResponse)
 def get_latest_signals():
     """Most recent stored top-K signal."""
-    init_db()
     with SessionLocal() as db:
         latest = db.query(Signal.as_of).order_by(desc(Signal.as_of)).first()
         if not latest:
@@ -576,7 +585,6 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
     'sim' = SIMULATED strategy fills only, 'all' = both. `strategy` narrows to
     one strategy and composes with view. `include_sim=true` is the legacy
     spelling of view=all."""
-    init_db()
     effective_view = "all" if (include_sim and view == "real") else view
 
     def _filtered(q):
@@ -1115,7 +1123,6 @@ def get_order_story(order_id: int):
     """Row-click detail: the full narrative behind one order — entry context,
     rule lines, the day's bar, how the judgment was made, and what happened
     after. Sections degrade independently; the core row always returns."""
-    init_db()
     with SessionLocal() as db:
         o = db.query(Order).filter(Order.id == order_id).first()
         if o is None:
@@ -1240,7 +1247,6 @@ class SurgePicksResponse(BaseModel):
 def get_surge_picks(days: int = Query(7, ge=1, le=60)):
     """Recent surge-eve TOP10 picks + whether the 15:29 sim bought them."""
     from ..db import SurgePick
-    init_db()
     cutoff = date.today() - timedelta(days=days)
     with SessionLocal() as db:
         rows = (db.query(SurgePick)
@@ -1267,7 +1273,6 @@ def get_cafe_candidates(days: int = Query(7, ge=1, le=60)):
     """Recent cafe-screener picks (15:05 scan) + whether the 15:28 sim bought them."""
     from ..db import CafeCandidate
     from ..services.market_screener import _PATTERN_LABELS
-    init_db()
     cutoff = date.today() - timedelta(days=days)
     with SessionLocal() as db:
         rows = (db.query(CafeCandidate)
@@ -1297,7 +1302,6 @@ def get_cafe_orderbook(days: int = Query(14, ge=1, le=90)):
     (정규장 depth), the 1528 slot against 예상체결수량 (what would match in
     the closing auction)."""
     from ..db import OrderbookSnapshot
-    init_db()
     cutoff = date.today() - timedelta(days=days)
     with SessionLocal() as db:
         rows = (db.query(OrderbookSnapshot)
@@ -1329,7 +1333,6 @@ def get_cafe_orderbook(days: int = Query(14, ge=1, le=90)):
 @router.get("/pnl/daily", response_model=DailyPnLResponse)
 def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
     """Per-trading-day PnL roll-up for the equity chart."""
-    init_db()
     cutoff = date.today() - timedelta(days=days)
     with SessionLocal() as db:
         rows = (db.query(DailyPnL)
@@ -1363,7 +1366,6 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
 @router.get("/positions/history")
 def get_position_history(limit: int = Query(60, ge=1, le=365)):
     """Recent end-of-day position snapshots (raw JSON holdings)."""
-    init_db()
     with SessionLocal() as db:
         snaps = (db.query(PositionSnapshot)
                    .order_by(desc(PositionSnapshot.snapshot_date))

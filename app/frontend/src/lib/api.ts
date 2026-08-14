@@ -300,8 +300,13 @@ export interface LiveBalanceResponse {
   cash: number;
   total_eval: number;
   holdings: LiveHolding[];
+  /** When the numbers were read from KIS — for a stale payload, the last-known-good time. */
   fetched_at: string;
   mode: "real" | "paper" | "mock";
+  /** Freshness of this payload. */
+  source?: "live" | "cache" | "stale" | "db" | "empty";
+  /** True when KIS was unreachable and these are last-known-good numbers. */
+  stale?: boolean;
 }
 
 export interface SignalReasonFeature {

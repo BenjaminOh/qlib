@@ -18,6 +18,8 @@ up and validated end-to-end before KIS credentials exist.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import math
@@ -62,6 +64,54 @@ _THROTTLE_MARKERS = ("초당 거래건수", "EGW00201")
 # this appkey). Like a throttle rejection, KIS never accepted the order — so
 # re-auth + retry cannot double-execute.
 _TOKEN_MARKERS = ("기간이 만료된 token", "EGW00123")
+
+# Shared redis handle for the token cache + call gate (see KISClient._redis).
+_redis_singleton = None
+
+# After a failed token issue, suppress further attempts for this long. KIS caps
+# issuance at ~1/min, so hammering it while it is unhealthy only extends the
+# outage — and each attempt blocks the caller for the full 10s HTTP timeout.
+_TOKEN_COOLDOWN_S = 60
+
+# Set only for display reads (see `fail_fast_tokens`). Order and sync tasks
+# leave it False and keep the full token-recovery behaviour they rely on: the
+# 09:00 buys depend on the 5s/65s re-read that rides out KIS's 1/min issuance
+# limit, and must never inherit a dashboard poll's give-up semantics.
+_fail_fast: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "kis_fail_fast_tokens", default=False)
+
+
+@contextlib.contextmanager
+def fail_fast_tokens():
+    """Within this block, give up instead of waiting out a token outage.
+
+    Used by the read path, which has a last-known-good snapshot to fall back
+    on and whose caller is a browser waiting on a response.
+    """
+    token = _fail_fast.set(True)
+    try:
+        yield
+    finally:
+        _fail_fast.reset(token)
+
+
+def _is_token_error(r: "requests.Response") -> bool:
+    """True only when KIS says the TOKEN is the problem.
+
+    KIS answers HTTP 500 for unrelated server faults too — `EGW00300`
+    (게이트웨이 라우팅 오류), `EGW00215` (초당 거래건수 초과). Treating those as
+    token invalidation (the old `status_code in (401, 500)` test) deleted the
+    shared redis token on every gateway hiccup, and since issuance is capped at
+    1/min the re-issue then 403'd or hung — turning a KIS blip into a
+    self-sustaining outage (2026-08-14). Only 401, or an explicit token marker
+    in the body, may drop the token.
+    """
+    if r.status_code == 401:
+        return True
+    try:
+        return any(m in r.text for m in _TOKEN_MARKERS)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ─── Domain models ──────────────────────────────────────────────────
@@ -177,12 +227,29 @@ class KISClient:
         return f"kis:token:{self.env}:{self.cano}"
 
     def _redis(self):
-        """Best-effort redis client — None if unavailable (never raises)."""
-        try:
-            import redis  # type: ignore[import-not-found]
-            return redis.from_url(settings.celery_broker_url)
-        except Exception:  # noqa: BLE001
-            return None
+        """Best-effort redis client — None if unavailable (never raises).
+
+        Process singleton: this used to build a fresh `redis.from_url` pool on
+        every call (twice per KIS request, via `_gate` + `_ensure_token`) and
+        never close it, leaking a pool each time. Explicit socket timeouts stop
+        an unreachable redis from hanging a request thread indefinitely.
+        """
+        global _redis_singleton
+        if _redis_singleton is None:
+            try:
+                import redis  # type: ignore[import-not-found]
+                _redis_singleton = redis.Redis.from_url(
+                    settings.celery_broker_url,
+                    socket_connect_timeout=2,
+                    socket_timeout=2,
+                )
+            except Exception:  # noqa: BLE001
+                return None
+        return _redis_singleton
+
+    @property
+    def _redis_cooldown_key(self) -> str:
+        return f"kis:token:cooldown:{self.env}:{self.cano}"
 
     def _ensure_token(self) -> str:
         """Return a valid access token, shared across worker processes via redis.
@@ -220,10 +287,28 @@ class KISClient:
                         return self._token
             elif self._token and self._token_expires_at - now > 600:  # >10min left
                 return self._token
+            # No usable token, and a recent issue attempt failed. A display
+            # caller gives up here rather than spending another 10s HTTP
+            # timeout — balance_cache serves the last-known-good snapshot
+            # instead. Order tasks never take this branch: they must keep every
+            # bit of the recovery below, so trading is unaffected.
+            if _fail_fast.get() and r_client is not None:
+                try:
+                    cooling = r_client.get(self._redis_cooldown_key)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("KIS token cooldown read failed: %s", exc)
+                    cooling = None
+                if cooling:
+                    raise RuntimeError(
+                        "KIS token issuance in cooldown after a recent failure")
             url = f"{self.host}/oauth2/tokenP"
             payload = {"grant_type": "client_credentials",
                        "appkey": self.app_key, "appsecret": self.app_secret}
-            r = requests.post(url, json=payload, timeout=10)
+            try:
+                r = requests.post(url, json=payload, timeout=10)
+            except Exception:
+                self._set_token_cooldown()
+                raise
             if r.status_code in (403, 429):
                 # EGW00133: issuance is rate-limited to 1/min. When two
                 # processes race (e.g. the 09:00 order task vs a dashboard
@@ -234,6 +319,14 @@ class KISClient:
                 # (2026-07-29: this exact race killed the day's buy orders.)
                 log.warning("KIS token issue throttled (%s) — re-reading shared cache",
                             r.status_code)
+                # Open the cooldown BEFORE the long waits below, so display
+                # callers fail fast instead of each piling up behind its own
+                # 70s wait. Whoever is here rides the rate-limit window out.
+                self._set_token_cooldown()
+                if _fail_fast.get():
+                    # A dashboard poll must never sit through 70s of sleeps —
+                    # that is the block the user sees. The order tasks below do.
+                    raise RuntimeError("KIS token issuance throttled")
                 for wait_s in (5, 65):
                     time.sleep(wait_s)
                     if r_client is not None:
@@ -252,6 +345,7 @@ class KISClient:
                         break
             if r.status_code != 200:
                 log.error("KIS token issue failed: %s %s", r.status_code, r.text[:300])
+                self._set_token_cooldown()
             r.raise_for_status()
             d = r.json()
             self._token = d["access_token"]
@@ -266,7 +360,27 @@ class KISClient:
                     )
                 except Exception as exc:  # noqa: BLE001
                     log.warning("KIS token redis write failed: %s", exc)
+            self._clear_token_cooldown()
             return self._token
+
+    def _set_token_cooldown(self) -> None:
+        """Suppress token issuance for a minute after a failure (best effort)."""
+        r_client = self._redis()
+        if r_client is None:
+            return
+        try:
+            r_client.set(self._redis_cooldown_key, "1", ex=_TOKEN_COOLDOWN_S)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _clear_token_cooldown(self) -> None:
+        r_client = self._redis()
+        if r_client is None:
+            return
+        try:
+            r_client.delete(self._redis_cooldown_key)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _drop_token(self) -> None:
         """Invalidate the cached token (local + redis) so the next call re-auths."""
@@ -368,25 +482,29 @@ class KISClient:
         }
         # KIS paper env intermittently 500s (also on auth churn). Re-auth once
         # and retry with backoff before surfacing — the daily sync must not
-        # die on a transient server hiccup.
+        # die on a transient server hiccup. A display read takes one attempt
+        # only: the 2s+4s+6s backoff is 12s of blocking a browser cannot spend,
+        # and balance_cache has a last-known-good snapshot to answer with.
+        attempts = 1 if _fail_fast.get() else 3
         last_exc: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(attempts):
             self._gate()
             r = requests.get(self.host + path, headers=self._headers(self.tr_set["balance"]),
                              params=params, timeout=15)
             if r.status_code == 200:
                 break
             log.warning(
-                "KIS get_balance HTTP %s (attempt %d/3): %s",
-                r.status_code, attempt + 1, r.text[:300],
+                "KIS get_balance HTTP %s (attempt %d/%d): %s",
+                r.status_code, attempt + 1, attempts, r.text[:300],
             )
-            if r.status_code in (401, 500):
-                self._drop_token()  # token may have been invalidated elsewhere
+            if _is_token_error(r):
+                self._drop_token()  # token was invalidated elsewhere
             try:
                 r.raise_for_status()
             except requests.HTTPError as exc:
                 last_exc = exc
-            time.sleep(2 * (attempt + 1))
+            if attempt + 1 < attempts:
+                time.sleep(2 * (attempt + 1))
         else:
             raise last_exc if last_exc else RuntimeError("KIS get_balance failed")
         d = r.json()

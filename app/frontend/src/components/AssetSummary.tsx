@@ -10,7 +10,9 @@ import {
   ResponsiveContainer,
   YAxis,
 } from "recharts";
-import { DailyPnLRow, LiveBalanceResponse, TodayRealized } from "@/lib/api";
+import {
+  DailyPnLRow, LiveBalanceResponse, TodayRealized, fmtDateTime, parseUtc,
+} from "@/lib/api";
 
 /** Securities-app style asset summary: one panel with a single large figure,
  *  equity sparkline, invested/cash proportion bar, holdings donut, and a
@@ -113,7 +115,17 @@ export default function AssetSummary({
         {/* Hero: total + today + sparkline + proportion bar */}
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
-            <div className="text-xs text-gray-500">총 평가금액</div>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className="text-xs text-gray-500">총 평가금액</div>
+              {balance?.stale && (
+                <span
+                  className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[11px] font-medium tabular-nums whitespace-nowrap"
+                  title="증권사 API 응답이 없어 마지막으로 조회된 값을 표시하고 있습니다."
+                >
+                  ⚠ {fmtDateTime(parseUtc(balance.fetched_at))} 기준
+                </span>
+              )}
+            </div>
             {cumulative != null && (
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium tabular-nums ${
                 cumulative >= 0 ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-600"

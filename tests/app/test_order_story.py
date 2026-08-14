@@ -71,7 +71,6 @@ def _story(monkeypatch, session, order_id, *, exit_rule=None, day_ohlc=None,
             return False
 
     monkeypatch.setattr(live_router, "SessionLocal", lambda: _Ctx())
-    monkeypatch.setattr(live_router, "init_db", lambda: None)
     monkeypatch.setattr(live_router, "_stock_name_safe", lambda code: None)
     monkeypatch.setattr(live_router, "_exit_rule", lambda s: (exit_rule or {}).get(s, {}))
     monkeypatch.setattr(live_router, "_trade_consts", lambda: (10, 30))

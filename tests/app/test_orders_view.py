@@ -127,7 +127,6 @@ def _get_orders(monkeypatch, session, prev_closes: dict, **params):
             return False
 
     monkeypatch.setattr(live_router, "SessionLocal", lambda: _Ctx())
-    monkeypatch.setattr(live_router, "init_db", lambda: None)
     monkeypatch.setattr(live_router, "_position_timeline", lambda *a, **kw: [])
     monkeypatch.setattr(live_router, "_close_safe", lambda code: None)
     monkeypatch.setattr(live_router, "_prev_close_cached", lambda code, day: prev_closes.get(code))

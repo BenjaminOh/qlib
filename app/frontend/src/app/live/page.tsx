@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import AssetSummary from "@/components/AssetSummary";
 import EquityChart from "@/components/EquityChart";
@@ -29,6 +29,12 @@ export default function LiveDashboardPage() {
     queryKey: ["live-balance"],
     queryFn: api.getLiveBalance,
     refetchInterval: 30_000,
+    // Matches the server-side snapshot window, so a remount inside it reuses
+    // the cached payload instead of re-hitting KIS.
+    staleTime: 5_000,
+    // Keep the last numbers on screen while a refetch is in flight — the cards
+    // must not blank out between polls.
+    placeholderData: keepPreviousData,
   });
   const signals = useQuery({
     queryKey: ["live-signals"],
