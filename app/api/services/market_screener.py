@@ -23,7 +23,8 @@ from datetime import date
 
 from ..config import settings
 from ..db import (CafeCandidate, CafeScout, MarketPoolSnapshot, Order,
-                  SessionLocal, STRATEGY_CAFE, STRATEGY_SURGE, SurgePick, init_db)
+                  OrderbookSnapshot, SessionLocal, STRATEGY_CAFE,
+                  STRATEGY_SURGE, SurgePick, init_db)
 
 log = logging.getLogger(__name__)
 
@@ -378,6 +379,74 @@ def submit_surge_orders(trade_date: date | None = None) -> dict:
                            "qty": qty, "price": px})
         db.commit()
     return {"status": "ok", "trade_date": day.isoformat(), "buys": bought}
+
+
+def capture_orderbook(slot: str, trade_date: date | None = None) -> dict:
+    """15:07 / 15:27 — snapshot the book for today's cafe candidates.
+
+    Observation only. The 15:28 sim buy calls get_quote(), which reports a
+    price and nothing about whether that price had size behind it, then books
+    a full fill. This records what get_quote() throws away so the fill can be
+    audited after the fact rather than argued about.
+
+    Slot semantics differ by design (see OrderbookSnapshot): "1505" lands in
+    정규장 and carries a real ask ladder; "1527" lands inside 동시호가 where
+    the ladder is meaningless and 예상체결수량 is the number that matters.
+
+    Never raises into the caller and never touches a trading path — a failed
+    capture costs one row of research data, and that is all it may cost.
+    """
+    from .kis_client import get_kis_client
+    init_db()
+    day = trade_date or date.today()
+    client = get_kis_client()
+    captured: list[dict] = []
+    with SessionLocal() as db:
+        cands = (db.query(CafeCandidate)
+                   .filter(CafeCandidate.trade_date == day)
+                   .order_by(CafeCandidate.rank.asc())
+                   .all())
+        if not cands:
+            return {"status": "no_candidates", "trade_date": day.isoformat(),
+                    "slot": slot}
+        for c in cands:
+            existing = (db.query(OrderbookSnapshot)
+                          .filter(OrderbookSnapshot.trade_date == day,
+                                  OrderbookSnapshot.slot == slot,
+                                  OrderbookSnapshot.code == c.code)
+                          .first())
+            if existing:
+                continue  # idempotent — a retry must not double-write
+            try:
+                q = client.get_quote(c.code)
+                book = client.get_orderbook(c.code)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("capture_orderbook %s/%s failed: %s", slot, c.code, exc)
+                continue
+            if not book and not q:
+                continue
+            price = q.get("price")
+            upper = q.get("upper_limit")
+            asks = book.get("asks") or []
+            db.add(OrderbookSnapshot(
+                trade_date=day, slot=slot, code=c.code, name=c.name,
+                price=price, upper_limit_px=upper,
+                at_upper_limit=int(bool(price and upper and price >= upper)),
+                total_ask_qty=book.get("total_ask_qty"),
+                total_bid_qty=book.get("total_bid_qty"),
+                ask_qty_1=(asks[0]["qty"] if asks else None),
+                antc_price=book.get("antc_price"),
+                antc_qty=book.get("antc_qty"),
+                book_json=json.dumps({"asks": asks, "bids": book.get("bids") or []},
+                                     ensure_ascii=False),
+            ))
+            captured.append({"code": c.code, "name": c.name, "price": price,
+                             "at_upper_limit": bool(price and upper and price >= upper),
+                             "total_ask_qty": book.get("total_ask_qty"),
+                             "antc_qty": book.get("antc_qty")})
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(), "slot": slot,
+            "captured": captured}
 
 
 def submit_cafe_orders(trade_date: date | None = None) -> dict:

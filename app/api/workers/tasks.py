@@ -276,6 +276,51 @@ def live_sync_cafe_task(self) -> dict:
     return sync_account(strategy="cafe")
 
 
+@celery_app.task(
+    bind=True,
+    name="capture_orderbook",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=1,
+)
+def capture_orderbook_task(self, slot: str) -> dict:
+    """15:07 / 15:27 KST — book depth for today's cafe candidates.
+
+    Research only. 15:07 is 정규장 (real ask ladder), 15:27 is 동시호가
+    (예상체결수량). Together they say whether the 15:28 sim buy could have
+    filled 장중 and whether it could have filled at the close."""
+    from ..services.market_screener import capture_orderbook
+    self.update_state(state="RUNNING")
+    return capture_orderbook(slot)
+
+
+@celery_app.task(bind=True, name="live_orders_cafeopen")
+def live_orders_cafeopen_task(self) -> dict:
+    """09:00 KST — cafeopen twin: rest a −3% limit off today's open for every
+    code cafe bought yesterday. No fill yet; resolve_cafeopen judges at 10:00."""
+    from ..services.live_trader import submit_cafeopen_orders
+    self.update_state(state="RUNNING")
+    return submit_cafeopen_orders()
+
+
+@celery_app.task(bind=True, name="resolve_cafeopen")
+def resolve_cafeopen_task(self) -> dict:
+    """10:00 KST — fill the resting cafeopen limits the 09:00~10:00 range
+    touched, cancel the rest. Idempotent (PENDING rows only)."""
+    from ..services.live_trader import resolve_cafeopen_orders
+    self.update_state(state="RUNNING")
+    return resolve_cafeopen_orders()
+
+
+@celery_app.task(bind=True, name="live_sync_cafeopen")
+def live_sync_cafeopen_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="cafeopen")
+
+
 @celery_app.task(bind=True, name="close_bracket_exits")
 def close_bracket_exits_task(self) -> dict:
     """Chained after refresh_kr_data (+ 16:25 fallback beat) — exit-rule matrix

@@ -31,7 +31,7 @@ from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-    STRATEGY_SURGE, init_db,
+    STRATEGY_SURGE, STRATEGY_CAFEOPEN, init_db,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
@@ -51,6 +51,7 @@ def _seed_for(strategy: str) -> float:
         STRATEGY_LIMIT: settings.live_seed_cash_limit,
         STRATEGY_CAFE: settings.live_seed_cash_cafe,
         STRATEGY_SURGE: settings.live_seed_cash_surge,
+        STRATEGY_CAFEOPEN: settings.live_seed_cash_cafeopen,
     }
     return seeds.get(strategy, settings.live_seed_cash_open)
 
@@ -64,7 +65,7 @@ def _seed_for(strategy: str) -> float:
 #   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-                      STRATEGY_SURGE)
+                      STRATEGY_SURGE, STRATEGY_CAFEOPEN)
 
 EXIT_RULES: dict[str, dict] = {
     STRATEGY_CLOSE: {"tp": 0.10},
@@ -84,6 +85,11 @@ EXIT_RULES: dict[str, dict] = {
     # STANDARD bracket (TP +10% / prev-low stop) so the curve isolates
     # the entry idea with no other variable.
     STRATEGY_SURGE: {"tp": 0.10},
+    # cafeopen: byte-identical to cafe on purpose. The twin exists to isolate
+    # ONE variable (when the entry fills), so every exit knob must match — if
+    # you change cafe's rule here, change this one in the same edit or the
+    # A/B stops measuring what it claims to.
+    STRATEGY_CAFEOPEN: {"tp": 0.10, "stop_source": "entry"},
 }
 
 
@@ -1039,10 +1045,18 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                                    Order.side == "SELL")
                            .order_by(Order.trade_date.desc())
                            .first())
+            # A BUY row is only an entry if it actually filled. cafeopen keeps
+            # its unfilled reservations (CANCELLED, and PENDING until 10:00
+            # resolves them) instead of deleting them, so without this filter a
+            # stale cancel from an earlier day would win the .asc() ordering
+            # and hand the bracket the wrong entry_date — dating the position
+            # before it existed and skipping the entry-day exclusion below.
             entry_q = (db.query(Order)
                          .filter(Order.strategy == strategy,
                                  Order.code == h.code,
-                                 Order.side == "BUY"))
+                                 Order.side == "BUY",
+                                 Order.status.notin_(("CANCELLED", "PENDING",
+                                                      "REJECTED"))))
             if last_sell is not None:
                 entry_q = entry_q.filter(Order.trade_date > last_sell.trade_date)
             entry = entry_q.order_by(Order.trade_date.asc()).first()
@@ -1237,6 +1251,186 @@ def evaluate_bracket_exits(trade_date: date | None = None,
     return {"status": "ok", "trade_date": day.isoformat(), "strategy": strategy,
             "rule": rule, "sl_cap": sl_cap, "low_window": low_window,
             "exits": exits, "ambiguous": ambiguous}
+
+
+def _prev_trading_day(day: date) -> date | None:
+    """The trading day strictly before `day`, or None if the calendar misses."""
+    try:
+        from qlib.data import D
+        cal = D.calendar(end_time=day.isoformat())
+        days = [pd.Timestamp(c).date() for c in cal if pd.Timestamp(c).date() < day]
+        return days[-1] if days else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def submit_cafeopen_orders(trade_date: date | None = None) -> dict:
+    """09:00 — rest a −3% limit buy for every code cafe bought YESTERDAY.
+
+    The twin's whole job is to price the one assumption cafe cannot defend:
+    that 250만원 fills at a 상한가 close. So it takes cafe's picks unchanged
+    and buys them the only way anyone provably could — the next morning, off
+    a price the market actually offers. Discount is measured from TODAY's
+    open (not yesterday's close), so the twin is never handed the ceiling
+    print as a reference; it reasons only from prices that exist after cafe's
+    fill was supposedly made.
+
+    Writes an Order row with status PENDING and NO Fill — invisible to
+    _simulated_balance until resolve_cafeopen_orders() judges it at 10:00.
+    Idempotent: a code already resting or already held today is skipped.
+    """
+    init_db()
+    day = trade_date or date.today()
+    prev = _prev_trading_day(day)
+    if prev is None:
+        return {"status": "no_calendar", "trade_date": day.isoformat()}
+    client = get_kis_client()
+    discount = settings.live_cafeopen_discount
+    slots = max(settings.live_cafe_slots, 1)
+    rested: list[dict] = []
+    with SessionLocal() as db:
+        source = (db.query(Order)
+                    .filter(Order.strategy == STRATEGY_CAFE,
+                            Order.trade_date == prev,
+                            Order.side == "BUY")
+                    .order_by(Order.id.asc())
+                    .all())
+        if not source:
+            return {"status": "no_source_buys", "trade_date": day.isoformat(),
+                    "source_date": prev.isoformat()}
+        snapshot = _simulated_balance(db, strategy=STRATEGY_CAFEOPEN)
+        held = {h.code for h in snapshot.holdings}
+        pending = {o.code for o in db.query(Order)
+                                     .filter(Order.strategy == STRATEGY_CAFEOPEN,
+                                             Order.trade_date == day,
+                                             Order.status == "PENDING")}
+        slot_budget = max(snapshot.total_eval, snapshot.cash) / slots
+        cash = snapshot.cash
+        for src in source:
+            if src.code in held or src.code in pending:
+                continue
+            q = client.get_quote(src.code)
+            open_px = q.get("open")
+            if not open_px or open_px <= 0 or q.get("halted"):
+                continue
+            limit_px = round_to_tick(open_px * (1.0 - discount))
+            budget = min(cash, slot_budget)
+            qty = int(budget // limit_px) if limit_px > 0 else 0
+            if qty <= 0:
+                continue
+            # Carry cafe's structural stop across verbatim — the exit engine
+            # reads stop_px off the ENTRY order, so the twin must hand it the
+            # same level or the stops diverge along with the entries.
+            src_reasons = {}
+            try:
+                src_reasons = json.loads(src.reasons_json or "{}")
+            except Exception:  # noqa: BLE001
+                pass
+            reasons = {
+                "action": "buy",
+                "basis": (f"cafe 쌍둥이 — {prev.isoformat()} cafe 진입가 "
+                          f"{round(src.price or 0):,} 대신 익일 시가 {round(open_px):,} "
+                          f"−{discount * 100:.1f}% 지정가 {limit_px:,} 예약 "
+                          f"(10:00까지 미체결 시 취소)"),
+                "summary": "", "metrics": src_reasons.get("metrics", {}),
+                "top_features": [],
+                "stop_px": src_reasons.get("stop_px"),
+                "entry": {"limit_px": limit_px, "open_px": open_px,
+                          "discount": discount,
+                          "cafe_entry_px": src.price,
+                          "cafe_trade_date": prev.isoformat(),
+                          "cafe_order_id": src.id},
+            }
+            res = OrderResult(ok=True, order_id=f"SIM-PENDING-{src.id}",
+                              code=src.code, side="BUY", qty=qty, price=limit_px,
+                              raw={"simulated": True, "resting": True}, error=None)
+            o = _persist_order(db, day, src.code, "BUY", qty, limit_px, res,
+                               strategy=STRATEGY_CAFEOPEN, reasons=reasons)
+            o.status = "PENDING"
+            o.ord_dvsn = "00"  # 지정가 — this one really is a limit order
+            if src.name and src.name != src.code:
+                o.name = src.name
+            cash -= qty * limit_px
+            rested.append({"code": src.code, "name": src.name, "qty": qty,
+                           "open_px": open_px, "limit_px": limit_px})
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(),
+            "source_date": prev.isoformat(), "strategy": STRATEGY_CAFEOPEN,
+            "discount": discount, "rested": rested}
+
+
+def resolve_cafeopen_orders(trade_date: date | None = None) -> dict:
+    """10:00 — fill or cancel this morning's resting cafeopen limits.
+
+    At 10:00 the session is one hour old, so get_quote's 저가/시가 ARE the
+    09:00~10:00 extremes — the resting window's own range, with no minute-bar
+    TR and no daily bar that would smuggle the afternoon in.
+
+      open ≤ limit  → filled at the OPEN (gapped through; better price)
+      low  ≤ limit  → filled at the LIMIT
+      neither       → CANCELLED, and the row STAYS
+
+    Cancelled rows are the point, not debris: "cafe's pick was never
+    purchasable at a sane price" is a result, and dropping the row the way
+    evaluate_limit_entries does would hide it. Idempotent — only PENDING rows
+    are touched, so a re-run finds nothing.
+    """
+    init_db()
+    day = trade_date or date.today()
+    client = get_kis_client()
+    filled: list[dict] = []
+    cancelled: list[dict] = []
+    with SessionLocal() as db:
+        resting = (db.query(Order)
+                     .filter(Order.strategy == STRATEGY_CAFEOPEN,
+                             Order.trade_date == day,
+                             Order.status == "PENDING")
+                     .order_by(Order.id.asc())
+                     .all())
+        if not resting:
+            return {"status": "nothing_resting", "trade_date": day.isoformat()}
+        for o in resting:
+            q = client.get_quote(o.code)
+            open_px, low_px = q.get("open"), q.get("low")
+            limit_px = float(o.price or 0)
+            if not open_px or not low_px or limit_px <= 0:
+                # No data to judge on — leave PENDING so a retry can resolve it
+                # rather than inventing a cancel the market never made.
+                log.warning("cafeopen: no quote for %s, leaving PENDING", o.code)
+                continue
+            if open_px <= limit_px:
+                fill_px, how = float(open_px), "gap"
+            elif low_px <= limit_px:
+                fill_px, how = limit_px, "touch"
+            else:
+                o.status = "CANCELLED"
+                o.error = (f"미체결 — 지정가 {limit_px:,.0f}, "
+                           f"{settings.live_cafeopen_cutoff_hour}:00까지 저가 {low_px:,.0f}")
+                cancelled.append({"code": o.code, "name": o.name,
+                                  "limit_px": limit_px, "low_px": low_px})
+                continue
+            o.status = "SIMULATED"
+            o.ord_dvsn = Order.ORD_DVSN_SIM
+            o.price = fill_px
+            try:
+                reasons = json.loads(o.reasons_json or "{}")
+            except Exception:  # noqa: BLE001
+                reasons = {}
+            entry = reasons.setdefault("entry", {})
+            entry.update({"fill_px": fill_px, "fill_kind": how,
+                          "window_low": low_px, "window_open": open_px})
+            reasons["basis"] = (reasons.get("basis", "") +
+                                f" → {'갭 관통' if how == 'gap' else '지정가 터치'} "
+                                f"{fill_px:,.0f} 체결")
+            o.reasons_json = json.dumps(reasons, ensure_ascii=False)
+            db.add(Fill(order_id=o.id, strategy=STRATEGY_CAFEOPEN,
+                        qty=o.qty, price=fill_px, fee=0.0, pnl=None))
+            filled.append({"code": o.code, "name": o.name, "qty": o.qty,
+                           "limit_px": limit_px, "fill_px": fill_px, "kind": how})
+        db.commit()
+    return {"status": "ok", "trade_date": day.isoformat(),
+            "strategy": STRATEGY_CAFEOPEN,
+            "filled": filled, "cancelled": cancelled}
 
 
 def evaluate_limit_entries(trade_date: date | None = None) -> dict:

@@ -33,6 +33,12 @@ STRATEGY_SCALE = "scale"
 STRATEGY_LIMIT = "limit"
 STRATEGY_CAFE = "cafe"
 STRATEGY_SURGE = "surge"
+# cafeopen — cafe's execution twin (2026-08-14). Same picks, same exits; the
+# ONLY difference is the entry: cafe sim-fills at the 15:28 quote (which for a
+# 상한가 close assumes a fill nobody can prove was reachable), cafeopen rests a
+# −3% limit off the NEXT morning's open and cancels it unfilled at 10:00.
+# The gap between the two curves IS the entry-fill assumption's contribution.
+STRATEGY_CAFEOPEN = "cafeopen"  # exactly 8 chars — the Order.strategy limit
 
 
 class User(Base):
@@ -201,6 +207,48 @@ class SurgePick(Base):
     )
 
 
+class OrderbookSnapshot(Base):
+    """10-level bid/ask book for cafe candidates, captured twice a day.
+
+    Observation-only — NOTHING trades on this table. It exists to answer the
+    one question the cafe sim cannot: when the 15:28 task "bought" 250만원
+    of a 상한가 close, was there anything to buy? The sim calls get_quote(),
+    which returns a price and no depth, then books a full fill at that price.
+
+    Two slots, deliberately different in kind:
+      - "1505" 정규장 — a real book. total_ask_qty is the shares actually
+        offered; compare against the order qty for장중 fillability.
+      - "1528" 동시호가 — no book matches yet, so KIS returns 예상체결가/
+        예상체결수량 instead. antc_qty is the volume that WOULD match at the
+        close; an order behind that queue is the one that doesn't fill.
+
+    Kept per (day, slot, code) for every candidate, not just the bought two —
+    the unbought ones are the control group.
+    """
+    __tablename__ = "orderbook_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    slot = Column(String(5), nullable=False)      # "1505" / "1528"
+    code = Column(String(8), nullable=False)
+    name = Column(String(64), nullable=True)
+    price = Column(Float, nullable=True)          # 현재가 at capture time
+    upper_limit_px = Column(Float, nullable=True)  # 상한가
+    at_upper_limit = Column(Integer, nullable=True)  # 1 = price is AT 상한가
+    total_ask_qty = Column(Float, nullable=True)  # 총매도호가잔량 (정규장에서만 의미)
+    total_bid_qty = Column(Float, nullable=True)  # 총매수호가잔량
+    ask_qty_1 = Column(Float, nullable=True)      # 최우선 매도잔량
+    antc_price = Column(Float, nullable=True)     # 예상체결가 (동시호가)
+    antc_qty = Column(Float, nullable=True)       # 예상체결수량 (동시호가)
+    book_json = Column(Text, nullable=True)       # JSON: {"asks":[...], "bids":[...]}
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "slot", "code",
+                         name="uq_orderbook_date_slot_code"),
+    )
+
+
 class Order(Base):
     """One outbound order attempt (real KIS for 'open', simulated otherwise)."""
     __tablename__ = "orders"
@@ -218,7 +266,11 @@ class Order(Base):
     kis_order_id = Column(String(40), nullable=True, index=True)
     # SIMULATED is used by the 'close' strategy — no KIS round-trip, fill is
     # written immediately from the kr_data last close.
-    status = Column(String(16), nullable=False, default="SUBMITTED")  # SUBMITTED/REJECTED/FILLED/PARTIAL/CANCELLED/SIMULATED
+    # PENDING is the cafeopen resting limit: written at 09:00 with no Fill row
+    # (so it stays invisible to _simulated_balance) and resolved at 10:00 into
+    # SIMULATED (touched) or CANCELLED (never touched — kept as a row so the
+    # miss rate is measurable, unlike the limit strategy which drops them).
+    status = Column(String(16), nullable=False, default="SUBMITTED")  # SUBMITTED/REJECTED/FILLED/PARTIAL/CANCELLED/SIMULATED/PENDING
     error = Column(Text, nullable=True)
     # Decision basis CAPTURED AT ORDER TIME — {"action","basis","summary",
     # "metrics","top_features"}. Sells can't be reconstructed later (the sell

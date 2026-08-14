@@ -428,12 +428,68 @@ class KISClient:
         return {
             "open": float(d.get("stck_oprc") or 0) or None,
             "price": float(d.get("stck_prpr") or 0) or None,
+            # Session range SO FAR. Called at 10:00 these are the 09:00~10:00
+            # extremes, which is exactly what judges a morning resting limit —
+            # no minute-bar TR needed. 상한가/하한가 flag 상한가 pins.
+            "high": float(d.get("stck_hgpr") or 0) or None,
+            "low": float(d.get("stck_lwpr") or 0) or None,
+            "upper_limit": float(d.get("stck_mxpr") or 0) or None,
+            "lower_limit": float(d.get("stck_llam") or 0) or None,
             # Risk flags — the ONLY fundamental-risk signal this system has:
             # trht_yn: 거래정지 여부, iscd_stat_cls_code: 51 관리종목 /
             # 52 투자위험 / 53 투자경고, mrkt_warn_cls_code: 시장경고.
             "halted": str(d.get("trht_yn") or "N").upper() == "Y",
             "status_code": str(d.get("iscd_stat_cls_code") or ""),
             "warn_code": str(d.get("mrkt_warn_cls_code") or ""),
+        }
+
+    def get_orderbook(self, code: str) -> dict:
+        """10-level bid/ask book + closing-auction expectation (TR FHKST01010200).
+
+        Observation-only — feeds orderbook_snapshots, never a trading decision.
+        What it answers: the cafe sim books a full fill at the 15:28 quote
+        without ever looking at depth, so a 상한가 close with an empty ask side
+        and a queue of unfilled bids reads identically to a liquid one.
+
+        During 정규장 output1's ask/bid ladders are the live book. Inside the
+        15:20~15:30 동시호가 no book matches yet, so the ladder goes sparse and
+        output2's 예상체결가/예상체결수량 (antc_*) carry the information
+        instead. Callers get both and pick by slot; {} on any failure.
+        """
+        if self.is_mock:
+            return {}
+        self._gate()
+        r = requests.get(
+            self.host + "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn",
+            headers=self._headers("FHKST01010200"),
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code.zfill(6)},
+            timeout=10)
+        d = r.json() if r.status_code == 200 else {}
+        if r.status_code != 200 or d.get("rt_cd") != "0":
+            log.warning("KIS get_orderbook %s failed HTTP %s: %s",
+                        code, r.status_code, r.text[:200])
+            return {}
+        o1 = d.get("output1") or {}
+        o2 = d.get("output2") or {}
+
+        def _f(v) -> float:
+            try:
+                return float(v or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        asks = [{"px": _f(o1.get(f"askp{i}")), "qty": _f(o1.get(f"askp_rsqn{i}"))}
+                for i in range(1, 11)]
+        bids = [{"px": _f(o1.get(f"bidp{i}")), "qty": _f(o1.get(f"bidp_rsqn{i}"))}
+                for i in range(1, 11)]
+        return {
+            "asks": asks,
+            "bids": bids,
+            "total_ask_qty": _f(o1.get("total_askp_rsqn")),
+            "total_bid_qty": _f(o1.get("total_bidp_rsqn")),
+            "antc_price": _f(o2.get("antc_cnpr")) or None,
+            "antc_qty": _f(o2.get("antc_cnqn")) or None,
+            "antc_volume": _f(o2.get("antc_vol")) or None,
         }
 
     # ─── 투자자별 매매동향 (기관/외국인 수급) ──────────────────

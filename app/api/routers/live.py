@@ -1136,6 +1136,32 @@ class CafeCandidateRow(BaseModel):
     bought: bool = False
 
 
+class OrderbookRow(BaseModel):
+    """One (day, slot, code) book capture, plus the fill verdict it supports."""
+    trade_date: date
+    slot: str
+    code: str
+    name: str | None = None
+    price: float | None = None
+    upper_limit_px: float | None = None
+    at_upper_limit: bool = False
+    total_ask_qty: float | None = None
+    total_bid_qty: float | None = None
+    ask_qty_1: float | None = None
+    antc_price: float | None = None
+    antc_qty: float | None = None
+    # What the cafe sim actually claimed to buy that day, so the depth on the
+    # left can be read against the size on the right without a second query.
+    order_qty: int | None = None
+    # order_qty vs the depth available in this slot. None when the slot has no
+    # comparable depth figure (e.g. a 동시호가 capture with no 예상체결수량).
+    depth_ratio: float | None = None
+
+
+class OrderbookResponse(BaseModel):
+    rows: list[OrderbookRow]
+
+
 class RetroEpisode(BaseModel):
     code: str
     name: str | None = None
@@ -1261,6 +1287,45 @@ def get_cafe_candidates(days: int = Query(7, ge=1, le=60)):
         ) for r in rows])
 
 
+@router.get("/cafe/orderbook", response_model=OrderbookResponse)
+def get_cafe_orderbook(days: int = Query(14, ge=1, le=90)):
+    """Book depth captured at 15:07 / 15:27 for each cafe candidate.
+
+    `depth_ratio` is the whole point: order_qty ÷ available depth. Above 1.0
+    the 15:28 sim claimed more shares than the book was showing, which is the
+    fill nobody can defend. The 1505 slot compares against 총매도호가잔량
+    (정규장 depth), the 1528 slot against 예상체결수량 (what would match in
+    the closing auction)."""
+    from ..db import OrderbookSnapshot
+    init_db()
+    cutoff = date.today() - timedelta(days=days)
+    with SessionLocal() as db:
+        rows = (db.query(OrderbookSnapshot)
+                  .filter(OrderbookSnapshot.trade_date >= cutoff)
+                  .order_by(desc(OrderbookSnapshot.trade_date),
+                            OrderbookSnapshot.slot.asc(),
+                            OrderbookSnapshot.code.asc())
+                  .all())
+        qty_by_key = {(o.trade_date, o.code): o.qty for o in
+                      db.query(Order).filter(Order.strategy == "cafe",
+                                             Order.side == "BUY",
+                                             Order.trade_date >= cutoff).all()}
+        out = []
+        for r in rows:
+            order_qty = qty_by_key.get((r.trade_date, r.code))
+            depth = r.antc_qty if r.slot == "1528" else r.total_ask_qty
+            out.append(OrderbookRow(
+                trade_date=r.trade_date, slot=r.slot, code=r.code, name=r.name,
+                price=r.price, upper_limit_px=r.upper_limit_px,
+                at_upper_limit=bool(r.at_upper_limit),
+                total_ask_qty=r.total_ask_qty, total_bid_qty=r.total_bid_qty,
+                ask_qty_1=r.ask_qty_1, antc_price=r.antc_price,
+                antc_qty=r.antc_qty, order_qty=order_qty,
+                depth_ratio=(order_qty / depth) if (order_qty and depth) else None,
+            ))
+        return OrderbookResponse(rows=out)
+
+
 @router.get("/pnl/daily", response_model=DailyPnLResponse)
 def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
     """Per-trading-day PnL roll-up for the equity chart."""
@@ -1281,6 +1346,7 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                 "limit": settings.live_seed_cash_limit,
                 "cafe": settings.live_seed_cash_cafe,
                 "surge": settings.live_seed_cash_surge,
+                "cafeopen": settings.live_seed_cash_cafeopen,
             },
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,

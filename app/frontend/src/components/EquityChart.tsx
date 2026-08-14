@@ -22,6 +22,7 @@ export const STRATEGY_COLORS: Record<string, string> = {
   limit: "#ef4444",  // red — −3% resting-limit entries (사장님 방식)
   cafe: "#78716c",   // stone — recommender-mimic screener
   surge: "#db2777",  // pink — surge-eve profile picks
+  cafeopen: "#0d9488", // teal — cafe's picks, next-morning limit entry
 };
 
 export const STRATEGY_LABELS: Record<string, string> = {
@@ -33,6 +34,7 @@ export const STRATEGY_LABELS: Record<string, string> = {
   limit: "지정가 −3% 매수 · +10% 예약매도 (시뮬)",
   cafe: "카페 모사 스크리너 (시뮬)",
   surge: "급등 전야 프로파일 (시뮬)",
+  cafeopen: "카페 모사 · 익일 시가 −3% 지정가 (시뮬)",
 };
 
 type WideRow = { date: string } & Record<string, number | string | undefined>;

@@ -138,6 +138,36 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders_cafe",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
+    # Book depth for the 15:28 buy — research only, no trades. 15:07 is
+    # 정규장 (real ask ladder); 15:27 is inside 동시호가 one minute before the
+    # order, where 예상체결수량 replaces the ladder. Both are needed: they
+    # answer "could it fill 장중" and "could it fill at the close" separately.
+    "cafe-orderbook-1505": {
+        "task": "capture_orderbook",
+        "schedule": crontab(hour=15, minute=7, day_of_week="mon-fri"),
+        "args": ("1505",),
+    },
+    "cafe-orderbook-1528": {
+        "task": "capture_orderbook",
+        "schedule": crontab(hour=15, minute=27, day_of_week="mon-fri"),
+        "args": ("1528",),
+    },
+    # cafeopen twin — cafe's picks entered the only way anyone provably could:
+    # a −3% limit off the next morning's open, cancelled unfilled at 10:00.
+    # 09:00 shares the slot with live_orders (real KIS); the twin is DB-only
+    # so there is no account contention, and both need the opening print.
+    "live-orders-cafeopen": {
+        "task": "live_orders_cafeopen",
+        "schedule": crontab(hour=9, minute=0, day_of_week="mon-fri"),
+    },
+    "resolve-cafeopen": {
+        "task": "resolve_cafeopen",
+        "schedule": crontab(hour=10, minute=0, day_of_week="mon-fri"),
+    },
+    "live-sync-cafeopen-after-close": {
+        "task": "live_sync_cafeopen",
+        "schedule": crontab(hour=15, minute=48, day_of_week="mon-fri"),
+    },
     # surge strategy: surge-eve profile TOP10 (reads the pool snapshots the
     # 15:05 screen just stored — no extra KIS calls), sim-buys the top 2.
     "surge-screen": {

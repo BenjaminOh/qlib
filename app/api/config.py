@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     live_cafe_slots: int = 10
     live_cafe_max_buys: int = 2
     live_cafe_stop_cap: float = 0.15
+    # cafeopen: cafe's execution twin (2026-08-14). Buys the SAME codes cafe
+    # bought yesterday, with the SAME exits — only the entry differs: a −3%
+    # limit off today's open, cancelled unfilled at 10:00. Slots/stop_cap are
+    # deliberately NOT duplicated (it reads live_cafe_*) so the two curves
+    # can never drift apart on anything but the entry. Seed must equal cafe's.
+    live_seed_cash_cafeopen: float = 10_000_000.0
+    live_cafeopen_discount: float = 0.03
+    # The resting window: order placed at 09:00, judged against the session
+    # range at this hour. 10:00 = the first hour only.
+    live_cafeopen_cutoff_hour: int = 10
+
     live_seed_cash_surge: float = 10_000_000.0
     live_surge_slots: int = 10
     live_surge_max_buys: int = 2
