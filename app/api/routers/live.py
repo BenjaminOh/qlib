@@ -21,7 +21,7 @@ from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
 )
 from ..services.balance_cache import get_balance_for_read
-from ..services.kis_client import get_kis_client
+from ..services.kis_client import get_kis_client, set_trading_halt, trading_halted
 
 router = APIRouter(prefix="/live", tags=["live"], dependencies=[Depends(get_current_user)])
 
@@ -124,6 +124,42 @@ class DailyPnLResponse(BaseModel):
     # balances (real KIS paper vs DB-only simulated), so the chart must
     # normalise each line against its own seed.
     seed_cash: dict[str, float]
+
+
+# ─── Kill switch ────────────────────────────────────────────────────
+
+
+class HaltStatus(BaseModel):
+    halted: bool
+    reason: str | None = None
+
+
+class HaltRequest(BaseModel):
+    # None releases the halt; any string engages it and is echoed back in
+    # every blocked order's error, so the reason survives to the audit trail.
+    reason: str | None = None
+
+
+@router.get("/halt", response_model=HaltStatus)
+def get_halt():
+    """Whether the trading kill switch is engaged."""
+    reason = trading_halted()
+    return HaltStatus(halted=reason is not None, reason=reason)
+
+
+@router.post("/halt", response_model=HaltStatus)
+def set_halt(req: HaltRequest):
+    """Engage or release the trading kill switch.
+
+    The only way to stop order submission without a deploy. Takes effect
+    across api/worker/scheduler at once (redis-backed) — the next order in
+    any container is refused.
+    """
+    if not set_trading_halt(req.reason):
+        raise HTTPException(status_code=503,
+                            detail="킬스위치를 쓸 수 없습니다 (redis 연결 실패)")
+    reason = trading_halted()
+    return HaltStatus(halted=reason is not None, reason=reason)
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────

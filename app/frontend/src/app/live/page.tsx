@@ -5,6 +5,7 @@ import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import AssetSummary from "@/components/AssetSummary";
+import HaltControl from "@/components/HaltControl";
 import EquityChart from "@/components/EquityChart";
 import StockCurvesChart from "@/components/StockCurvesChart";
 import HoldingsTable from "@/components/HoldingsTable";
@@ -96,7 +97,8 @@ export default function LiveDashboardPage() {
             </span>
           )}
         </div>
-        <div className="space-x-4 text-sm">
+        <div className="flex items-center gap-4 text-sm">
+          <HaltControl />
           <Link href="/live/retro" className="text-blue-600 hover:underline">
             🔁 매매 회고
           </Link>

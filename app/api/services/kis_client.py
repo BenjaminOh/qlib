@@ -44,6 +44,15 @@ _HOSTS = {
     "paper": "https://openapivts.koreainvestment.com:29443",
 }
 
+# Anything outside this set is a configuration error, not a default — see
+# KISClient.__init__.
+_VALID_ENVS = {"real", "paper", "mock"}
+
+# Kill switch. A redis flag so it takes effect across api/worker/scheduler
+# immediately — before this, the only way to stop trading was a deploy, which
+# is minutes away and itself risky mid-session.
+_HALT_KEY = "qlib:trading:halt"
+
 # TR_ID prefixes: T... = real, V... = paper. Same trailing 7 chars.
 _TR = {
     "real":  {"buy": "TTTC0802U", "sell": "TTTC0801U", "balance": "TTTC8434R", "psbl": "TTTC8908R",
@@ -95,6 +104,56 @@ def fail_fast_tokens():
         _fail_fast.reset(token)
 
 
+def _halt_redis():
+    """Redis handle for the kill switch, sharing the module pool."""
+    global _redis_singleton
+    if _redis_singleton is None:
+        try:
+            import redis  # type: ignore[import-not-found]
+            _redis_singleton = redis.Redis.from_url(
+                settings.celery_broker_url,
+                socket_connect_timeout=2, socket_timeout=2)
+        except Exception:  # noqa: BLE001
+            return None
+    return _redis_singleton
+
+
+def trading_halted() -> str | None:
+    """Reason string if trading is halted, else None.
+
+    Fails OPEN (returns None) when redis is unreachable: a broken switch must
+    not silently stop a working system. The inverse — trading through an
+    intended halt — is caught by the operator, who can see orders still firing.
+    """
+    r = _halt_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(_HALT_KEY)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("kill switch read failed, proceeding: %s", exc)
+        return None
+    if not raw:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
+
+
+def set_trading_halt(reason: str | None) -> bool:
+    """Engage (reason set) or release (None) the kill switch. True on success."""
+    r = _halt_redis()
+    if r is None:
+        return False
+    try:
+        if reason is None:
+            r.delete(_HALT_KEY)
+        else:
+            r.set(_HALT_KEY, reason)   # no TTL — stays until explicitly cleared
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.error("kill switch write failed: %s", exc)
+        return False
+
+
 def _is_token_error(r: "requests.Response") -> bool:
     """True only when KIS says the TOKEN is the problem.
 
@@ -138,6 +197,13 @@ class Holding:
     pnl: float
     pnl_pct: float
     name: str | None = None  # KIS prdt_name (실계좌) / _stock_name (시뮬)
+    # 매도가능수량 (ord_psbl_qty). Differs from `qty` when part of the position
+    # is already committed to a resting sell, or is unsettled. Selling `qty`
+    # blind is how a sell gets rejected outright — and a rejected sell means
+    # holding a position you meant to exit. None = unknown (simulated books).
+    # MUST stay last with a default: balance_cache._decode does Holding(**h)
+    # over cached JSON written before this field existed.
+    sellable_qty: int | None = None
 
 
 @dataclass
@@ -185,6 +251,14 @@ class KISClient:
                  account_no: str | None = None,
                  account_product: str | None = None):
         self.env = env or settings.kis_env or "paper"
+        # A typo'd env is NOT a harmless default. `host` and `tr_set` compare
+        # against "real" exactly, so "REAL"/"live"/"real " would quietly route
+        # live credentials at the PAPER host with V-series TR ids — every call
+        # fails auth and the system looks merely broken instead of misconfigured.
+        if self.env not in _VALID_ENVS:
+            raise ValueError(
+                f"KIS_ENV must be one of {sorted(_VALID_ENVS)}, got {self.env!r}. "
+                "Refusing to start rather than silently fall back to 모의투자.")
         self.app_key = app_key if app_key is not None else settings.kis_app_key
         self.app_secret = app_secret if app_secret is not None else settings.kis_app_secret
         self.account_no = (account_no if account_no is not None else settings.kis_account_no).split("-")[0]
@@ -196,6 +270,18 @@ class KISClient:
             self.cano = raw
             self.acnt_prdt_cd = account_product or settings.kis_account_product
 
+        # Credential-less mock is a convenience for paper/dev. On a REAL
+        # account it is a trap: place_order would return ok=True with a
+        # "MOCK-…" id, and the dashboard and Telegram would report filled
+        # orders that never existed. Fail at construction instead.
+        if self.env == "real" and not (self.app_key and self.app_secret and self.cano):
+            missing = [n for n, v in (("app_key", self.app_key),
+                                      ("app_secret", self.app_secret),
+                                      ("account_no", self.cano)) if not v]
+            raise ValueError(
+                f"KIS_ENV=real but {', '.join(missing)} missing — refusing to run. "
+                "Mock mode would report fake fills as real orders.")
+
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._lock = threading.Lock()
@@ -205,7 +291,10 @@ class KISClient:
 
     @property
     def is_mock(self) -> bool:
-        """Mock mode is automatic if creds missing or env explicitly 'mock'."""
+        """Mock mode is automatic if creds missing or env explicitly 'mock'.
+
+        Never true for env="real" — __init__ rejects that combination.
+        """
         if self.env == "mock":
             return True
         return not (self.app_key and self.app_secret and self.cano)
@@ -518,15 +607,111 @@ class KISClient:
             ev = float(row.get("evlu_amt") or 0)
             pnl = float(row.get("evlu_pfls_amt") or 0)
             pnl_pct = float(row.get("evlu_pfls_rt") or 0) / 100.0
+            raw_sellable = row.get("ord_psbl_qty")
+            sellable = int(float(raw_sellable)) if raw_sellable not in (None, "") else None
             holdings.append(Holding(code=str(row.get("pdno")),
                                      name=row.get("prdt_name") or None,
                                      qty=qty, avg_price=avg,
                                      eval_price=ep, eval_value=ev,
-                                     pnl=pnl, pnl_pct=pnl_pct))
+                                     pnl=pnl, pnl_pct=pnl_pct,
+                                     sellable_qty=sellable))
         summary = (d.get("output2") or [{}])[0]
         cash = float(summary.get("dnca_tot_amt") or 0)
         total = float(summary.get("tot_evlu_amt") or 0)
         return AccountSnapshot(cash=cash, total_eval=total, holdings=holdings)
+
+    # ─── 매수가능금액 (주문 예산의 진실) ────────────────────────
+
+    def get_orderable_cash(self, code: str, price: float | None = None) -> dict:
+        """{"cash", "max_qty"} — 주문가능현금 and 최대매수수량 for one code.
+
+        The buy budget has been `dnca_tot_amt` (예수금 총액) off get_balance,
+        which on a REAL account includes funds already committed to unsettled
+        (D+2) trades. Sizing against it is how a 미수 (margin) position gets
+        opened by accident. This TR is the number KIS itself would allow.
+
+        Returns {} on mock or any failure — callers must treat an empty dict
+        as "unknown" and fall back rather than sizing to zero.
+        """
+        if self.is_mock:
+            return {}
+        self._gate()
+        try:
+            r = requests.get(
+                self.host + "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+                headers=self._headers(self.tr_set["psbl"]),
+                params={
+                    "CANO": self.cano,
+                    "ACNT_PRDT_CD": self.acnt_prdt_cd,
+                    "PDNO": code.zfill(6),
+                    # 지정가면 그 가격 기준, 시장가면 0 + ORD_DVSN 01
+                    "ORD_UNPR": "0" if price is None else str(round_to_tick(float(price))),
+                    "ORD_DVSN": "01" if price is None else "00",
+                    "CMA_EVLU_AMT_ICLD_YN": "N",   # CMA 평가금액 미포함
+                    "OVRS_ICLD_YN": "N",           # 해외분 미포함
+                },
+                timeout=10)
+            if r.status_code != 200:
+                log.warning("KIS inquire-psbl-order HTTP %s: %s", r.status_code, r.text[:200])
+                return {}
+            out = r.json().get("output") or {}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("KIS inquire-psbl-order failed for %s: %s", code, exc)
+            return {}
+        return {
+            # 주문가능현금 — 미수 없이 쓸 수 있는 금액
+            "cash": float(out.get("ord_psbl_cash") or 0) or None,
+            "max_qty": int(float(out.get("max_buy_qty") or 0)) or None,
+        }
+
+    # ─── 국내휴장일 (개장일 여부) ───────────────────────────────
+
+    def get_open_days(self, bass_dt: date) -> dict[str, bool]:
+        """{iso_date: is_open} from `bass_dt` forward — KIS 국내휴장일조회.
+
+        `opnd_yn` (개장일여부) is the field KIS itself points at for "can I
+        place an order today"; 영업일(bzdy_yn)/결제일(sttl_day_yn) answer
+        different questions and are not interchangeable.
+
+        KIS asks for **at most one call per day** on this TR, so callers must
+        come through `services.trading_calendar`, which caches by month.
+        Returns {} on mock or any failure — the caller treats empty as
+        "unknown" and carries on rather than halting trading.
+        """
+        if self.is_mock:
+            return {}
+        out: dict[str, bool] = {}
+        fk = nk = ""
+        tr_cont = ""
+        for _ in range(10):          # paginated; 10 pages covers months of days
+            self._gate()
+            try:
+                r = requests.get(
+                    self.host + "/uapi/domestic-stock/v1/quotations/chk-holiday",
+                    headers={**self._headers("CTCA0903R"), "tr_cont": tr_cont},
+                    params={"BASS_DT": bass_dt.strftime("%Y%m%d"),
+                            "CTX_AREA_FK": fk, "CTX_AREA_NK": nk},
+                    timeout=10)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("KIS chk-holiday request failed: %s", exc)
+                break
+            if r.status_code != 200:
+                log.warning("KIS chk-holiday HTTP %s: %s", r.status_code, r.text[:200])
+                break
+            d = r.json()
+            for row in d.get("output") or []:
+                raw = str(row.get("bass_dt") or "")
+                if len(raw) != 8:
+                    continue
+                iso = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+                out[iso] = str(row.get("opnd_yn") or "").upper() == "Y"
+            tr_cont = r.headers.get("tr_cont", "")
+            if tr_cont not in ("M", "F"):     # no further pages
+                break
+            fk = d.get("ctx_area_fk") or ""
+            nk = d.get("ctx_area_nk") or ""
+            tr_cont = "N"                     # continuation marker for the next call
+        return out
 
     # ─── Quote (현재가/시가) ───────────────────────────────────
 
@@ -852,6 +1037,32 @@ class KISClient:
         if qty <= 0:
             return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
                                price=price, raw={}, error="qty must be > 0")
+
+        # Two rails that sit in FRONT of every order, mock included — a mock
+        # run that would have blown the cap should fail loudly in testing, not
+        # pass and then surprise us on the real account.
+        halted = trading_halted()
+        if halted:
+            log.warning("KIS order blocked by kill switch: %s %s x%d", side, code, qty)
+            return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                               price=price, raw={"halted": True},
+                               error=f"거래 중지 스위치 활성 ({halted})")
+        # The cap can only be enforced where the notional is knowable up front,
+        # i.e. limit orders. A market order's fill price is unknown until it
+        # fills — one more reason the real-money strategy is 지정가.
+        cap = settings.live_max_order_value
+        if cap > 0 and price is not None:
+            notional = qty * float(price)
+            if notional > cap:
+                log.error("KIS order exceeds cap: %s %s x%d @ %s = %s > %s",
+                          side, code, qty, price, f"{notional:,.0f}", f"{cap:,.0f}")
+                return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                                   price=price, raw={"cap": cap, "notional": notional},
+                                   error=f"주문금액 {notional:,.0f}원이 상한 {cap:,.0f}원 초과")
+        elif cap > 0 and price is None and not self.is_mock:
+            log.warning("KIS market order not covered by live_max_order_value: %s %s x%d",
+                        side, code, qty)
+
         if self.is_mock:
             mock_id = f"MOCK-{int(time.time()*1000)}"
             return OrderResult(ok=True, order_id=mock_id, code=code, side=side, qty=qty,
@@ -898,6 +1109,18 @@ class KISClient:
             msg_cd = str(d.get("msg_cd") or "")
             last = OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
                                price=price, raw=d, error=err)
+            # "영업일이 아닙니다" is the broker stating the market is shut. On a
+            # paper account this is the ONLY such signal we get — CTCA0903R is
+            # a real-env TR — and it arrives at 09:00, hours before the 15:20
+            # simulated strategies would write fills for the non-existent
+            # session. Record it so they skip.
+            try:
+                from .trading_calendar import looks_closed, mark_closed
+                if looks_closed(err):
+                    mark_closed()
+                    return last          # retrying a closed market is pointless
+            except Exception:  # noqa: BLE001
+                pass
             if attempt < 2 and any(m in err or m in msg_cd for m in _TOKEN_MARKERS):
                 log.warning("KIS token rejection %s %s x%d (attempt %d/3) — re-auth and retry: %s",
                             side, code, qty, attempt + 1, err)

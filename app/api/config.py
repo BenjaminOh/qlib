@@ -26,6 +26,19 @@ class Settings(BaseSettings):
     kis_app_secret: str = ""
     kis_account_no: str = ""  # "12345678-01" 형태
     kis_account_product: str = "01"  # 종합매매 default
+
+    # ─── Real-trading safety rails ──────────────────────────────────
+    # Hard ceiling on a single order's notional (qty × price), in KRW.
+    # A sizing bug, a bad quote, or a stale seed can otherwise turn one
+    # order into the whole account. 0 disables the check (paper default is
+    # generous; set this to something real before flipping KIS_ENV=real).
+    live_max_order_value: float = 3_000_000.0
+    # Fees applied to simulated + reconciled fills so the curve is not
+    # systematically optimistic. KIS 온라인 수수료 ~0.014% (buy and sell),
+    # 거래세 0.18% (sell only, 2026 기준 코스피 0.03%+농특세 0.15%/코스닥 0.18%).
+    # Set to 0 to restore the old fee-free accounting.
+    live_fee_rate: float = 0.00014
+    live_tax_rate: float = 0.0018
     # Live trading database
     live_db_url: str = "sqlite:///./app/api/db/live.sqlite"
     # Per-strategy seed cash for the equity curve baseline.

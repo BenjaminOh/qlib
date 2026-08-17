@@ -227,6 +227,13 @@ export const api = {
 
   // ── Live trading ───────────────────────────────────────────
   getLiveBalance: () => fetchApi<LiveBalanceResponse>("/api/v1/live/balance"),
+  getHalt: () => fetchApi<HaltStatus>("/api/v1/live/halt"),
+  /** reason=null releases the halt; any string engages it. */
+  setHalt: (reason: string | null) =>
+    fetchApi<HaltStatus>("/api/v1/live/halt", {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
   getLiveSignals: () => fetchApi<LiveSignalsResponse>("/api/v1/live/signals"),
   getStockTrades: (code: string) =>
     fetchApi<StockTrade[]>(`/api/v1/live/stock/${code}/trades`),
@@ -294,6 +301,11 @@ export interface LiveHolding {
   eval_value: number;
   pnl: number;
   pnl_pct: number;
+}
+
+export interface HaltStatus {
+  halted: boolean;
+  reason: string | null;
 }
 
 export interface LiveBalanceResponse {

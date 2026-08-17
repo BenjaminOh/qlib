@@ -1,7 +1,39 @@
 """Celery tasks: backtests + live trading loop."""
 
+import functools
+import logging
+from datetime import date
+
 from .celery_app import celery_app
 from ..services.backtest_service import run_backtest
+
+log = logging.getLogger(__name__)
+
+
+def market_day_only(fn):
+    """Skip a scheduled task when KRX is closed.
+
+    Beat fires on `day_of_week="mon-fri"` and has no notion of Korean market
+    holidays. On 2026-08-17 (광복절 대체공휴일) that sent four real orders into
+    a closed market — KIS refused them, which was luck rather than design:
+    the simulated strategies have no broker to refuse them, and KIS quotes
+    answer on a holiday with the previous session's price and halted=False.
+    They would have written fills, a position snapshot and a PnL row for a day
+    the market never opened.
+
+    Fails OPEN: `is_market_open` returning None (redis down, KIS unreachable,
+    no credentials) runs the task as before. Losing a session to a broken
+    calendar lookup would be worse than the phantom row this guards against.
+    """
+    @functools.wraps(fn)
+    def _wrapped(self, *args, **kwargs):
+        from ..services.trading_calendar import is_market_open
+        today = date.today()
+        if is_market_open(today) is False:
+            log.info("%s skipped — KRX closed on %s", fn.__name__, today.isoformat())
+            return {"status": "market_closed", "date": today.isoformat()}
+        return fn(self, *args, **kwargs)
+    return _wrapped
 
 
 @celery_app.task(bind=True, name="run_backtest")
@@ -27,6 +59,7 @@ def run_backtest_task(self, config: dict) -> dict:
     retry_jitter=True,
     max_retries=2,
 )
+@market_day_only
 def live_signal_task(self) -> dict:
     """Post-close — train/score → persist top-K Signal rows for tomorrow's open.
 
@@ -43,6 +76,7 @@ def live_signal_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders")
+@market_day_only
 def live_orders_task(self) -> dict:
     """09:00 KST — open strategy: read today's Signal, submit KIS orders."""
     from ..services.live_trader import submit_daily_orders
@@ -62,6 +96,7 @@ def live_orders_task(self) -> dict:
     retry_jitter=True,
     max_retries=3,
 )
+@market_day_only
 def live_sync_task(self) -> dict:
     """09:30 + 15:40 KST — open strategy: pull KIS balance, snapshot, PnL.
 
@@ -76,6 +111,7 @@ def live_sync_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_close")
+@market_day_only
 def live_orders_close_task(self) -> dict:
     """15:20 KST — close strategy: simulate fills priced at the kr_data close.
 
@@ -88,6 +124,7 @@ def live_orders_close_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_close")
+@market_day_only
 def live_sync_close_task(self) -> dict:
     """15:40 KST — close strategy: snapshot the simulated portfolio, PnL roll-up."""
     from ..services.live_trader import sync_account
@@ -96,6 +133,7 @@ def live_sync_close_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_trail")
+@market_day_only
 def live_orders_trail_task(self) -> dict:
     """15:20 KST — trail strategy: same close-priced buys as `close`; exits are
     a −7% trailing stop (no fixed TP) via the shared bracket loop."""
@@ -105,6 +143,7 @@ def live_orders_trail_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_trail")
+@market_day_only
 def live_sync_trail_task(self) -> dict:
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
@@ -112,6 +151,7 @@ def live_sync_trail_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_scale")
+@market_day_only
 def live_orders_scale_task(self) -> dict:
     """15:20 KST — scale strategy: close-priced buys; +7% sells half, the
     remainder rides the −7% trail (shared bracket loop)."""
@@ -121,6 +161,7 @@ def live_orders_scale_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_scale")
+@market_day_only
 def live_sync_scale_task(self) -> dict:
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
@@ -128,6 +169,7 @@ def live_sync_scale_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_flow")
+@market_day_only
 def live_orders_flow_task(self) -> dict:
     """15:20 KST — flow strategy: same close-priced simulation as `close`, but
     the picks are the top-30 signal re-ranked by 기관/외국인 net buying."""
@@ -137,6 +179,7 @@ def live_orders_flow_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_flow")
+@market_day_only
 def live_sync_flow_task(self) -> dict:
     """15:40 KST — flow strategy: snapshot the simulated portfolio, PnL roll-up."""
     from ..services.live_trader import sync_account
@@ -153,6 +196,7 @@ def live_sync_flow_task(self) -> dict:
     retry_jitter=True,
     max_retries=2,
 )
+@market_day_only
 def fetch_market_flow_task(self) -> dict:
     """Load 기관/외국인 net-buy rows for the candidates the flow overlay will use.
 
@@ -192,6 +236,7 @@ def fetch_market_flow_task(self) -> dict:
     retry_jitter=True,
     max_retries=2,
 )
+@market_day_only
 def cafe_screen_task(self) -> dict:
     """15:05 KST — recommender-mimic screener: KIS ranking pools → pattern
     classifier → today's cafe candidates (with structural stops)."""
@@ -212,6 +257,7 @@ def cafe_screen_task(self) -> dict:
     retry_jitter=True,
     max_retries=1,
 )
+@market_day_only
 def cafe_scout_task(self, slot: str) -> dict:
     """14:30 / 15:00 KST — observation-only screener scans (no trades).
 
@@ -234,6 +280,7 @@ def cafe_scout_task(self, slot: str) -> dict:
     retry_jitter=True,
     max_retries=1,
 )
+@market_day_only
 def surge_screen_task(self) -> dict:
     """15:12 KST — score today's pool snapshots with the surge-eve profile,
     store the TOP10 (reads DB only — no KIS calls)."""
@@ -246,6 +293,7 @@ def surge_screen_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_surge")
+@market_day_only
 def live_orders_surge_task(self) -> dict:
     """15:29 KST — surge strategy: sim-buy today's top surge picks."""
     from ..services.market_screener import submit_surge_orders
@@ -254,6 +302,7 @@ def live_orders_surge_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_surge")
+@market_day_only
 def live_sync_surge_task(self) -> dict:
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
@@ -261,6 +310,7 @@ def live_sync_surge_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_cafe")
+@market_day_only
 def live_orders_cafe_task(self) -> dict:
     """15:28 KST — cafe strategy: sim-buy today's top candidates at the
     current KIS quote (≈ closing auction price)."""
@@ -270,6 +320,7 @@ def live_orders_cafe_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_cafe")
+@market_day_only
 def live_sync_cafe_task(self) -> dict:
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
@@ -285,6 +336,7 @@ def live_sync_cafe_task(self) -> dict:
     retry_jitter=True,
     max_retries=1,
 )
+@market_day_only
 def capture_orderbook_task(self, slot: str) -> dict:
     """15:07 / 15:27 KST — book depth for today's cafe candidates.
 
@@ -297,6 +349,7 @@ def capture_orderbook_task(self, slot: str) -> dict:
 
 
 @celery_app.task(bind=True, name="live_orders_cafeopen")
+@market_day_only
 def live_orders_cafeopen_task(self) -> dict:
     """09:00 KST — cafeopen twin: rest a −3% limit off today's open for every
     code cafe bought yesterday. No fill yet; resolve_cafeopen judges at 10:00."""
@@ -306,6 +359,7 @@ def live_orders_cafeopen_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="resolve_cafeopen")
+@market_day_only
 def resolve_cafeopen_task(self) -> dict:
     """10:00 KST — fill the resting cafeopen limits the 09:00~10:00 range
     touched, cancel the rest. Idempotent (PENDING rows only)."""
@@ -315,6 +369,7 @@ def resolve_cafeopen_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="live_sync_cafeopen")
+@market_day_only
 def live_sync_cafeopen_task(self) -> dict:
     from ..services.live_trader import sync_account
     self.update_state(state="RUNNING")
@@ -322,6 +377,7 @@ def live_sync_cafeopen_task(self) -> dict:
 
 
 @celery_app.task(bind=True, name="close_bracket_exits")
+@market_day_only
 def close_bracket_exits_task(self) -> dict:
     """Chained after refresh_kr_data (+ 16:25 fallback beat) — exit-rule matrix
     for every sim strategy (close/flow: TP+prev-low, trail: −7% trailing,
@@ -361,6 +417,7 @@ def close_bracket_exits_task(self) -> dict:
     retry_jitter=True,
     max_retries=3,
 )
+@market_day_only
 def reconcile_fills_task(self) -> dict:
     """09:20 KST — pin actual KIS fill prices onto this morning's orders.
 
@@ -383,6 +440,7 @@ def reconcile_fills_task(self) -> dict:
     retry_jitter=True,
     max_retries=3,
 )
+@market_day_only
 def refresh_kr_data_task(self) -> dict:
     """15:45 KST — incrementally extend kr_data so tomorrow's live_signal sees today's bars.
 

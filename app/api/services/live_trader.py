@@ -489,12 +489,24 @@ def submit_daily_orders(today: date | None = None,
                                         reasons=sell_why)
                 submitted += 1
             else:
-                res = client.place_order(code, "SELL", holding.qty, price=None)
-                _persist_order(db, today, code, "SELL", holding.qty, None, res,
+                # Never order more than KIS says is sellable. Ordering the full
+                # holding when part is unsettled or already committed gets the
+                # WHOLE order rejected — and a rejected sell means still
+                # holding a position we decided to exit (미래에셋, 2026-07-31).
+                sell_qty = holding.qty
+                if holding.sellable_qty is not None and holding.sellable_qty < sell_qty:
+                    log.warning("live_orders: %s sellable %d < held %d — selling what we can",
+                                code, holding.sellable_qty, sell_qty)
+                    sell_qty = holding.sellable_qty
+                if sell_qty <= 0:
+                    log.warning("live_orders: %s has 0 sellable qty — skipping", code)
+                    continue
+                res = client.place_order(code, "SELL", sell_qty, price=None)
+                _persist_order(db, today, code, "SELL", sell_qty, None, res,
                                strategy=strategy, reasons=sell_why)
                 if not res.ok:
                     log.warning("live_orders: SELL REJECTED code=%s qty=%d error=%s",
-                                code, holding.qty, res.error)
+                                code, sell_qty, res.error)
                 submitted += int(res.ok)
                 rejected += int(not res.ok)
                 time.sleep(KIS_THROTTLE_SECONDS)
@@ -515,6 +527,18 @@ def submit_daily_orders(today: date | None = None,
         total_equity = max(snapshot_after.total_eval, cash)
         slot_budget = total_equity / max(topk, 1)
         to_buy, skipped_expensive = _select_affordable_buys(buy_candidates, slot_budget, n_drop)
+        if to_buy and not simulated:
+            # `cash` is 예수금 총액, which on a real account still counts funds
+            # committed to unsettled (D+2) trades. Sizing against it opens a
+            # 미수 position by accident. Ask KIS what is actually orderable and
+            # take the smaller number; an unavailable answer leaves `cash` as is.
+            psbl = client.get_orderable_cash(to_buy[0][0], price=None)
+            time.sleep(KIS_THROTTLE_SECONDS)
+            if psbl.get("cash"):
+                if psbl["cash"] < cash:
+                    log.info("live_orders: 주문가능현금 %.0f < 예수금 %.0f — 주문가능 기준 사용",
+                             psbl["cash"], cash)
+                cash = min(cash, psbl["cash"])
         if to_buy:
             per_code_budget = min(cash / max(len(to_buy), 1), slot_budget)
             for code, px in to_buy:
@@ -661,13 +685,18 @@ def reconcile_fills(trade_date: date | None = None,
         for o in filled_now:
             if db.query(Fill).filter(Fill.order_id == o.id).first():
                 continue
+            fee = trade_cost(o.side, o.qty, o.price)
             pnl = None
             if o.side == "SELL":
                 avg = _episode_avg(db, o)
                 if avg is not None:
-                    pnl = round((o.price - avg) * o.qty, 2)
+                    # Realised pnl is NET: the sell's own cost plus the buy-side
+                    # cost carried in at `avg`. Reporting gross here is what made
+                    # the curve drift away from the account statement.
+                    pnl = round((o.price - avg) * o.qty
+                                - fee - trade_cost("BUY", o.qty, avg), 2)
             db.add(Fill(order_id=o.id, filled_at=datetime.utcnow(), qty=o.qty,
-                        price=o.price, fee=0.0, pnl=pnl, strategy=strategy))
+                        price=o.price, fee=fee, pnl=pnl, strategy=strategy))
         db.commit()
     result = {"status": "ok", "trade_date": trade_date.isoformat(),
               "kis_fills": len(fills), "matched": matched, "updated": updated}
@@ -765,9 +794,13 @@ def sync_account(client: KISClient | None = None,
                       .join(Order)
                       .filter(Order.trade_date == trade_date,
                               Fill.strategy == strategy)
-                      .with_entities(Fill.pnl)
+                      .with_entities(Fill.pnl, Fill.fee)
                       .all())
-        realised_sum = sum((p[0] or 0) for p in realised)
+        # Fill.pnl is already NET of that round trip's cost (see trade_cost),
+        # so fees are reported alongside for visibility — never subtracted
+        # again here.
+        realised_sum = sum((r[0] or 0) for r in realised)
+        fees_sum = round(sum((r[1] or 0) for r in realised), 2)
 
         existing_pnl = (db.query(DailyPnL)
                           .filter(DailyPnL.trade_date == trade_date,
@@ -777,6 +810,7 @@ def sync_account(client: KISClient | None = None,
             existing_pnl.ending_equity = snapshot.total_eval
             existing_pnl.realised_pnl = realised_sum
             existing_pnl.unrealised_pnl = unrealised
+            existing_pnl.fees = fees_sum
         else:
             db.add(DailyPnL(
                 trade_date=trade_date,
@@ -785,7 +819,7 @@ def sync_account(client: KISClient | None = None,
                 ending_equity=snapshot.total_eval,
                 realised_pnl=realised_sum,
                 unrealised_pnl=unrealised,
-                fees=0.0,
+                fees=fees_sum,
             ))
         db.commit()
 
@@ -927,12 +961,18 @@ def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
                        reasons=reasons)
     o.status = "SIMULATED"
     o.ord_dvsn = Order.ORD_DVSN_SIM  # no KIS order was sent — 지정가/시장가 is meaningless
+    fee = trade_cost(side, qty, price)
+    if pnl is not None:
+        # Callers hand in GROSS pnl (sell − avg). Net it here so every strategy
+        # is costed identically and the sim curve can be compared with a real
+        # account statement rather than flattering it.
+        pnl = round(pnl - fee - trade_cost("BUY", qty, price), 2)
     db.add(Fill(
         order_id=o.id,
         strategy=strategy,
         qty=qty,
         price=price,
-        fee=0.0,
+        fee=fee,
         pnl=pnl,
     ))
 
@@ -958,15 +998,19 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
     names: dict[str, str | None] = {}
     for fill, order in rows:
         value = fill.qty * fill.price
+        # Cost of trading leaves the account on BOTH sides. Fills written
+        # before trade_cost() existed carry fee=0.0, so this is forward-only —
+        # no historical curve is rewritten, it just stops being optimistic.
+        fee = fill.fee or 0.0
         if order.name and order.name != order.code:
             names[order.code] = order.name
         if order.side == "BUY":
-            cash -= value
+            cash -= value + fee
             p = pos.setdefault(order.code, {"qty": 0, "cost": 0.0})
             p["qty"] += fill.qty
             p["cost"] += value
         elif order.side == "SELL":
-            cash += value
+            cash += value - fee
             p = pos.get(order.code)
             if p:
                 # Proportional cost reduction
@@ -1467,6 +1511,7 @@ def evaluate_limit_entries(trade_date: date | None = None) -> dict:
         slot_budget = max(snapshot.total_eval, snapshot.cash) / max(topk, 1)
 
         rested: list[dict] = []  # the virtual order book for today
+        skipped_risky: list[str] = []
         for s in signals:
             if s.code in held or len(rested) >= n_candidates:
                 continue
@@ -1477,6 +1522,17 @@ def evaluate_limit_entries(trade_date: date | None = None) -> dict:
             limit_px = round_to_tick(prev_close * (1.0 - discount))
             if limit_px <= 0 or limit_px > slot_budget:
                 continue  # affordability: one share must fit the slot
+            # Risk check LAST — it costs a gated KIS quote, so only spend it on
+            # a candidate that already passed the free filters (same ordering as
+            # _select_affordable_buys). A −3% dip entry structurally hunts for
+            # falling stocks, which is exactly where 관리종목/거래정지 live: the
+            # rule cannot tell "healthy pullback" from "collapsing on bad news".
+            risk = _is_risky(s.code)
+            if risk:
+                log.warning("evaluate_limit_entries: %s RISKY (%s) — skipped, "
+                            "next rank takes the slot", s.code, risk)
+                skipped_risky.append(f"{s.code}({risk})")
+                continue
             filled = bar["low"] <= limit_px
             fill_px = bar["open"] if (filled and bar["open"] < limit_px) else limit_px
             rested.append({"code": s.code, "rank": s.rank, "limit_px": limit_px,
@@ -1513,8 +1569,33 @@ def evaluate_limit_entries(trade_date: date | None = None) -> dict:
         db.commit()
     return {"status": "ok", "trade_date": day.isoformat(), "strategy": STRATEGY_LIMIT,
             "discount": discount, "rested": len(rested), "cancelled": cancelled,
+            # Which picks the risk filter removed, and why. Empty on a paper
+            # account: _is_risky returns None whenever the client is mock, so a
+            # simulated run never exercises this — see its docstring.
+            "skipped_risky": skipped_risky,
             "fills": [{k: f[k] for k in ("code", "rank", "limit_px", "fill_px")} | {"qty": f.get("qty", 0)}
                       for f in fills]}
+
+
+def trade_cost(side: str, qty: int, price: float | None) -> float:
+    """Brokerage fee + (sells only) transaction tax for one fill, in KRW.
+
+    Every Fill used to record fee=0.0, which makes both the simulated curves
+    and the reconciled real ones systematically optimistic — a −3% entry that
+    exits at +10% actually nets ~0.2%p less than the curve claims. That gap
+    compounds over a strategy that turns over daily, and it is exactly the
+    kind of error that only shows up once real money is in.
+
+    Rates come from settings so this stays reversible; both default to the
+    2026 KIS 온라인 schedule. Set them to 0 to restore fee-free accounting.
+    """
+    if price is None or qty <= 0:
+        return 0.0
+    notional = float(price) * int(qty)
+    cost = notional * settings.live_fee_rate
+    if side.upper() == "SELL":
+        cost += notional * settings.live_tax_rate  # 거래세는 매도에만
+    return round(cost, 2)
 
 
 def _prev_close_before(code: str, day: date) -> float | None:
@@ -1578,9 +1659,22 @@ def _prev_trading_day(d: date) -> date:
 
 
 def _next_trading_day(d: date) -> date:
-    """The trading day strictly after `d`. Weekend-only fallback if the
-    qlib calendar isn't loaded or doesn't yet contain the future window.
+    """The trading day strictly after `d`.
+
+    Order of sources matters. qlib's calendar is built from bars that already
+    exist, so it can NEVER answer a question about the future — the lookup
+    below always fell through to "the next weekday", which stamped Friday's
+    signals with `as_of=2026-08-17`, a 광복절 대체공휴일 the market was closed
+    for. KIS's holiday calendar is asked first because it is the only source
+    that knows about a holiday before it happens.
     """
+    try:
+        from .trading_calendar import next_open_day
+        nxt = next_open_day(d)
+        if nxt is not None:
+            return nxt
+    except Exception:  # noqa: BLE001
+        log.warning("_next_trading_day: KIS holiday calendar unavailable", exc_info=True)
     try:
         from qlib.data import D
         cal = D.calendar(
