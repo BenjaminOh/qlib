@@ -66,8 +66,9 @@ def test_ensure_token_prefers_redis_over_live_local_token(monkeypatch):
     Another process may have issued a new token, which invalidates this one
     server-side while its local expiry still looks fine.
     """
-    r = FakeRedis({"kis:token:paper:12345678": _token_blob("NEW_FROM_OTHER_PROC")})
+    r = FakeRedis()
     c = _client(monkeypatch, r)
+    r.data[c._redis_token_key] = _token_blob("NEW_FROM_OTHER_PROC")
     c._token = "STALE_LOCAL"
     c._token_expires_at = time.time() + 80000  # nowhere near expiry
 
@@ -94,8 +95,9 @@ def test_ensure_token_falls_back_to_local_when_redis_down(monkeypatch):
 
 
 def test_ensure_token_issues_when_redis_token_is_near_expiry(monkeypatch):
-    r = FakeRedis({"kis:token:paper:12345678": _token_blob("ALMOST_DEAD", ttl=60)})
+    r = FakeRedis()
     c = _client(monkeypatch, r)
+    r.data[c._redis_token_key] = _token_blob("ALMOST_DEAD", ttl=60)
 
     class Resp:
         status_code = 200
@@ -111,7 +113,7 @@ def test_ensure_token_issues_when_redis_token_is_near_expiry(monkeypatch):
     monkeypatch.setattr(kc.requests, "post", lambda *a, **kw: Resp())
 
     assert c._ensure_token() == "FRESH"
-    assert json.loads(r.data["kis:token:paper:12345678"])["access_token"] == "FRESH"
+    assert json.loads(r.data[c._redis_token_key])["access_token"] == "FRESH"
 
 
 # ─── place_order: recover from a token rejection ────────────────────

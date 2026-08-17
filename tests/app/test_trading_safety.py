@@ -341,3 +341,61 @@ def test_orderable_cash_parses_ord_psbl_cash(monkeypatch):
     monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: Resp())
 
     assert c.get_orderable_cash("005930", price=61_000) == {"cash": 3_000_000.0, "max_qty": 49}
+
+
+# ─── appkey-scoped redis keys ───────────────────────────────────────
+#
+# KIS enforces token invalidation and the request budget per APPKEY. Keying
+# redis by account number was harmless while one appkey served one account;
+# with several accounts behind one appkey (the shape a 10-account setup takes,
+# since KIS issues one application per ≤2 accounts) each cano-keyed cache would
+# issue its own token and every issue would kill the others — the 2026-07-29 /
+# 08-11 lost-order mechanism, but daily.
+
+
+def _c(app_key, cano):
+    return kc.KISClient(env="paper", app_key=app_key, app_secret="s", account_no=cano)
+
+
+def test_accounts_sharing_an_appkey_share_token_and_gate():
+    a = _c("SAME_KEY", "11111111-01")
+    b = _c("SAME_KEY", "22222222-01")
+
+    assert a._redis_token_key == b._redis_token_key
+    assert a._redis_cooldown_key == b._redis_cooldown_key
+    assert a._redis_slot_key == b._redis_slot_key, "하나의 appkey 예산을 함께 써야 한다"
+
+
+def test_different_appkeys_stay_isolated():
+    a = _c("KEY_A", "11111111-01")
+    b = _c("KEY_B", "11111111-01")   # same account number, different appkey
+
+    assert a._redis_token_key != b._redis_token_key
+    assert a._redis_slot_key != b._redis_slot_key
+
+
+def test_balance_cache_stays_per_account(monkeypatch):
+    """Balance is account data — it must NOT collapse onto the appkey."""
+    bc = pytest.importorskip("app.api.services.balance_cache")
+
+    monkeypatch.setattr(bc, "get_kis_client", lambda: _c("SAME_KEY", "11111111-01"))
+    keys_a = bc._keys()
+    monkeypatch.setattr(bc, "get_kis_client", lambda: _c("SAME_KEY", "22222222-01"))
+    keys_b = bc._keys()
+
+    assert keys_a[0] != keys_b[0], "계좌가 다르면 잔고 캐시는 분리돼야 한다"
+
+
+def test_appkey_is_never_exposed_in_a_redis_key():
+    """Keys land in logs and `redis-cli --scan` output; the appkey is a secret."""
+    secret = "PSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    c = _c(secret, "11111111-01")
+
+    for key in (c._redis_token_key, c._redis_cooldown_key, c._redis_slot_key):
+        assert secret not in key
+        assert len(c._appkey_scope) == 12
+
+
+def test_missing_appkey_does_not_collide_with_a_real_one():
+    assert _c("", "11111111-01")._appkey_scope == "nokey"
+    assert _c("REAL_KEY", "11111111-01")._appkey_scope != "nokey"

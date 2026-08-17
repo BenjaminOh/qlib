@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import math
@@ -61,9 +62,10 @@ _TR = {
               "fills": "VTTC8001R"},
 }
 
-# Minimum spacing between ANY two KIS calls on the same account, across all
-# containers (see KISClient._gate). Paper enforces ~1 req/s account-wide;
-# real allows ~20 req/s but we stay far under it.
+# Minimum spacing between ANY two KIS calls sharing one APPKEY, across all
+# containers (see KISClient._gate). Paper enforces ~1 req/s, real ~20 req/s,
+# and the limit follows the appkey — so several accounts behind one appkey draw
+# on a single budget and must queue behind the same slot.
 _MIN_INTERVAL_MS = {"real": 250, "paper": 1200}
 
 # Rejection markers that mean "rate limited, order NOT accepted" — the only
@@ -312,8 +314,26 @@ class KISClient:
     # ─── Auth ──────────────────────────────────────────────────
 
     @property
+    def _appkey_scope(self) -> str:
+        """Short digest of the appkey — the unit KIS actually limits by.
+
+        Tokens and the request budget are enforced per APPKEY, not per account
+        (`_ensure_token`'s own comment: KIS kills the previous token the instant
+        a new one is issued *for this appkey*). Keying redis by `cano` was
+        harmless only because one appkey served one account. With several
+        accounts behind one appkey — the likely shape once a second account is
+        added — cano-keyed caches would each issue their own token, every issue
+        killing the others, and each would pass its own gate slot while sharing
+        one budget. That is the 2026-07-29 / 08-11 lost-order mechanism.
+
+        Digested, never raw: redis keys show up in logs and `--scan` output, and
+        the appkey is a credential.
+        """
+        return hashlib.sha256(self.app_key.encode()).hexdigest()[:12] if self.app_key else "nokey"
+
+    @property
     def _redis_token_key(self) -> str:
-        return f"kis:token:{self.env}:{self.cano}"
+        return f"kis:token:{self.env}:{self._appkey_scope}"
 
     def _redis(self):
         """Best-effort redis client — None if unavailable (never raises).
@@ -338,7 +358,7 @@ class KISClient:
 
     @property
     def _redis_cooldown_key(self) -> str:
-        return f"kis:token:cooldown:{self.env}:{self.cano}"
+        return f"kis:token:cooldown:{self.env}:{self._appkey_scope}"
 
     def _ensure_token(self) -> str:
         """Return a valid access token, shared across worker processes via redis.
@@ -487,17 +507,23 @@ class KISClient:
 
     @property
     def _redis_slot_key(self) -> str:
-        return f"kis:apislot:{self.env}:{self.cano}"
+        return f"kis:apislot:{self.env}:{self._appkey_scope}"
 
     def _gate(self) -> None:
-        """Space out ALL KIS calls for this account across every container.
+        """Space out ALL KIS calls sharing this appkey, across every container.
 
-        KIS rate-limits per ACCOUNT (paper ~1 req/s), but our calls come from
+        KIS rate-limits per APPKEY (paper ~1 req/s), but our calls come from
         web (dashboard polling), worker and scheduler concurrently — per-task
         spacing alone let a 09:00 balance poll collide with a sell order and
         get it rejected (2026-07-31 미래에셋 sell). A redis slot key with a
         TTL equal to the minimum interval serializes them globally; if redis
         is unavailable we still enforce the interval within this process.
+
+        Scoped by appkey rather than account (`_appkey_scope`): with several
+        accounts behind one appkey, per-account slots would each let a call
+        through and blow one shared budget. The local fallback below is
+        per-process and cannot see sibling accounts — acceptable only because
+        it is the redis-unavailable path.
         """
         if self.is_mock:
             return

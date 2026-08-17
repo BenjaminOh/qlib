@@ -299,7 +299,7 @@ def test_token_cooldown_blocks_display_reads_after_failure(monkeypatch):
     monkeypatch.setattr(c, "_gate", lambda: None)
 
     c._set_token_cooldown()
-    assert r.get("kis:token:cooldown:paper:12345678")
+    assert r.get(c._redis_cooldown_key)
 
     def _must_not_issue(*a, **kw):
         raise AssertionError("issuance must be suppressed during the cooldown")
@@ -364,7 +364,7 @@ def test_display_read_does_not_sit_through_the_throttle_recovery(monkeypatch):
             c._ensure_token()
 
     # ...and it leaves the cooldown behind so the next poll gives up instantly.
-    assert r.get("kis:token:cooldown:paper:12345678")
+    assert r.get(c._redis_cooldown_key)
 
 
 def test_successful_issue_clears_the_cooldown(monkeypatch):
@@ -387,4 +387,4 @@ def test_successful_issue_clears_the_cooldown(monkeypatch):
     monkeypatch.setattr(kc.requests, "post", lambda *a, **kw: Resp())
 
     assert c._ensure_token() == "FRESH"
-    assert r.get("kis:token:cooldown:paper:12345678") is None
+    assert r.get(c._redis_cooldown_key) is None
