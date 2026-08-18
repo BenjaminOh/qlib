@@ -81,11 +81,16 @@ def test_first_failure_sets_counter_and_window_ttl(fake_redis):
 def test_threshold_flips_to_lockout(fake_redis):
     for _ in range(settings.login_fail_threshold):
         rate_limit.record_failure("1.2.3.4", username="admin")
-    # Fail counter cleared, lockout key set with correct TTL
-    assert "rl:login:fail:1.2.3.4" not in fake_redis.store
-    assert fake_redis.store["rl:login:lock:1.2.3.4"] == "1"
+
+    assert "rl:login:lock:1.2.3.4" in fake_redis.store
     assert fake_redis.ttls["rl:login:lock:1.2.3.4"] == settings.login_lockout_sec
-    assert rate_limit.check_locked("1.2.3.4") == settings.login_lockout_sec
+    # The counter must SURVIVE the lockout it just triggered. Clearing it here
+    # was the defect: the tally reset to zero on every lock, so it could never
+    # reach login_ip_burst_threshold and the burst tier was dead code.
+    assert fake_redis.store["rl:login:fail:1.2.3.4"] == "5"
+    assert (fake_redis.ttls["rl:login:fail:1.2.3.4"]
+            == settings.login_lockout_sec + settings.login_fail_window_sec), \
+        "카운터가 잠금보다 먼저 만료되면 다시 0부터 세게 된다"
 
 
 def test_burst_threshold_uses_longer_lockout(fake_redis):
@@ -133,10 +138,27 @@ def test_redis_error_in_record_failure_fails_open(monkeypatch):
     assert rate_limit.check_locked("1.2.3.4") is None
 
 
-def test_client_ip_prefers_xff(monkeypatch):
+def test_client_ip_reads_the_hop_nginx_appended(monkeypatch):
+    """The left of X-Forwarded-For is attacker-controlled.
+
+    nginx uses `proxy_add_x_forwarded_for`, which APPENDS the peer it saw. A
+    client sending `X-Forwarded-For: 203.0.113.7` from 10.0.0.1 therefore
+    produces "203.0.113.7, 10.0.0.1" — and reading the first hop let them mint
+    a fresh identity per request, resetting their own lockout every time.
+    """
     class Req:
         headers = {"x-forwarded-for": "203.0.113.7, 10.0.0.1"}
         client = type("C", (), {"host": "10.0.0.1"})()
+
+    assert rate_limit.client_ip(Req()) == "10.0.0.1"
+
+
+def test_client_ip_uses_single_hop_untouched(monkeypatch):
+    """The normal case: client sent no XFF, nginx wrote exactly one entry."""
+    class Req:
+        headers = {"x-forwarded-for": "203.0.113.7"}
+        client = type("C", (), {"host": "172.17.0.1"})()
+
     assert rate_limit.client_ip(Req()) == "203.0.113.7"
 
 

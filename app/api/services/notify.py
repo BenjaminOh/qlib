@@ -26,6 +26,20 @@ log = logging.getLogger(__name__)
 _API = "https://api.telegram.org/bot{token}/{method}"
 
 
+def _scrub(exc: Exception) -> str:
+    """Exception text with the bot token removed.
+
+    Telegram puts the token in the URL PATH, so requests' connection and
+    timeout errors quote it verbatim — "…/bot123456:AAE…/sendMessage". One
+    network blip was enough to leave the token in plain text in the container
+    log, which is retained at 10MB x 5. Nothing else in this module handles a
+    secret, so scrubbing at the log boundary is sufficient.
+    """
+    msg = str(exc)
+    token = settings.telegram_bot_token
+    return msg.replace(token, "<token>") if token else msg
+
+
 def telegram_enabled() -> bool:
     return bool(settings.telegram_bot_token and settings.telegram_chat_id)
 
@@ -45,7 +59,7 @@ def send_telegram(text: str) -> bool:
             log.warning("telegram send failed HTTP %s: %s", r.status_code, r.text[:200])
         return ok
     except Exception as exc:  # noqa: BLE001
-        log.warning("telegram send error: %s", exc)
+        log.warning("telegram send error: %s", _scrub(exc))
         return False
 
 
@@ -70,7 +84,7 @@ def discover_chat_id() -> list[dict]:
                                     "type": chat.get("type")}
         return list(seen.values())
     except Exception as exc:  # noqa: BLE001
-        log.warning("telegram discover error: %s", exc)
+        log.warning("telegram discover error: %s", _scrub(exc))
         return []
 
 

@@ -17,6 +17,7 @@ Deliberately NOT wired into ``KISClient.get_balance`` — the order path
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import asdict
@@ -66,9 +67,22 @@ def _redis():
     return _redis_client
 
 
+def _account_scope(client) -> str:
+    """Short digest standing in for the account number in redis key names.
+
+    `cano` is the real 8-digit account number. Redis key names surface in logs,
+    `redis-cli --scan` output and monitoring labels — which is exactly why the
+    token keys already hash the appkey (`kis_client._appkey_scope`). The
+    balance keys were the one place the raw number still leaked, so they get
+    the same treatment. Keys are per-account, not per-appkey: balance IS
+    account data, and two accounts behind one appkey must not share a cache.
+    """
+    return hashlib.sha256((client.cano or "").encode()).hexdigest()[:12]
+
+
 def _keys() -> tuple[str, str, str]:
     client = get_kis_client()
-    base = f"kis:balance:{client.env}:{client.cano}"
+    base = f"kis:balance:{client.env}:{_account_scope(client)}"
     return base, f"{base}:last", f"{base}:down"
 
 

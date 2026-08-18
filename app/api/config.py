@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     login_lockout_sec: int = 900           # 15 min lockout after fail_threshold
     login_ip_burst_threshold: int = 20
     login_ip_burst_lockout_sec: int = 3600  # 1 hour lockout after burst_threshold
+    # How many proxies sit in front of the API. client_ip() counts this many
+    # entries back from the RIGHT of X-Forwarded-For, because only the hops a
+    # trusted proxy appended are non-forgeable. 1 = the single nginx in
+    # infra/nginx/qlib.tmanager.kr.conf. Raising it without actually adding a
+    # proxy would read an attacker-supplied value again.
+    trusted_proxy_hops: int = 1
 
 
 settings = Settings()
