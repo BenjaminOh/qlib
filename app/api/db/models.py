@@ -41,6 +41,29 @@ STRATEGY_SURGE = "surge"
 STRATEGY_CAFEOPEN = "cafeopen"  # exactly 8 chars — the Order.strategy limit
 
 
+# ─── Account axis ───────────────────────────────────────────────────
+#
+# One brokerage account per row. Until 10-account operation lands there is
+# exactly one — "main" — and every existing code path uses it implicitly.
+# The id is kept short and separate from `strategy` on purpose: strategy is
+# String(8) and 'cafeopen' already uses all eight characters, so a composite
+# "strategy:account" tag has nowhere to live.
+DEFAULT_ACCOUNT_ID = "main"
+ACCOUNT_ID_LEN = 16
+
+# Order-execution vocabulary shared by the model, the policy service and the
+# API validators. Kept here so there is exactly one spelling of each value.
+ORD_TYPE_MARKET = "market"
+ORD_TYPE_LIMIT = "limit"
+ORD_TYPES = (ORD_TYPE_MARKET, ORD_TYPE_LIMIT)
+
+# Which price the limit is measured FROM.
+BASE_PREV_CLOSE = "prev_close"   # yesterday's close — what the limit curve uses
+BASE_OPEN = "open"               # today's opening print — what cafeopen uses
+BASE_QUOTE = "quote"             # 현재가 at order time
+PRICE_BASES = (BASE_PREV_CLOSE, BASE_OPEN, BASE_QUOTE)
+
+
 class User(Base):
     """Admin login account. Single-user model — multi-user / RBAC is out of scope."""
     __tablename__ = "users"
@@ -247,6 +270,41 @@ class OrderbookSnapshot(Base):
         UniqueConstraint("trade_date", "slot", "code",
                          name="uq_orderbook_date_slot_code"),
     )
+
+
+class TradingAccount(Base):
+    """Per-account order-execution policy.
+
+    Why this is data and not a constant: the buy side was hard-coded to a
+    market order (`place_order(..., price=None)`), which contradicted the
+    written policy — "매수는 시장가 금지, 기준가 −3% 지정가". Different
+    accounts want different execution, so the choice belongs in a row the
+    operator can change from the web UI, not in a deploy.
+
+    The seeded 'main' row is deliberately `market`/`market`: creating this
+    table must not alter what the live account already does. Changing a policy
+    breaks that account's performance continuity, so it is an explicit act.
+    """
+    __tablename__ = "trading_accounts"
+
+    account_id = Column(String(ACCOUNT_ID_LEN), primary_key=True)
+    label = Column(String(64), nullable=True)
+
+    # BUY. offset is a DISCOUNT: limit = base × (1 − buy_offset_pct).
+    buy_ord_type = Column(String(8), nullable=False, default=ORD_TYPE_MARKET)
+    buy_base = Column(String(12), nullable=True)      # prev_close | open | quote
+    buy_offset_pct = Column(Float, nullable=False, default=0.0)
+    buy_cancel_hhmm = Column(String(5), nullable=True)  # "15:20"; null = no sweep
+
+    # SELL. offset is a PREMIUM: limit = base × (1 + sell_offset_pct).
+    sell_ord_type = Column(String(8), nullable=False, default=ORD_TYPE_MARKET)
+    sell_base = Column(String(12), nullable=True)
+    sell_offset_pct = Column(Float, nullable=False, default=0.0)
+    sell_cancel_hhmm = Column(String(5), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow,
+                        onupdate=datetime.utcnow, nullable=False)
 
 
 class Order(Base):

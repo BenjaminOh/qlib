@@ -99,6 +99,9 @@ export default function LiveDashboardPage() {
         </div>
         <div className="flex items-center gap-4 text-sm">
           <HaltControl />
+          <Link href="/live/accounts" className="text-blue-600 hover:underline">
+            ⚙️ 주문 설정
+          </Link>
           <Link href="/live/retro" className="text-blue-600 hover:underline">
             🔁 매매 회고
           </Link>

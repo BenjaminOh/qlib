@@ -234,6 +234,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
+  getAccounts: () => fetchApi<AccountPolicyRow[]>("/api/v1/live/accounts"),
+  updateAccount: (
+    accountId: string,
+    body: Pick<AccountPolicyRow, "label" | "buy" | "sell">,
+  ) =>
+    fetchApi<AccountPolicyRow>(`/api/v1/live/accounts/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   getLiveSignals: () => fetchApi<LiveSignalsResponse>("/api/v1/live/signals"),
   getStockTrades: (code: string) =>
     fetchApi<StockTrade[]>(`/api/v1/live/stock/${code}/trades`),
@@ -306,6 +315,28 @@ export interface LiveHolding {
 export interface HaltStatus {
   halted: boolean;
   reason: string | null;
+}
+
+/** Per-account order-execution policy (see /live/accounts). */
+export type OrdType = "market" | "limit";
+export type PriceBase = "prev_close" | "open" | "quote";
+
+export interface AccountSidePolicy {
+  ord_type: OrdType;
+  /** null while ord_type is "market" — nothing to measure an offset from. */
+  base: PriceBase | null;
+  /** 0.03 = 매수 −3% / 매도 +3%. */
+  offset_pct: number;
+  /** "15:20"; null leaves an unfilled limit resting until the close. */
+  cancel_hhmm: string | null;
+}
+
+export interface AccountPolicyRow {
+  account_id: string;
+  label: string | null;
+  buy: AccountSidePolicy;
+  sell: AccountSidePolicy;
+  updated_at: string | null;
 }
 
 export interface LiveBalanceResponse {

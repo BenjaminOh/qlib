@@ -84,3 +84,30 @@ def init_db() -> None:
         log.warning("init_db: reset authorized → dropping all tables")
         Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    _seed_default_account()
+
+
+def _seed_default_account() -> None:
+    """Insert the 'main' account row if absent, with MARKET on both sides.
+
+    Idempotent, and it never touches an existing row: the seed must not be a
+    back door that silently rewrites a policy an operator chose. A fresh table
+    therefore reproduces exactly the pre-existing behaviour (market buy, market
+    sell) rather than switching the live account to limit orders on deploy.
+    """
+    from .models import DEFAULT_ACCOUNT_ID, ORD_TYPE_MARKET, TradingAccount
+
+    with SessionLocal() as db:
+        if db.get(TradingAccount, DEFAULT_ACCOUNT_ID) is not None:
+            return
+        db.add(TradingAccount(
+            account_id=DEFAULT_ACCOUNT_ID,
+            label="기본 계좌",
+            buy_ord_type=ORD_TYPE_MARKET,
+            sell_ord_type=ORD_TYPE_MARKET,
+        ))
+        try:
+            db.commit()
+        except Exception:  # noqa: BLE001 — another worker seeded it first
+            db.rollback()
+            log.info("init_db: default account row already present")

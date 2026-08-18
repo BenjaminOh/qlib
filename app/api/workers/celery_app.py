@@ -54,6 +54,13 @@ celery_app.conf.beat_schedule = {
         "task": "reconcile_fills",
         "schedule": crontab(hour=9, minute=20, day_of_week="mon-fri"),
     },
+    # Resting limit orders: cancel whatever is past its account cutoff. The
+    # cutoff lives in trading_accounts (per account, per side), so this sweeps
+    # instead of firing at one fixed time. Cheap on ticks with nothing due.
+    "cancel-unfilled-orders": {
+        "task": "cancel_unfilled_orders",
+        "schedule": crontab(minute="*/10", hour="9-15", day_of_week="mon-fri"),
+    },
     "live-sync-mid-morning": {
         "task": "live_sync",
         "schedule": crontab(hour=9, minute=30, day_of_week="mon-fri"),

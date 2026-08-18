@@ -87,6 +87,21 @@ def live_orders_task(self) -> dict:
     return result
 
 
+@celery_app.task(bind=True, name="cancel_unfilled_orders")
+@market_day_only
+def cancel_unfilled_orders_task(self) -> dict:
+    """Every 10 min during the session — retire resting limit orders whose
+    account cutoff has passed.
+
+    A sweep rather than one scheduled slot: the cutoff is per-account data
+    (and per side), so there is no single time beat could fire at. Ticks with
+    nothing due cost one indexed query and return.
+    """
+    from ..services.live_trader import cancel_unfilled_orders
+    self.update_state(state="RUNNING")
+    return cancel_unfilled_orders()
+
+
 @celery_app.task(
     bind=True,
     name="live_sync",

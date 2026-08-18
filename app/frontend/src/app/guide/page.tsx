@@ -61,7 +61,7 @@ export default function GuidePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10) 시장가</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10). 시장가/지정가는 <a href="/live/accounts" className="text-blue-600 underline">계좌 주문 설정</a>을 따름</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:20</td><td className="px-3 py-1.5">체결가 대사 — 실체결가·실현손익 확정 저장</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:30</td><td className="px-3 py-1.5">실계좌 잔고 동기화</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">14:30 / 15:00</td><td className="px-3 py-1.5">🔭 <strong>정찰 스캔</strong> — 카페 규칙 후보 미리보기 (매매 없음, 조기 진입 연구)</td><td className="px-3 py-1.5">🔭 후보 5</td></tr>
@@ -102,7 +102,7 @@ export default function GuidePage() {
               <tr>
                 <td className="px-3 py-2 whitespace-nowrap">{CURVE("#10b981")}<strong>open</strong> (실계좌)</td>
                 <td className="px-3 py-2">qlib 신호 top-10</td>
-                <td className="px-3 py-2">09:00 시장가 (하루 최대 2)</td>
+                <td className="px-3 py-2">09:00, 계좌 설정 방식 (하루 최대 2) — 기본 시장가</td>
                 <td className="px-3 py-2">top-30 이탈 시 매도 (n_drop=2)</td>
                 <td className="px-3 py-2">기준선 — 모델 그대로의 성적</td>
               </tr>
@@ -284,8 +284,10 @@ export default function GuidePage() {
             버그 수정(설계와 다르게 동작)만 승인 후 허용, 관측·연구 기능은 자유</li>
           <li><strong>데이터 이력</strong>: 2026-08-05 이전 시뮬 성적은 전일 종가 체결 편향으로 무효 →
             8/6 클린 리셋 후 실시간가 공정 체결. 시뮬 체결가에는 quote/폴백 출처 기록</li>
-          <li><strong>실전 전환 주문 정책 (확정)</strong>: 매수는 시장가 금지 — 분석 기준가
-            <strong> −3% 지정가 예약</strong> (limit 곡선이 이 정책의 성과를 실측 중)</li>
+          <li><strong>주문 정책은 계좌 설정</strong>: 매수/매도의 시장가·지정가, 기준가(전일 종가·당일
+            시가·현재가), 오프셋, 미체결 취소 시각을 <a href="/live/accounts" className="text-blue-600 underline">계좌별로 지정</a>합니다.
+            확정 방침은 <strong>매수 시장가 금지 — 기준가 −3% 지정가</strong>이고, 기존 open 계좌는
+            전략 동결 때문에 시장가를 유지 중입니다 (limit 곡선이 그 정책의 성과를 실측 중)</li>
           <li><strong>소수점 평단?</strong> 한국 주식은 정수 호가로만 체결 — 28,120.27 같은 평단은
             시장가 주문이 여러 호가에 분할 체결된 <strong>가중평균</strong>입니다</li>
           <li><strong>장세 각주</strong>: 2026년은 급등 빈도가 예년의 2~3배인 정책 강세장 —

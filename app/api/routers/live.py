@@ -8,6 +8,7 @@ but everything historical comes from the DB.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 
@@ -19,9 +20,12 @@ from ..auth import get_current_user
 from ..config import settings
 from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
+    TradingAccount, ORD_TYPE_MARKET, ORD_TYPE_LIMIT, ORD_TYPES, PRICE_BASES,
 )
 from ..services.balance_cache import get_balance_for_read
 from ..services.kis_client import get_kis_client, set_trading_halt, trading_halted
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/live", tags=["live"], dependencies=[Depends(get_current_user)])
 
@@ -160,6 +164,104 @@ def set_halt(req: HaltRequest):
                             detail="킬스위치를 쓸 수 없습니다 (redis 연결 실패)")
     reason = trading_halted()
     return HaltStatus(halted=reason is not None, reason=reason)
+
+
+# ─── Account order policy ───────────────────────────────────────────
+
+
+class AccountSidePolicy(BaseModel):
+    ord_type: str = ORD_TYPE_MARKET      # market | limit
+    base: str | None = None              # prev_close | open | quote
+    offset_pct: float = 0.0              # BUY = discount, SELL = premium
+    cancel_hhmm: str | None = None       # "15:20"; null = leave resting
+
+
+class AccountPolicyRow(BaseModel):
+    account_id: str
+    label: str | None = None
+    buy: AccountSidePolicy
+    sell: AccountSidePolicy
+    updated_at: datetime | None = None
+
+
+class AccountPolicyUpdate(BaseModel):
+    label: str | None = None
+    buy: AccountSidePolicy
+    sell: AccountSidePolicy
+
+
+# A limit deeper than this is far likelier to be a typo (0.3 typed as 30) than
+# an intent — and a typo here changes how real money is spent.
+_MAX_OFFSET_PCT = 0.3
+
+
+def _validate_side(side: AccountSidePolicy, label: str) -> None:
+    if side.ord_type not in ORD_TYPES:
+        raise HTTPException(422, f"{label} 주문종류는 {list(ORD_TYPES)} 중 하나여야 합니다")
+    if side.ord_type != ORD_TYPE_LIMIT:
+        return
+    if side.base not in PRICE_BASES:
+        raise HTTPException(422, f"{label} 지정가 기준가는 {list(PRICE_BASES)} 중 하나여야 합니다")
+    if not 0 <= side.offset_pct <= _MAX_OFFSET_PCT:
+        raise HTTPException(
+            422, f"{label} 오프셋은 0 ~ {_MAX_OFFSET_PCT:.0%} 사이여야 합니다 "
+                 f"(입력값 {side.offset_pct})")
+    # Lazy, like every other live_trader import here — importing it at module
+    # load would drag qlib into the API process.
+    from ..services.live_trader import _parse_hhmm
+    if side.cancel_hhmm is not None and _parse_hhmm(side.cancel_hhmm) is None:
+        raise HTTPException(422, f"{label} 취소 시각은 HH:MM 형식이어야 합니다")
+
+
+def _account_row(a: TradingAccount) -> AccountPolicyRow:
+    return AccountPolicyRow(
+        account_id=a.account_id, label=a.label,
+        buy=AccountSidePolicy(ord_type=a.buy_ord_type, base=a.buy_base,
+                              offset_pct=a.buy_offset_pct or 0.0,
+                              cancel_hhmm=a.buy_cancel_hhmm),
+        sell=AccountSidePolicy(ord_type=a.sell_ord_type, base=a.sell_base,
+                               offset_pct=a.sell_offset_pct or 0.0,
+                               cancel_hhmm=a.sell_cancel_hhmm),
+        updated_at=a.updated_at,
+    )
+
+
+@router.get("/accounts", response_model=list[AccountPolicyRow])
+def get_accounts():
+    """Per-account order-execution policy — what the 09:00 run reads."""
+    with SessionLocal() as db:
+        rows = db.query(TradingAccount).order_by(TradingAccount.account_id).all()
+        return [_account_row(a) for a in rows]
+
+
+@router.put("/accounts/{account_id}", response_model=AccountPolicyRow)
+def update_account(account_id: str, req: AccountPolicyUpdate):
+    """Change how an account submits orders.
+
+    This is the switch between "매수 시장가" and "기준가 −N% 지정가". It takes
+    effect on the next 09:00 run with no deploy, which is the whole point —
+    but it also breaks that account's performance continuity, so the UI asks
+    for confirmation before calling this.
+    """
+    _validate_side(req.buy, "매수")
+    _validate_side(req.sell, "매도")
+
+    with SessionLocal() as db:
+        a = db.get(TradingAccount, account_id)
+        if a is None:
+            raise HTTPException(404, f"계좌 {account_id!r} 없음")
+        if req.label is not None:
+            a.label = req.label
+        a.buy_ord_type, a.buy_base = req.buy.ord_type, req.buy.base
+        a.buy_offset_pct, a.buy_cancel_hhmm = req.buy.offset_pct, req.buy.cancel_hhmm
+        a.sell_ord_type, a.sell_base = req.sell.ord_type, req.sell.base
+        a.sell_offset_pct, a.sell_cancel_hhmm = req.sell.offset_pct, req.sell.cancel_hhmm
+        db.commit()
+        db.refresh(a)
+        log.warning("account policy changed: %s buy=%s/%s/%.3f sell=%s/%s/%.3f",
+                    account_id, a.buy_ord_type, a.buy_base, a.buy_offset_pct,
+                    a.sell_ord_type, a.sell_base, a.sell_offset_pct)
+        return _account_row(a)
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────

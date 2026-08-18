@@ -31,7 +31,11 @@ from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-    STRATEGY_SURGE, STRATEGY_CAFEOPEN, init_db,
+    STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID,
+    BASE_OPEN, BASE_QUOTE, init_db,
+)
+from .account_policy import (
+    MARKET_BUY, MARKET_SELL, BasePriceUnavailable, get_policies, order_price,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
@@ -334,19 +338,27 @@ def generate_daily_signal(today: date | None = None) -> dict:
 # ─── Order submission (09:00 KST) ───────────────────────────────────
 
 
-def _is_risky(code: str, client: KISClient | None = None) -> str | None:
+def _is_risky(code: str, client: KISClient | None = None,
+              quote: dict | None = None) -> str | None:
     """Return a reason string if the stock must not be bought — 거래정지,
     관리종목, 투자위험/경고 (KIS quote flags). None = tradable.
 
     The model only sees prices, so a stock in receivership can score high on
     its FROZEN pre-halt data (콘텐트리중앙 ranked #3 while trade-halted,
-    2026-07-30) — this is the safety net in front of the order."""
+    2026-07-30) — this is the safety net in front of the order.
+
+    `quote` reuses a quote the caller already fetched. A limit-policy account
+    reads the same TR to build its entry price, and quotes are gated to ~1/sec
+    per appkey on paper — paying for it twice per candidate doubles the order
+    run for nothing."""
     try:
         client = client or get_kis_client()
         if client.is_mock:
             return None
-        q = client.get_quote(code) or {}
-        time.sleep(KIS_THROTTLE_SECONDS)
+        if quote is None:
+            quote = client.get_quote(code) or {}
+            time.sleep(KIS_THROTTLE_SECONDS)
+        q = quote
         if q.get("halted"):
             return "거래정지"
         names = {"51": "관리종목", "52": "투자위험", "53": "투자경고"}
@@ -408,11 +420,17 @@ def submit_daily_orders(today: date | None = None,
                          client: KISClient | None = None,
                          *,
                          strategy: str = STRATEGY_OPEN,
-                         simulated: bool = False) -> dict:
+                         simulated: bool = False,
+                         account_id: str = DEFAULT_ACCOUNT_ID) -> dict:
     """Compute (sell, buy) lists from today's signal vs current holdings,
     then either:
-      - strategy='open', simulated=False (default): place KIS market orders at the opening auction
+      - strategy='open', simulated=False (default): place KIS orders at the opening auction,
+        market or limit according to the account's policy (`trading_accounts`)
       - strategy='close', simulated=True: write SIMULATED Order+Fill rows priced at the kr_data last close
+
+    The account policy governs the REAL path only. Simulated curves are a
+    frozen comparison experiment — changing how they fill would rewrite the
+    very thing they exist to measure — so they keep filling at the quote.
 
     Strategy: TopkDropout-style. We hold up to `topk` codes at all times.
     Each session we drop the worst N held that fell out of today's top-K, and
@@ -471,6 +489,19 @@ def submit_daily_orders(today: date | None = None,
         # (after sells refresh the cash) decides which n_drop actually get bought.
         buy_candidates = [c for c in target_codes if c not in held_codes]
 
+        # Execution style comes from the account row. Simulated curves are
+        # explicitly excluded (see docstring), so they take the same market
+        # path they always had.
+        if simulated:
+            buy_pol, sell_pol = MARKET_BUY, MARKET_SELL
+        else:
+            buy_pol, sell_pol = get_policies(db, account_id)
+            log.info("live_orders: account=%s buy=%s%s sell=%s%s", account_id,
+                     buy_pol.ord_type,
+                     f"({buy_pol.base} −{buy_pol.offset_pct * 100:.1f}%)" if buy_pol.is_limit else "",
+                     sell_pol.ord_type,
+                     f"({sell_pol.base} +{sell_pol.offset_pct * 100:.1f}%)" if sell_pol.is_limit else "")
+
         submitted = 0
         rejected = 0
         # Sells first to free cash
@@ -502,8 +533,15 @@ def submit_daily_orders(today: date | None = None,
                 if sell_qty <= 0:
                     log.warning("live_orders: %s has 0 sellable qty — skipping", code)
                     continue
-                res = client.place_order(code, "SELL", sell_qty, price=None)
-                _persist_order(db, today, code, "SELL", sell_qty, None, res,
+                try:
+                    sell_px = order_price(client, code, sell_pol, today)
+                except BasePriceUnavailable as exc:
+                    # Skipping a sell keeps a position we decided to exit, so
+                    # this is louder than the buy-side equivalent.
+                    log.error("live_orders: SELL skipped — %s", exc)
+                    continue
+                res = client.place_order(code, "SELL", sell_qty, price=sell_px)
+                _persist_order(db, today, code, "SELL", sell_qty, sell_px, res,
                                strategy=strategy, reasons=sell_why)
                 if not res.ok:
                     log.warning("live_orders: SELL REJECTED code=%s qty=%d error=%s",
@@ -527,13 +565,39 @@ def submit_daily_orders(today: date | None = None,
         topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
         total_equity = max(snapshot_after.total_eval, cash)
         slot_budget = total_equity / max(topk, 1)
-        to_buy, skipped_expensive = _select_affordable_buys(buy_candidates, slot_budget, n_drop)
+        # For a limit policy the ORDER price — not the last close — is what
+        # affordability, sizing and the order itself must all agree on. The
+        # price_fn hook makes that one substitution instead of three.
+        if buy_pol.is_limit:
+            # One quote per candidate, shared with the risk check below.
+            quote_cache: dict[str, dict] = {}
+
+            def _entry_price(code: str) -> float | None:
+                try:
+                    q = None
+                    if buy_pol.base in (BASE_OPEN, BASE_QUOTE) and not client.is_mock:
+                        q = quote_cache.get(code)
+                        if q is None:
+                            q = client.get_quote(code) or {}
+                            quote_cache[code] = q
+                            time.sleep(KIS_THROTTLE_SECONDS)
+                    return order_price(client, code, buy_pol, today, quote=q)
+                except BasePriceUnavailable as exc:
+                    log.warning("live_orders: BUY skipped — %s", exc)
+                    return None
+
+            to_buy, skipped_expensive = _select_affordable_buys(
+                buy_candidates, slot_budget, n_drop, price_fn=_entry_price,
+                risk_fn=lambda code: _is_risky(code, client, quote=quote_cache.get(code)))
+        else:
+            to_buy, skipped_expensive = _select_affordable_buys(buy_candidates, slot_budget, n_drop)
         if to_buy and not simulated:
             # `cash` is 예수금 총액, which on a real account still counts funds
             # committed to unsettled (D+2) trades. Sizing against it opens a
             # 미수 position by accident. Ask KIS what is actually orderable and
             # take the smaller number; an unavailable answer leaves `cash` as is.
-            psbl = client.get_orderable_cash(to_buy[0][0], price=None)
+            psbl = client.get_orderable_cash(
+                to_buy[0][0], price=to_buy[0][1] if buy_pol.is_limit else None)
             time.sleep(KIS_THROTTLE_SECONDS)
             if psbl.get("cash"):
                 if psbl["cash"] < cash:
@@ -560,8 +624,11 @@ def submit_daily_orders(today: date | None = None,
                                             strategy=strategy, reasons=buy_why)
                     submitted += 1
                 else:
-                    res = client.place_order(code, "BUY", qty, price=None)
-                    _persist_order(db, today, code, "BUY", qty, None, res,
+                    # px is already the limit price under a limit policy —
+                    # _select_affordable_buys computed it via price_fn above.
+                    entry_px = px if buy_pol.is_limit else None
+                    res = client.place_order(code, "BUY", qty, price=entry_px)
+                    _persist_order(db, today, code, "BUY", qty, entry_px, res,
                                    strategy=strategy, reasons=buy_why)
                     if not res.ok:
                         log.warning("live_orders: BUY REJECTED code=%s qty=%d error=%s",
@@ -1435,6 +1502,110 @@ def submit_cafeopen_orders(trade_date: date | None = None) -> dict:
     return {"status": "ok", "trade_date": day.isoformat(),
             "source_date": prev.isoformat(), "strategy": STRATEGY_CAFEOPEN,
             "discount": discount, "rested": rested}
+
+
+def _parse_hhmm(value: str | None) -> tuple[int, int] | None:
+    """'15:20' -> (15, 20). Anything unparseable is treated as 'no cutoff'."""
+    if not value:
+        return None
+    try:
+        hh, mm = value.split(":")
+        h, m = int(hh), int(mm)
+    except (ValueError, AttributeError):
+        log.warning("cancel sweep: unparseable cutoff %r — ignored", value)
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        log.warning("cancel sweep: out-of-range cutoff %r — ignored", value)
+        return None
+    return h, m
+
+
+def _order_ids_from_response(raw: str | None) -> tuple[str | None, str | None]:
+    """(KRX_FWDG_ORD_ORGNO, ODNO) out of a stored KIS order response."""
+    try:
+        out = (json.loads(raw or "{}") or {}).get("output") or {}
+    except (ValueError, TypeError):
+        return None, None
+    return (str(out.get("KRX_FWDG_ORD_ORGNO") or "") or None,
+            str(out.get("ODNO") or "") or None)
+
+
+def cancel_unfilled_orders(trade_date: date | None = None, *,
+                           now: datetime | None = None,
+                           client: KISClient | None = None,
+                           account_id: str = DEFAULT_ACCOUNT_ID) -> dict:
+    """Retire today's still-resting limit orders once the account's cutoff passes.
+
+    A market order is done the moment it is accepted; a limit order is not. An
+    unfilled one sits in the book holding 주문가능현금 hostage for the rest of
+    the session and, left alone, expires only at the close. The account row
+    says when to give up (`buy_cancel_hhmm` / `sell_cancel_hhmm`); a null there
+    means "leave it resting", which is a legitimate choice, not an oversight.
+
+    Scope is deliberately `SUBMITTED` only. A `PARTIAL` order already has Fill
+    rows, and the pnl/episode queries select on `status in (FILLED, PARTIAL)` —
+    flipping it to CANCELLED would drop real fills out of the ledger. Those are
+    logged for a human instead of silently rewritten.
+    """
+    init_db()
+    day = trade_date or date.today()
+    now = now or datetime.now()
+
+    with SessionLocal() as db:
+        buy_pol, sell_pol = get_policies(db, account_id)
+        cutoffs = {"BUY": _parse_hhmm(buy_pol.cancel_hhmm),
+                   "SELL": _parse_hhmm(sell_pol.cancel_hhmm)}
+        if not any(cutoffs.values()):
+            return {"status": "no_cutoff", "trade_date": day.isoformat(),
+                    "account_id": account_id}
+
+        rows = (db.query(Order)
+                  .filter(Order.trade_date == day,
+                          Order.ord_dvsn == "00",          # 지정가만
+                          Order.status.in_(("SUBMITTED", "PARTIAL")))
+                  .all())
+        due = []
+        for o in rows:
+            cutoff = cutoffs.get((o.side or "").upper())
+            if not cutoff or (now.hour, now.minute) < cutoff:
+                continue
+            if o.status == "PARTIAL":
+                log.warning("cancel sweep: %s %s(%s) is PARTIAL past cutoff — "
+                            "left alone so its fills stay in the ledger; "
+                            "cancel the remainder manually if it matters",
+                            o.side, o.name or o.code, o.code)
+                continue
+            due.append(o)
+
+        if not due:
+            return {"status": "ok", "trade_date": day.isoformat(),
+                    "account_id": account_id, "cancelled": 0, "failed": 0}
+
+        client = client or get_kis_client()
+        cancelled, failed = 0, []
+        for o in due:
+            org_no, odno = _order_ids_from_response(o.raw_response)
+            odno = odno or o.kis_order_id
+            res = client.cancel_order(code=o.code, side=o.side, qty=o.qty,
+                                      org_no=org_no or "", orgn_odno=odno or "",
+                                      ord_dvsn=o.ord_dvsn)
+            if res.ok:
+                o.status = "CANCELLED"
+                cancelled += 1
+                log.info("cancel sweep: cancelled %s %s(%s) x%d @ %s",
+                         o.side, o.name or o.code, o.code, o.qty, o.price)
+            else:
+                # Surfaced on the row rather than swallowed: a cancel that
+                # failed because the order actually filled looks identical to
+                # one that failed because the token expired.
+                o.error = f"취소 실패 — {res.error}"
+                failed.append(f"{o.code}({res.error})")
+                log.warning("cancel sweep: FAILED %s %s — %s", o.side, o.code, res.error)
+            time.sleep(KIS_THROTTLE_SECONDS)
+        db.commit()
+
+    return {"status": "ok", "trade_date": day.isoformat(), "account_id": account_id,
+            "cancelled": cancelled, "failed": len(failed), "errors": failed}
 
 
 def resolve_cafeopen_orders(trade_date: date | None = None) -> dict:

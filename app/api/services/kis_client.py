@@ -57,9 +57,9 @@ _HALT_KEY = "qlib:trading:halt"
 # TR_ID prefixes: T... = real, V... = paper. Same trailing 7 chars.
 _TR = {
     "real":  {"buy": "TTTC0802U", "sell": "TTTC0801U", "balance": "TTTC8434R", "psbl": "TTTC8908R",
-              "fills": "TTTC8001R"},
+              "fills": "TTTC8001R", "cancel": "TTTC0803U"},
     "paper": {"buy": "VTTC0802U", "sell": "VTTC0801U", "balance": "VTTC8434R", "psbl": "VTTC8908R",
-              "fills": "VTTC8001R"},
+              "fills": "VTTC8001R", "cancel": "VTTC0803U"},
 }
 
 # Minimum spacing between ANY two KIS calls sharing one APPKEY, across all
@@ -1156,6 +1156,85 @@ class KISClient:
             if attempt < 2 and any(m in err or m in msg_cd for m in _THROTTLE_MARKERS):
                 log.warning("KIS throttle rejection %s %s x%d (attempt %d/3) — retrying in 2.5s: %s",
                             side, code, qty, attempt + 1, err)
+                time.sleep(2.5)
+                continue
+            return last
+        return last  # pragma: no cover — loop always returns
+
+    def cancel_order(self, *, code: str, side: str, qty: int,
+                     org_no: str, orgn_odno: str,
+                     ord_dvsn: str = "00") -> OrderResult:
+        """Cancel the remaining quantity of a resting order (TR *TTC0803U).
+
+        Needed the moment an account submits limit orders: an unfilled limit
+        ties up 주문가능현금 for the rest of the session, so the sweep that
+        retires it at the account's cutoff has to be able to actually cancel.
+
+        `org_no` (KRX_FWDG_ORD_ORGNO) and `orgn_odno` (ODNO) come from the
+        original order's stored KIS response.
+
+        Deliberately NOT gated on the kill switch. The switch exists to stop
+        NEW exposure; blocking cancels would strand orders in the book at
+        exactly the moment someone has decided to stop trading.
+        """
+        qty = int(qty)
+        if not org_no or not orgn_odno:
+            return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                               price=None, raw={},
+                               error="원주문 식별자(KRX_FWDG_ORD_ORGNO/ODNO) 없음")
+        if self.is_mock:
+            return OrderResult(ok=True, order_id=orgn_odno, code=code, side=side, qty=qty,
+                               price=None, raw={"mock": True, "cancelled": True}, error=None)
+
+        path = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
+        body = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "KRX_FWDG_ORD_ORGNO": str(org_no),
+            "ORGN_ODNO": str(orgn_odno),
+            "ORD_DVSN": ord_dvsn,
+            "RVSE_CNCL_DVSN_CD": "02",   # 01 정정 / 02 취소
+            "ORD_QTY": "0",              # ignored when QTY_ALL_ORD_YN = Y
+            "ORD_UNPR": "0",
+            "QTY_ALL_ORD_YN": "Y",       # 잔량 전부
+        }
+        tr_id = self.tr_set["cancel"]
+        last: OrderResult | None = None
+        for attempt in range(3):
+            try:
+                headers = self._headers(tr_id, body=body)
+                self._gate()
+                r = requests.post(self.host + path, headers=headers,
+                                  data=json.dumps(body), timeout=15)
+            except requests.RequestException as e:
+                return OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                                   price=None, raw={}, error=str(e))
+
+            d: dict[str, Any] = {}
+            try:
+                d = r.json()
+            except Exception:  # noqa: BLE001
+                pass
+            rt_cd = d.get("rt_cd")
+            if r.status_code == 200 and rt_cd == "0":
+                out = d.get("output") or {}
+                return OrderResult(ok=True, order_id=str(out.get("ODNO") or orgn_odno),
+                                   code=code, side=side, qty=qty, price=None, raw=d, error=None)
+            err = f"{rt_cd} {d.get('msg1', r.text[:200])}"
+            msg_cd = str(d.get("msg_cd") or "")
+            last = OrderResult(ok=False, order_id=None, code=code, side=side, qty=qty,
+                               price=None, raw=d, error=err)
+            # Unlike a new order, re-sending a cancel is safe — the second one
+            # is rejected as "이미 처리" rather than doubling anything.
+            if attempt < 2 and any(m in err or m in msg_cd for m in _TOKEN_MARKERS):
+                log.warning("KIS token rejection on cancel %s (attempt %d/3): %s",
+                            orgn_odno, attempt + 1, err)
+                self._drop_token()
+                time.sleep(1.0)
+                continue
+            if attempt < 2 and any(m in err or m in msg_cd for m in _THROTTLE_MARKERS):
+                log.warning("KIS throttle rejection on cancel %s (attempt %d/3): %s",
+                            orgn_odno, attempt + 1, err)
                 time.sleep(2.5)
                 continue
             return last
