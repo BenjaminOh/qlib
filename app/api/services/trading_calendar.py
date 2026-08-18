@@ -48,6 +48,61 @@ _CLOSED_KEY = "kis:marketclosed:{iso}"
 _CLOSED_TTL_S = 3 * 24 * 3600
 CLOSED_MARKERS = ("영업일이 아닙니다",)
 
+# ─── Static KRX calendar ────────────────────────────────────────────
+#
+# The rejection marker above only teaches us about a holiday ON the day itself,
+# which is too late for the one decision that matters most: which date the
+# Friday-evening signal run stamps on tomorrow's picks. On 2026-08-14 nothing
+# had yet been rejected, so the run labelled its output `as_of=2026-08-17` — a
+# 광복절 대체공휴일. Monday's orders bounced, and Tuesday looked for signals
+# dated 08-18 that no one had produced. A full session traded nothing while a
+# perfectly good analysis sat in the table under the wrong date.
+#
+# On a real account CTCA0903R answers ahead of time and none of this is needed.
+# This list is the 모의투자 stand-in, and it is worth maintaining only until the
+# real account takes over.
+#
+# ⚠️ ONE ENTRY PER YEAR, and the year key is load-bearing: a date missing from a
+# year we *do* list means "open", while a year we do not list means "unknown"
+# (and callers fail open). Adding a year therefore asserts the list is complete
+# for it — verify against KRX before doing so.
+#
+# Getting it wrong is asymmetric. A missed holiday costs nothing new: orders go
+# out and the broker rejects them, exactly as before. A date wrongly marked
+# closed **skips a real trading day**. When unsure, leave it out.
+#
+# 2026 — 공휴일 + 대체공휴일 + 연말 폐장. Cross-checked against KRX holiday
+# listings; 08-17 independently confirmed by KIS rejecting live orders that day.
+KRX_HOLIDAYS: dict[int, frozenset[str]] = {
+    2026: frozenset({
+        "2026-01-01",                                # 신정
+        "2026-02-16", "2026-02-17", "2026-02-18",    # 설 연휴
+        "2026-03-02",                                # 3·1절 대체 (3/1 일요일)
+        "2026-05-01",                                # 근로자의 날
+        "2026-05-05",                                # 어린이날
+        "2026-05-25",                                # 부처님오신날
+        "2026-06-03",                                # 제9회 전국동시지방선거
+        "2026-08-17",                                # 광복절 대체 (8/15 토요일)
+        "2026-09-24", "2026-09-25",                  # 추석 연휴
+        "2026-10-05",                                # 개천절 대체 (10/3 토요일)
+        "2026-10-09",                                # 한글날
+        "2026-12-25",                                # 성탄절
+        # 공휴일이 아니라 거래소 연말 폐장일 — 공휴일 목록만 보면 빠뜨린다.
+        "2026-12-31",
+    }),
+}
+
+
+def _static_verdict(day: date) -> bool | None:
+    """Open/closed from the bundled calendar, or None if the year is unlisted."""
+    holidays = KRX_HOLIDAYS.get(day.year)
+    if holidays is None:
+        return None
+    if day.weekday() >= 5:
+        return False
+    return day.isoformat() not in holidays
+
+
 _redis_client = None
 
 
@@ -142,19 +197,23 @@ def is_market_open(day: date | None = None) -> bool | None:
     if cached is not None and iso in cached:
         return cached[iso]
 
+    fetched: dict[str, bool] = {}
     try:
         from .kis_client import get_kis_client
         client = get_kis_client()
-        if client.is_mock:
-            return None          # no credentials — nothing to ask
-        fetched = client.get_open_days(day)
+        if not client.is_mock:      # no credentials — nothing to ask
+            fetched = client.get_open_days(day)
     except Exception as exc:  # noqa: BLE001
         log.warning("trading_calendar: KIS holiday lookup failed for %s: %s", iso, exc)
-        return None
-    if not fetched:
-        return None
-    _store(fetched)
-    return fetched.get(iso)
+    if fetched:
+        _store(fetched)
+        if iso in fetched:
+            return fetched[iso]
+
+    # Last resort, and the only source that answers at all on 모의투자 —
+    # CTCA0903R is a real-environment TR. Still returns None for a year the
+    # bundled list does not cover, so callers keep failing open.
+    return _static_verdict(day)
 
 
 def next_open_day(after: date, limit: int = 14) -> date | None:

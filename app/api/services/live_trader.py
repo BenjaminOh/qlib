@@ -465,7 +465,8 @@ def submit_daily_orders(today: date | None = None,
             # never on rank dropout. Buys below stay signal-driven.
             to_sell_codes: list[str] = []
         else:
-            to_sell_codes = [c for c in held_codes if c not in set(target_codes)][:n_drop]
+            dropped = held_codes - set(target_codes)
+            to_sell_codes = _rank_sorted_sells(db, today, dropped, n_drop)
         # Buy candidates keep full rank order — affordability filtering below
         # (after sells refresh the cash) decides which n_drop actually get bought.
         buy_candidates = [c for c in target_codes if c not in held_codes]
@@ -915,6 +916,39 @@ def _buy_reasons(db: Session, as_of: date, code: str,
     except Exception as exc:  # noqa: BLE001
         log.warning("_buy_reasons failed for %s: %s", code, exc)
         return None
+
+
+def _today_rank(db: Session, as_of: date, code: str) -> int:
+    """Where `code` ranks in today's signal; worst-possible if it is absent.
+
+    Signals persist SIGNAL_STORE_TOP_N (30) ranks precisely so a stock that
+    fell out of the traded top-K can still be located — `_sell_reasons` uses
+    the same lookup to say "금일 21위" vs "30위권 밖".
+    """
+    row = (db.query(Signal)
+             .filter(Signal.code == code, Signal.as_of == as_of)
+             .order_by(Signal.rank.asc())
+             .first())
+    # Outside the stored window: strictly worse than any recorded rank.
+    return row.rank if row else SIGNAL_STORE_TOP_N + 1
+
+
+def _rank_sorted_sells(db: Session, as_of: date, codes: set[str],
+                       n_drop: int) -> list[str]:
+    """The `n_drop` holdings to let go — worst-ranked first.
+
+    `held_codes` is a set, so the previous `[c for c in held_codes ...][:n_drop]`
+    picked whichever two the hash order happened to surface. With four holdings
+    all out of the top-K that choice carried real money and was not reproducible:
+    2026-08-17's run sold 088350/010950, while the same inputs a day later
+    produced 010950/042700.
+
+    Worst-rank-first is what TopkDropout means — shed the names the model likes
+    least. The code tiebreak exists so equal ranks still give one answer.
+    """
+    # Negated rank: the WORST (largest) rank sorts first. The code stays
+    # ascending so a tie resolves the same way every run.
+    return sorted(codes, key=lambda c: (-_today_rank(db, as_of, c), c))[:n_drop]
 
 
 def _sell_reasons(db: Session, as_of: date, code: str) -> dict | None:

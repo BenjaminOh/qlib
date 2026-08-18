@@ -95,7 +95,8 @@ def test_second_lookup_is_served_from_cache(redis, monkeypatch):
     assert len(calls) == 1, "KIS는 이 TR을 하루 1회만 호출하라고 요구한다"
 
 
-def test_unknown_when_kis_fails(redis, monkeypatch):
+def test_kis_failure_falls_through_to_the_bundled_calendar(redis, monkeypatch):
+    """A dead API must not blind us — the static list is the whole point."""
     class _Client:
         is_mock = False
 
@@ -104,16 +105,33 @@ def test_unknown_when_kis_fails(redis, monkeypatch):
 
     monkeypatch.setattr(kc, "get_kis_client", lambda: _Client())
 
-    assert tc.is_market_open(date(2026, 8, 17)) is None
+    assert tc.is_market_open(date(2026, 8, 17)) is False   # 광복절 대체
+    assert tc.is_market_open(date(2026, 8, 18)) is True
 
 
-def test_unknown_on_mock_client(redis, monkeypatch):
+def test_unlisted_year_stays_unknown(redis, monkeypatch):
+    """Only years we actually vetted may answer; the rest fail open."""
+    class _Client:
+        is_mock = False
+
+        def get_open_days(self, d):
+            raise RuntimeError("KIS down")
+
+    monkeypatch.setattr(kc, "get_kis_client", lambda: _Client())
+
+    assert 2099 not in tc.KRX_HOLIDAYS
+    assert tc.is_market_open(date(2099, 8, 18)) is None
+
+
+def test_mock_client_still_gets_the_bundled_calendar(redis, monkeypatch):
+    """모의투자 has no CTCA0903R at all — this list is its only source."""
     class _Client:
         is_mock = True
 
     monkeypatch.setattr(kc, "get_kis_client", lambda: _Client())
 
-    assert tc.is_market_open(date(2026, 8, 17)) is None
+    assert tc.is_market_open(date(2026, 8, 17)) is False
+    assert tc.is_market_open(date(2026, 8, 18)) is True
 
 
 def test_unknown_when_redis_is_down(monkeypatch):
@@ -304,3 +322,57 @@ def test_order_rejection_records_the_closed_marker(monkeypatch):
     assert res.ok is False
     assert len(marked) == 1, "휴장 사실이 기록되어야 15:20 시뮬이 건너뛴다"
     assert len(attempts) == 1, "휴장은 재시도해도 소용없다"
+
+
+# ─── the 2026-08-18 regression ──────────────────────────────────────
+
+
+def test_friday_signal_lands_on_the_day_after_the_holiday(redis, monkeypatch):
+    """The bug this list exists for.
+
+    On 2026-08-14 the signal run asked for the next trading day. CTCA0903R is
+    unavailable on 모의투자 and qlib's calendar has no future, so it answered
+    "next weekday" = 08-17, a 광복절 대체공휴일. Monday's orders bounced and
+    Tuesday found nothing dated 08-18 — a full session traded nothing while a
+    good analysis sat under the wrong date.
+    """
+    class _Client:
+        is_mock = True          # 모의투자: the holiday TR is not available
+
+    monkeypatch.setattr(kc, "get_kis_client", lambda: _Client())
+
+    assert tc.next_open_day(date(2026, 8, 14)) == date(2026, 8, 18)
+
+
+def test_consecutive_holidays_are_skipped_together(redis, monkeypatch):
+    """추석 09-24~25 is two closed weekdays back to back."""
+    class _Client:
+        is_mock = True
+
+    monkeypatch.setattr(kc, "get_kis_client", lambda: _Client())
+
+    # 09-23 Wed → 09-24 Thu(휴장) → 09-25 Fri(휴장) → 09-26/27 주말 → 09-28 Mon
+    assert tc.next_open_day(date(2026, 9, 23)) == date(2026, 9, 28)
+
+
+def test_year_end_close_is_in_the_list():
+    """12-31 is a KRX closure, not a public holiday — easy to miss."""
+    assert "2026-12-31" in tc.KRX_HOLIDAYS[2026]
+
+
+def test_broker_rejection_still_outranks_the_list(redis, monkeypatch):
+    """The list is a forecast; a refusal is a fact."""
+    class _Client:
+        is_mock = True
+
+    monkeypatch.setattr(kc, "get_kis_client", lambda: _Client())
+    assert tc.is_market_open(date(2026, 8, 18)) is True     # 목록상 개장
+
+    tc.mark_closed(date(2026, 8, 18))                       # 증권사가 거부
+    assert tc.is_market_open(date(2026, 8, 18)) is False
+
+
+def test_weekends_are_closed_without_being_listed():
+    assert tc._static_verdict(date(2026, 8, 22)) is False   # 토
+    assert tc._static_verdict(date(2026, 8, 23)) is False   # 일
+    assert tc._static_verdict(date(2026, 8, 21)) is True    # 금
