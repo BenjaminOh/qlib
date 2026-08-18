@@ -143,7 +143,9 @@ export interface BacktestListItem {
 export interface HealthResponse {
   status: string;
   qlib_initialized: boolean;
-  provider_uri: string;
+  /** Omitted since 2026-08-18 — /health is unauthenticated and this
+   *  exposed a container-internal path. Kept optional for older clients. */
+  provider_uri?: string;
 }
 
 // --- Grid search ---
