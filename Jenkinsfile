@@ -52,8 +52,14 @@ pipeline {
                             cd /home/qlib
                             git fetch --all
                             git reset --hard origin/main
-                            docker build -f Dockerfile.prod --target test \
-                                         -t qlib-api-test:ci .
+                            # --output type=cacheonly: run the stage, keep the
+                            # layer cache, but never materialise/unpack an image.
+                            # Tagging it cost ~8 min of "exporting → unpacking" on
+                            # a multi-GB stage we throw away anyway (observed on
+                            # build #93). The RUN still fails the build on a red
+                            # test — verified both directions.
+                            docker buildx build -f Dockerfile.prod --target test \
+                                                --output type=cacheonly .
                         """
                     }
                 }
