@@ -1,0 +1,23 @@
+# Docker 이미지·빌드캐시 주기 정리 — /etc/cron.d/docker-prune 로 배치.
+#
+# 배경(2026-08-19): 정리 정책이 아예 없었다. root 크론에는 certbot 갱신 하나뿐.
+#
+# 규모에 대한 주의: `docker system df`는 공유 레이어를 이미지마다 중복 계상해
+# "이미지 246GB / 빌드캐시 247GB" 처럼 크게 보고한다. 실측은
+# `du -sh /var/lib/docker` = 67G 였고 디스크는 300G 중 55% 사용이었다.
+# 즉 이 크론은 급한 불을 끄는 것이 아니라 무한 증가를 막는 상한선이다.
+#
+# until= 필터로 최근 것은 남긴다. 전부 지우면 다음 배포가 Cython 재컴파일부터
+# 시작해 30분 이상 걸린다(Dockerfile.prod의 레이어 주석 참조).
+#   - 이미지   : 30일(720h) 넘게 미사용인 것만
+#   - 빌드캐시 : 14일(336h) 넘은 것만
+#
+# 실행 중인 컨테이너가 참조하는 이미지는 docker가 보호하므로 -a 로도 안전하다.
+#
+# 시각: 매주 일요일 04:00 KST — 매매 크론 창(08:50-09:40 / 15:10-16:30) 밖.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+0 4 * * 0 root docker image prune -af --filter until=720h >>/var/log/docker-prune.log 2>&1
+5 4 * * 0 root docker builder prune -f --filter until=336h >>/var/log/docker-prune.log 2>&1

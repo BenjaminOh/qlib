@@ -24,10 +24,12 @@ app/frontend/.next
 app/frontend/out
 app/frontend/coverage
 
-# Heavy dirs unused at runtime (data, examples, tests, docs, ML artifacts)
+# Heavy dirs unused at runtime (data, examples, docs, ML artifacts)
 data/
 examples/
-tests/
+# tests/ is NOT ignored: Dockerfile.prod's `test` stage COPYs it to run the
+# CI gate. It never reaches the runtime image (only the `build` stage sees it),
+# and 1.4M of build context is noise next to app/frontend.
 docs/
 mlruns/
 catboost_info/

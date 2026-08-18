@@ -47,6 +47,43 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY scripts/ ./scripts/
 
 
+
+# ─── Stage 1b: test gate ────────────────────────────────────────
+# Inherits `build`, which already has fastapi / sqlalchemy / redis / requests /
+# qlib installed. That matters: every file in tests/app guards its imports with
+# `pytest.importorskip(...)`, so on a machine missing those deps the whole suite
+# SKIPS and pytest still exits 0 — a green light that proves nothing. The login
+# lockout defect survived exactly that way (the test failed, but CI never ran
+# it). So the gate runs where the deps are real, and treats any skip as failure.
+#
+# Only app/api is copied — app/frontend is 612MB and irrelevant here.
+# This stage is never referenced by the runtime image; it runs only when the
+# build is invoked with `--target test` (Jenkinsfile's Test stage).
+FROM build AS test
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install pytest
+
+COPY app/api ./app/api
+COPY app/__init__.py ./app/__init__.py
+COPY tests/ ./tests/
+
+# 종료코드를 반드시 먼저 본다. 최초 구현은 `pytest | tee` 를 `;` 로 끝내
+# 종료코드를 버리고 "N passed" 문자열만 grep 했는데, 실패 요약도
+# "1 failed, 227 passed" 라 그 grep 을 통과해 버렸다 — 실패를 통과시키는
+# 게이트였다(2026-08-19 음성 검증에서 발각). pipefail 은 Docker 기본 셸
+# dash 에서 미지원이므로 쓰지 않고, rc 를 직접 잡는다.
+RUN python -m pytest tests/app -q -p no:cacheprovider --no-header -ra \
+        > /tmp/pytest.out 2>&1; \
+    rc=$?; \
+    cat /tmp/pytest.out; \
+    [ "$rc" -eq 0 ] \
+      || { echo "게이트 실패: pytest 종료코드 $rc"; exit 1; }; \
+    grep -qE "[0-9]+ passed" /tmp/pytest.out \
+      || { echo "게이트 실패: 통과한 테스트가 없다"; exit 1; }; \
+    ! grep -qE "[0-9]+ skipped" /tmp/pytest.out \
+      || { echo "게이트 실패: skip 발생 — 의존성 누락으로 테스트가 무력화됐다"; exit 1; }
+
 # ─── Stage 2: runtime ───────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
