@@ -24,7 +24,14 @@ pipeline {
         // against the same `qlib-blue` compose project. 91 finished, 92 stalled
         // 30+ minutes in the image build. Queue them instead.
         disableConcurrentBuilds()
-        timeout(time: 40, unit: 'MINUTES')
+        // Backstop only — NOT a tuning knob. Real builds run 24-37 min on this
+        // host (#90 24, #91 29, #92 37, #94 34). A 40-min limit aborted #93
+        // mid-deploy, right after "기존 green 컨테이너 정리" — i.e. while
+        // containers were being torn down. Blue happened to still be serving,
+        // but an abort a few steps later (after the nginx flip, before the new
+        // slot is healthy) would have been an outage. The per-stage timeout on
+        // Test catches a hung gate; Deploy must never be interrupted midway.
+        timeout(time: 120, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '30'))
     }
 
@@ -33,6 +40,10 @@ pipeline {
         // anything touches a running slot. A failure here means Deploy never
         // starts, so the live containers keep serving the previous image.
         stage('Test') {
+            // The gate itself is fast (24s of pytest). If it ever hangs, kill it
+            // here rather than letting the pipeline-level backstop fire during
+            // the Deploy stage.
+            options { timeout(time: 25, unit: 'MINUTES') }
             when {
                 anyOf {
                     branch 'main'
