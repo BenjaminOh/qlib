@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { LiveOrderRow, fmtDateTime, parseUtc } from "@/lib/api";
 import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
@@ -67,7 +67,24 @@ export default function OrdersTable({
 }) {
   // Row-click → inline story expansion (same pattern as HoldingsTable).
   const [openId, setOpenId] = useState<number | null>(null);
-  const nCols = 7 + (showStrategy ? 1 : 0) + (compact ? 0 : 1);
+
+  // Footer totals. Declared BEFORE the empty-list early return — hooks must run
+  // unconditionally. Only executed orders count: a REJECTED row still carries
+  // qty/price, and adding those would overstate how much was actually put at
+  // risk (the whole reason this column was asked for).
+  const totals = useMemo(() => {
+    const EXECUTED = new Set(["FILLED", "PARTIAL", "SIMULATED"]);
+    let buy = 0, sell = 0, counted = 0;
+    for (const o of orders || []) {
+      if (!EXECUTED.has(o.status) || o.price == null) continue;
+      counted++;
+      if (o.side === "BUY") buy += o.qty * o.price;
+      else sell += o.qty * o.price;
+    }
+    return { buy, sell, counted };
+  }, [orders]);
+
+  const nCols = 8 + (showStrategy ? 1 : 0) + (compact ? 0 : 1);
   if (!orders || orders.length === 0) {
     return (
       <div className="text-center text-gray-400 py-8 text-sm">
@@ -87,6 +104,7 @@ export default function OrdersTable({
             <th className="text-left px-3 py-2 font-medium">종목명 (코드)</th>
             <th className="text-right px-3 py-2 font-medium">수량</th>
             <th className="text-right px-3 py-2 font-medium" title="실주문 — 시장가는 대사 후 실체결 평균가, 지정가는 주문가 · 시뮬 — 장부상 가상 체결가(실제 주문 아님)">가격</th>
+            <th className="text-right px-3 py-2 font-medium" title="수량 × 가격 — 매수는 매수대금, 매도는 매도대금. 대사 전 시장가 주문은 가격이 없어 —로 표시됩니다">금액</th>
             <th className="text-right px-3 py-2 font-medium" title="매도 시 확정 손익과 수익률 (시장가는 당일 시가 추정)">손익 (수익률)</th>
             <th className="text-left px-3 py-2 font-medium">상태</th>
             {!compact && (
@@ -164,6 +182,11 @@ export default function OrdersTable({
                     </>
                   )}
                 </td>
+                <td className="px-3 py-2 text-right font-mono whitespace-nowrap">
+                  {o.price == null
+                    ? <span className="text-gray-300">—</span>
+                    : Math.round(o.qty * o.price).toLocaleString()}
+                </td>
                 <td className={`px-3 py-2 text-right font-mono whitespace-nowrap ${
                   o.realized_pnl == null ? "text-gray-300"
                     : o.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700"
@@ -217,6 +240,30 @@ export default function OrdersTable({
             );
           })}
         </tbody>
+        {/* Totals over the rows actually on screen. The parent applies the
+            strategy / BUY-SELL filters before handing us `orders`
+            (live/orders/page.tsx), so labelling the scope matters — otherwise
+            the number reads as an all-time total. Hidden in compact mode: the
+            dashboard widget is a preview, not a ledger. */}
+        {!compact && totals.counted > 0 && (
+          <tfoot className="bg-gray-50 text-gray-700 border-t-2 border-gray-200">
+            <tr>
+              <td className="px-3 py-2 text-xs text-gray-500" colSpan={nCols - 3}>
+                표시된 {totals.counted.toLocaleString()}건 기준
+                <span className="text-gray-400"> (체결분만 · 거부/미체결 제외)</span>
+              </td>
+              <td className="px-3 py-2 text-right font-mono whitespace-nowrap" colSpan={3}>
+                <span className="text-emerald-700">
+                  매수 {Math.round(totals.buy).toLocaleString()}원
+                </span>
+                <span className="text-gray-300 mx-2">·</span>
+                <span className="text-red-700">
+                  매도 {Math.round(totals.sell).toLocaleString()}원
+                </span>
+              </td>
+            </tr>
+          </tfoot>
+        )}
       </table>
     </div>
     <p className="md:hidden text-[10px] text-gray-400 mt-1 px-1">
