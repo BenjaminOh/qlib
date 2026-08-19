@@ -1,0 +1,74 @@
+# DOCKER-USER 체인 규칙 — 76번 서버(tmanager-prod) 적용분.
+#
+# ─── 왜 필요한가 (2026-08-19 점검) ────────────────────────────────
+# 도커는 컨테이너 포트를 docker-proxy 로 0.0.0.0 에 바인딩하고 DOCKER 체인의
+# DNAT 로 넘긴다. 이 경로는 **firewalld 의 public 존을 타지 않는다.** 즉
+# public 에 http/https/ssh 만 열어둔 것이 이 포트들에는 아무 효력이 없었다.
+#
+# 점검 당시 0.0.0.0 게시 포트 26개:
+#   22 80 443 8001 8080 23001 24003 24004 24011 24012 24021 24022 24027 24028
+#   24033 24034 24041 24053 24054 25022 25023 25027 25032 50000
+#
+# 같은 IDC 의 47번 서버에서 두드려 본 결과 **전부 도달**했다:
+#   8080  Jenkins        → HTTP 403 (도달 가능. docker.sock 을 쥔 컨테이너)
+#   50000 Jenkins agent  → 열림
+#   25023 qlib API       → HTTP 200  ← nginx→ModSecurity 를 완전히 우회
+# 외부 인터넷에서 안 보였던 이유는 호스트가 아니라 상위 IDC 필터였다.
+# 우리가 소유하지 않은 방어에 기대고 있었던 셈이고, 내부 이동에는 무방비였다.
+#
+# ─── 규칙 순서가 핵심이다 ─────────────────────────────────────────
+# FORWARD 체인은 이 순서로 평가된다:
+#     -P FORWARD DROP
+#     -A FORWARD -j DOCKER-USER      ← 먼저
+#     -A FORWARD -j DOCKER-FORWARD   ← conntrack 은 여기(DOCKER-CT)
+#
+# 즉 DOCKER-USER 가 conntrack 처리보다 앞선다. 여기서 `-i eno1 -j DROP` 만
+# 넣으면 **컨테이너 아웃바운드의 응답 패킷까지 떨어진다** — KIS API 응답이
+# eno1 으로 들어와 컨테이너로 향하므로 실매매가 죽는다.
+# 반드시 ESTABLISHED,RELATED 를 맨 앞에 둘 것.
+#
+# ─── 적용 (런타임) ────────────────────────────────────────────────
+# -I 는 맨 앞에 삽입하므로 역순으로 넣어야 최종 순서가 맞는다.
+#
+#   iptables -I DOCKER-USER 1 -i eno1 -j DROP
+#   iptables -I DOCKER-USER 1 -i eno1 -p tcp -m multiport --dports 80,443 -j RETURN
+#   iptables -I DOCKER-USER 1 -i eno1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+#
+# 최종 순서:
+#   -A DOCKER-USER -i eno1 -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+#   -A DOCKER-USER -i eno1 -p tcp -m multiport --dports 80,443 -j RETURN
+#   -A DOCKER-USER -i eno1 -j DROP
+#
+# ─── 영속화 (firewalld direct) ────────────────────────────────────
+#   firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 \
+#     -i eno1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+#   firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 \
+#     -i eno1 -p tcp -m multiport --dports 80,443 -j RETURN
+#   firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 2 \
+#     -i eno1 -j DROP
+#
+# ⚠️ `firewall-cmd --reload` 는 실행하지 않았다. reload 는 체인을 재구성하면서
+#    도커 네트워킹을 끊을 수 있다(도커 재시작 전까지 복구 안 됨). 런타임 규칙이
+#    이미 적용돼 있으므로 reload 없이 두고, **재부팅 후 규칙이 실제로 살아나는지는
+#    아직 검증되지 않았다** — 다음 재부팅 때 확인 필요.
+#
+# ─── 검증 ─────────────────────────────────────────────────────────
+#   # 매매 경로 (가장 중요)
+#   docker exec <api> curl -s -o /dev/null -w "%{http_code}" \
+#     https://openapi.koreainvestment.com:9443/          # 200
+#   # 공개 경로
+#   curl -s -o /dev/null -w "%{http_code}" https://qlib.tmanager.kr/api/v1/health   # 200
+#   # IDC 내부에서 차단됐는지
+#   ssh newsro-prod 'for p in 443 8080 25023; do
+#     timeout 5 bash -c "</dev/tcp/112.175.30.76/$p" && echo "$p 열림" || echo "$p 차단"; done'
+#   # 기대: 443 열림 / 8080·25023 차단
+#
+# ─── 롤백 ─────────────────────────────────────────────────────────
+#   iptables -D DOCKER-USER -i eno1 -j DROP
+#   iptables -D DOCKER-USER -i eno1 -p tcp -m multiport --dports 80,443 -j RETURN
+#   iptables -D DOCKER-USER -i eno1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+#   백업: /root/iptables.backup.YYYYMMDD_HHMMSS
+#
+# ─── 남은 과제 ────────────────────────────────────────────────────
+# 이 규칙은 대증요법이다. 근본은 compose 의 ports 를 127.0.0.1 바인딩으로
+# 바꿔 애초에 0.0.0.0 에 걸지 않는 것 — 컨테이너 재기동이 필요해 별도 작업.
