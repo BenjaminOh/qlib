@@ -268,15 +268,25 @@ def update_account(account_id: str, req: AccountPolicyUpdate):
 
 
 @router.get("/balance", response_model=LiveBalanceResponse)
-def get_balance():
+def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
     """Current KIS balance + holdings, through the read-path cache.
 
     Never 500s on a KIS outage — degrades to the last-known-good snapshot and
     flags it via `stale`, so the dashboard shows numbers with a timestamp
     instead of an empty card after a 10s block.
+
+    `account=cafe` reads the second real account (cafereal). Balances are never
+    summed across accounts: they are separate books and adding them would hide
+    which one is actually making or losing money. An unconfigured cafe account
+    returns zeros with source="no_account" rather than an error.
     """
-    client = get_kis_client()
-    snap, source, as_of = get_balance_for_read()
+    from ..services.kis_client import AccountNotConfigured
+    snap, source, as_of = get_balance_for_read(account)
+    try:
+        client = get_kis_client(account)
+        mode = "mock" if client.is_mock else client.env
+    except (AccountNotConfigured, ValueError):
+        mode = "unconfigured"
     return LiveBalanceResponse(
         cash=snap.cash,
         total_eval=snap.total_eval,
@@ -291,9 +301,9 @@ def get_balance():
             pnl_pct=h.pnl_pct,
         ) for h in snap.holdings],
         fetched_at=as_of,
-        mode=("mock" if client.is_mock else client.env),
+        mode=mode,
         source=source,
-        stale=source in ("stale", "db", "empty"),
+        stale=source in ("stale", "db", "empty", "no_account"),
     )
 
 

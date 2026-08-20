@@ -31,7 +31,7 @@ from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-    STRATEGY_CAFECOOL,
+    STRATEGY_CAFECOOL, STRATEGY_CAFEREAL,
     STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID,
     BASE_OPEN, BASE_QUOTE, init_db,
 )
@@ -58,6 +58,9 @@ def _seed_for(strategy: str) -> float:
         STRATEGY_SURGE: settings.live_seed_cash_surge,
         STRATEGY_CAFEOPEN: settings.live_seed_cash_cafeopen,
         STRATEGY_CAFECOOL: settings.live_seed_cash_cafecool,
+        # cafereal 은 실계좌라 시드가 아니라 실제 예수금이 출발점이다.
+        # 여기 값은 곡선 기준선 표기에만 쓰인다.
+        STRATEGY_CAFEREAL: settings.live_seed_cash_cafereal,
     }
     return seeds.get(strategy, settings.live_seed_cash_open)
 
@@ -69,9 +72,16 @@ def _seed_for(strategy: str) -> float:
 #   trail      : no TP — trailing stop −7% off the peak close (+ prev-low stop)
 #   scale      : TP +7% sells HALF, remainder rides the −7% trail
 #   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
+# Bracket strategies that trade a REAL account. Their exits place KIS orders
+# and their balance comes from the broker, not the order book.
+REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL,)
+# trading_accounts row that supplies cafereal's buy/sell order style.
+CAFE_ACCOUNT_ID = "cafe"
+
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-                      STRATEGY_SURGE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL)
+                      STRATEGY_SURGE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL,
+                      STRATEGY_CAFEREAL)
 
 EXIT_RULES: dict[str, dict] = {
     STRATEGY_CLOSE: {"tp": 0.10},
@@ -99,6 +109,9 @@ EXIT_RULES: dict[str, dict] = {
     # cafecool: cafe 와 청산이 완전히 같아야 한다. 진입 조건(ret20 상한)
     # 하나만 다른 쌍둥이라, 여기를 바꾸면 무엇을 재는지 알 수 없게 된다.
     STRATEGY_CAFECOOL: {"tp": 0.10, "stop_source": "entry"},
+    # cafereal: 실계좌. 규칙은 cafe 와 완전히 같아야 두 곡선의 차이가
+    # 오직 "시뮬 체결 가정 vs 실제 체결"로 좁혀진다.
+    STRATEGY_CAFEREAL: {"tp": 0.10, "stop_source": "entry"},
 }
 
 
@@ -851,13 +864,25 @@ def sync_account(client: KISClient | None = None,
                  strategy: str = STRATEGY_OPEN) -> dict:
     """Snapshot the per-strategy portfolio and roll up DailyPnL.
 
-    strategy='open' → reads KIS get_balance (real paper account)
-    anything else   → reconstructs from that strategy's simulated Fills in the DB
+    strategy='open'     → reads KIS get_balance (기본 실계좌)
+    strategy='cafereal' → reads KIS get_balance (카페 실계좌, 별도 appkey)
+    anything else       → reconstructs from that strategy's simulated Fills
+
+    실계좌를 장부로 재구성하면 안 된다: 수동 매매·미체결·부분체결이 반영되지 않아
+    스냅샷과 실제 잔고가 갈라지고, 그 위에 얹힌 곡선은 아무것도 증명하지 못한다.
     """
     init_db()
     _reset_qlib_caches()
     trade_date = trade_date or _last_trading_day()
-    if strategy != STRATEGY_OPEN:
+    if strategy in REAL_BRACKET_STRATEGIES:
+        from .kis_client import ACCOUNT_CAFE, AccountNotConfigured, get_kis_client as _gc
+        try:
+            snapshot = (client or _gc(ACCOUNT_CAFE)).get_balance()
+        except (AccountNotConfigured, ValueError) as exc:
+            log.info("sync_account: %s 건너뜀 — %s", strategy, exc)
+            return {"status": "no_account", "strategy": strategy,
+                    "trade_date": trade_date.isoformat()}
+    elif strategy != STRATEGY_OPEN:
         with SessionLocal() as db:
             snapshot = _simulated_balance(db, strategy=strategy)
     else:
@@ -1184,6 +1209,41 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
     return AccountSnapshot(cash=cash, total_eval=total_eval, holdings=holdings)
 
 
+def _sell_bracket(db: Session, trade_date: date, code: str, qty: int,
+                  price: float, client, *, strategy: str,
+                  pnl: float | None = None, reasons: dict | None = None) -> None:
+    """Bracket exit — simulated fill, or a REAL sell when `client` is given.
+
+    The bracket engine was sim-only: it wrote a paper Order+Fill and never
+    touched KIS. cafereal trades the same rules on a real account, so its exits
+    have to become actual orders — an entry without an exit on real money is
+    how a −15% stop turns into a −40% one.
+
+    `price` is the daily-bar level the exit was judged at (TP touch / stop /
+    ladder rung). A real order is placed with the account's sell policy, so the
+    executed price will differ from that level — the judged level is kept in
+    `reasons.exit` for the retro to compare against.
+    """
+    if client is None:
+        _persist_simulated_fill(db, trade_date, code, "SELL", qty, price,
+                                strategy=strategy, pnl=pnl, reasons=reasons)
+        return
+    sell_pol = get_policies(db, CAFE_ACCOUNT_ID)[1]
+    try:
+        sell_px = (order_price(client, code, sell_pol, trade_date)
+                   if sell_pol.is_limit else None)
+    except BasePriceUnavailable as exc:
+        log.warning("cafereal SELL %s — 기준가 없음, 시장가로: %s", code, exc)
+        sell_px = None
+    res = client.place_order(code, "SELL", qty, price=sell_px)
+    _persist_order(db, trade_date, code, "SELL", qty, sell_px, res,
+                   strategy=strategy, reasons=reasons)
+    if not res.ok:
+        log.warning("cafereal SELL REJECTED code=%s qty=%d error=%s",
+                    code, qty, res.error)
+    time.sleep(KIS_THROTTLE_SECONDS)
+
+
 def evaluate_bracket_exits(trade_date: date | None = None,
                            strategy: str = STRATEGY_CLOSE) -> dict:
     """Sim exits driven by the per-strategy EXIT_RULES table:
@@ -1221,7 +1281,20 @@ def evaluate_bracket_exits(trade_date: date | None = None,
     exits: list[dict] = []
     ambiguous = 0
     with SessionLocal() as db:
-        snapshot = _simulated_balance(db, strategy=strategy)
+        # cafereal 은 실계좌다 — 장부가 아니라 KIS 잔고가 진실이다.
+        # 시뮬 전략은 종전대로 장부에서 재구성한다.
+        real_client = None
+        if strategy in REAL_BRACKET_STRATEGIES:
+            from .kis_client import ACCOUNT_CAFE, AccountNotConfigured, get_kis_client
+            try:
+                real_client = get_kis_client(ACCOUNT_CAFE)
+            except (AccountNotConfigured, ValueError) as exc:
+                log.info("bracket_exits: %s 건너뜀 — %s", strategy, exc)
+                return {"status": "no_account", "strategy": strategy,
+                        "trade_date": day.isoformat(), "exits": []}
+            snapshot = real_client.get_balance()
+        else:
+            snapshot = _simulated_balance(db, strategy=strategy)
         for h in snapshot.holdings:
             if h.qty <= 0 or h.avg_price <= 0:
                 continue
@@ -1308,7 +1381,7 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                         reasons_s["metrics"] = m_s
                     except Exception as exc:  # noqa: BLE001
                         log.warning("ladder exit reasons failed for %s: %s", h.code, exc)
-                    _persist_simulated_fill(db, day, h.code, "SELL", qty_s, px_s,
+                    _sell_bracket(db, day, h.code, qty_s, px_s, real_client,
                                             strategy=strategy, pnl=realised_s,
                                             reasons=reasons_s)
                     exits.append({"code": h.code, "name": _stock_name(h.code),
@@ -1428,7 +1501,7 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 reasons["metrics"] = m
             except Exception as exc:  # noqa: BLE001
                 log.warning("bracket exit reasons failed for %s: %s", h.code, exc)
-            _persist_simulated_fill(db, day, h.code, "SELL", sell_qty, px,
+            _sell_bracket(db, day, h.code, sell_qty, px, real_client,
                                     strategy=strategy, pnl=realised,
                                     reasons=reasons)
             exits.append({"code": h.code, "name": _stock_name(h.code),

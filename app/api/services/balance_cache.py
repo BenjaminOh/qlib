@@ -25,7 +25,8 @@ from datetime import datetime
 
 from ..config import settings
 from .kis_client import (
-    AccountSnapshot, Holding, fail_fast_tokens, get_kis_client,
+    ACCOUNT_CAFE, ACCOUNT_MAIN, AccountNotConfigured, AccountSnapshot, Holding,
+    fail_fast_tokens, get_kis_client,
 )
 
 log = logging.getLogger(__name__)
@@ -80,10 +81,16 @@ def _account_scope(client) -> str:
     return hashlib.sha256((client.cano or "").encode()).hexdigest()[:12]
 
 
-def _keys() -> tuple[str, str, str]:
-    client = get_kis_client()
+def _keys(account: str = ACCOUNT_MAIN) -> tuple[str, str, str]:
+    client = get_kis_client(account)
     base = f"kis:balance:{client.env}:{_account_scope(client)}"
     return base, f"{base}:last", f"{base}:down"
+
+
+# Which strategy's PositionSnapshot backs each account's last-resort fallback.
+# The cafe account only ever holds cafereal positions, so its DB tier must read
+# that strategy — reading `open` would show the wrong account's holdings.
+_FALLBACK_STRATEGY = {ACCOUNT_MAIN: "open", ACCOUNT_CAFE: "cafereal"}
 
 
 def _encode(snap: AccountSnapshot, as_of: datetime) -> str:
@@ -105,18 +112,19 @@ def _decode(raw: str) -> tuple[AccountSnapshot, datetime]:
     return snap, datetime.fromisoformat(d["as_of"])
 
 
-def _from_db() -> tuple[AccountSnapshot, datetime] | None:
+def _from_db(account: str = ACCOUNT_MAIN) -> tuple[AccountSnapshot, datetime] | None:
     """Last stored PositionSnapshot for the open strategy.
 
     ``live_sync`` writes one at 09:30 and 15:40, so this is the final backstop
     when both redis tiers are empty (fresh container during a KIS outage).
     """
     try:
-        from ..db import PositionSnapshot, SessionLocal, STRATEGY_OPEN
+        from ..db import PositionSnapshot, SessionLocal
 
+        strategy = _FALLBACK_STRATEGY.get(account, "open")
         with SessionLocal() as db:
             row = (db.query(PositionSnapshot)
-                     .filter(PositionSnapshot.strategy == STRATEGY_OPEN)
+                     .filter(PositionSnapshot.strategy == strategy)
                      .order_by(PositionSnapshot.snapshot_date.desc())
                      .first())
             if row is None:
@@ -144,14 +152,24 @@ def _from_db() -> tuple[AccountSnapshot, datetime] | None:
         return None
 
 
-def get_balance_for_read() -> tuple[AccountSnapshot, str, datetime]:
+def get_balance_for_read(account: str = ACCOUNT_MAIN
+                         ) -> tuple[AccountSnapshot, str, datetime]:
     """(snapshot, source, as_of) for display surfaces. Never raises.
 
     source: "cache" (fresh redis) | "live" (just fetched) | "stale"
             (last-known-good after a KIS failure) | "db" (PositionSnapshot)
-            | "empty" (nothing available at all)
+            | "empty" (nothing available at all) | "no_account" (미설정)
+
+    `account` selects which KIS account to read. Redis keys already carry an
+    account digest, so two accounts never share a cached snapshot.
     """
-    fresh_key, last_key, down_key = _keys()
+    try:
+        get_kis_client(account)
+    except (AccountNotConfigured, ValueError) as exc:
+        log.info("balance cache: %s 계좌 미설정 — %s", account, exc)
+        return (AccountSnapshot(cash=0.0, total_eval=0.0, holdings=[]),
+                "no_account", datetime.utcnow())
+    fresh_key, last_key, down_key = _keys(account)
     r = _redis()
     kis_down = False
 
@@ -170,7 +188,7 @@ def get_balance_for_read() -> tuple[AccountSnapshot, str, datetime]:
             # fail_fast: a browser is waiting, and we hold a fallback. Never sit
             # through the token path's 70s rate-limit recovery here.
             with fail_fast_tokens():
-                snap = get_kis_client().get_balance()
+                snap = get_kis_client(account).get_balance()
             as_of = datetime.utcnow()
             if r is not None:
                 try:
@@ -198,7 +216,7 @@ def get_balance_for_read() -> tuple[AccountSnapshot, str, datetime]:
         except Exception as exc:  # noqa: BLE001
             log.warning("balance cache: stale read failed: %s", exc)
 
-    from_db = _from_db()
+    from_db = _from_db(account)
     if from_db is not None:
         snap, as_of = from_db
         return snap, "db", as_of
@@ -206,7 +224,7 @@ def get_balance_for_read() -> tuple[AccountSnapshot, str, datetime]:
     return AccountSnapshot(cash=0.0, total_eval=0.0, holdings=[]), "empty", datetime.utcnow()
 
 
-def invalidate() -> None:
+def invalidate(account: str = ACCOUNT_MAIN) -> None:
     """Drop the fresh window so the next read re-fetches.
 
     Called after an order round-trip, where the 5s window would otherwise show
@@ -216,6 +234,6 @@ def invalidate() -> None:
     if r is None:
         return
     try:
-        r.delete(_keys()[0])
+        r.delete(_keys(account)[0])
     except Exception:  # noqa: BLE001
         pass

@@ -98,7 +98,7 @@ def wired(monkeypatch):
     def _wire(client, redis_obj=None):
         r = FakeRedis() if redis_obj is None else redis_obj
         monkeypatch.setattr(bc, "_redis", lambda: r)
-        monkeypatch.setattr(bc, "get_kis_client", lambda: client)
+        monkeypatch.setattr(bc, "get_kis_client", lambda account="main": client)
         return r
     return _wire
 
@@ -223,7 +223,7 @@ def test_falls_back_to_position_snapshot_when_redis_empty(wired, monkeypatch):
             "pnl": 30_000.0, "pnl_pct": 0.1,
         }], ensure_ascii=False)
 
-    monkeypatch.setattr(bc, "_from_db", lambda: (
+    monkeypatch.setattr(bc, "_from_db", lambda account="main": (
         kc.AccountSnapshot(
             cash=_Row.cash, total_eval=_Row.total_eval,
             holdings=[kc.Holding(code="000660", name="SK하이닉스", qty=3,
@@ -243,7 +243,7 @@ def test_falls_back_to_position_snapshot_when_redis_empty(wired, monkeypatch):
 def test_never_raises_when_everything_is_unavailable(wired, monkeypatch):
     broken = _Client(exc=RuntimeError("KIS gateway down"))
     wired(broken)
-    monkeypatch.setattr(bc, "_from_db", lambda: None)
+    monkeypatch.setattr(bc, "_from_db", lambda account="main": None)
 
     snap, src, _ = bc.get_balance_for_read()
 
@@ -256,7 +256,7 @@ def test_redis_unavailable_still_serves_live(wired, monkeypatch):
     """Redis down must degrade to a plain live fetch, not an error."""
     client = _Client(_snapshot())
     monkeypatch.setattr(bc, "_redis", lambda: None)
-    monkeypatch.setattr(bc, "get_kis_client", lambda: client)
+    monkeypatch.setattr(bc, "get_kis_client", lambda account="main": client)
 
     snap, src, _ = bc.get_balance_for_read()
 

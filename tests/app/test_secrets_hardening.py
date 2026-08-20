@@ -104,7 +104,7 @@ def test_balance_keys_do_not_contain_the_account_number(monkeypatch):
         env = "paper"
 
     _Client.cano = cano
-    monkeypatch.setattr(bc, "get_kis_client", lambda: _Client())
+    monkeypatch.setattr(bc, "get_kis_client", lambda account="main": _Client())
 
     for key in bc._keys():
         assert cano not in key, f"계좌번호가 redis 키에 노출됨: {key}"
@@ -118,7 +118,7 @@ def test_different_accounts_get_different_balance_keys(monkeypatch):
         class _C:
             env = "paper"
         _C.cano = cano
-        monkeypatch.setattr(bc, "get_kis_client", lambda: _C())
+        monkeypatch.setattr(bc, "get_kis_client", lambda account="main": _C())
         return bc._keys()
 
     assert _keys_for("11111111")[0] != _keys_for("22222222")[0]

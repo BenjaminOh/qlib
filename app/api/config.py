@@ -25,6 +25,20 @@ class Settings(BaseSettings):
     kis_app_key: str = ""
     kis_app_secret: str = ""
     kis_account_no: str = ""  # "12345678-01" 형태
+
+    # ─── 2번째 실계좌 (cafereal) ────────────────────────────────
+    # 카페 스크리너 픽을 실제로 사는 별도 계좌. 비워두면 cafereal 전략이
+    # 통째로 비활성이다(스케줄은 돌지만 즉시 no_account 로 반환).
+    #
+    # ⚠ appkey 를 기존 계좌와 **다른 것**으로 발급받아야 한다. KIS 의 토큰
+    # 발급 한도와 초당 호출 한도는 계좌가 아니라 **appkey 단위**라, 같은 키를
+    # 공유하면 09:00 실계좌 주문과 15:28 카페 주문이 서로의 한도를 깎는다.
+    # (토큰·쿨다운·API 슬롯 redis 키는 이미 appkey 해시로 분리돼 있다.)
+    kis_cafe_env: str = ""          # 비우면 kis_env 를 따름
+    kis_cafe_app_key: str = ""
+    kis_cafe_app_secret: str = ""
+    kis_cafe_account_no: str = ""   # "12345678-01" 형태
+    kis_cafe_account_product: str = ""
     kis_account_product: str = "01"  # 종합매매 default
 
     # ─── Real-trading safety rails ──────────────────────────────────
@@ -95,6 +109,9 @@ class Settings(BaseSettings):
     # ret20 상한(%). cafe 는 하한 +30%만 있고 상한이 없어 +368%까지 통과했다.
     # 20건 실측에서 50%를 경계로 D+5 중앙값이 +3.19% / −9.50% 로 갈렸다.
     live_cafecool_ret20_max: float = 50.0
+    # cafereal — 실계좌라 시드가 아니라 예수금이 출발점이다. 이 값은
+    # 곡선 기준선(수익률 0% 지점) 표기에만 쓴다.
+    live_seed_cash_cafereal: float = 10_000_000.0
     live_cafeopen_discount: float = 0.03
     # The resting window: order placed at 09:00, judged against the session
     # range at this hour. 10:00 = the first hour only.

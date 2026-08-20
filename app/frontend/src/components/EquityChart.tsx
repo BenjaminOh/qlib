@@ -24,6 +24,7 @@ export const STRATEGY_COLORS: Record<string, string> = {
   surge: "#db2777",  // pink — surge-eve profile picks
   cafeopen: "#0d9488", // teal — cafe's picks, next-morning limit entry
   cafecool: "#84cc16", // lime — cafe's picks minus the overheated ones
+  cafereal: "#c026d3", // fuchsia — cafe's picks on a REAL second account
 };
 
 export const STRATEGY_LABELS: Record<string, string> = {
@@ -37,6 +38,7 @@ export const STRATEGY_LABELS: Record<string, string> = {
   surge: "급등 전야 프로파일 (시뮬)",
   cafeopen: "카페 모사 · 익일 시가 −3% 지정가 (시뮬)",
   cafecool: "카페 모사 · ret20 상한 50% (시뮬)",
+  cafereal: "카페 모사 · 실계좌 (2번 계좌)",
 };
 
 type WideRow = { date: string } & Record<string, number | string | undefined>;

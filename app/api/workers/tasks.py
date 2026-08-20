@@ -334,6 +334,27 @@ def live_orders_cafe_task(self) -> dict:
     return submit_cafe_orders()
 
 
+@celery_app.task(bind=True, name="live_orders_cafereal")
+@market_day_only
+def live_orders_cafereal_task(self) -> dict:
+    """15:28 KST — cafereal: cafe 와 같은 픽을 **실계좌**로 매수.
+
+    카페 계좌(KIS_CAFE_*)가 설정돼 있지 않으면 no_account 로 조용히 끝난다 —
+    선택 전략이므로 미설정이 실패는 아니다.
+    """
+    from ..services.market_screener import submit_cafereal_orders
+    self.update_state(state="RUNNING")
+    return submit_cafereal_orders()
+
+
+@celery_app.task(bind=True, name="live_sync_cafereal")
+@market_day_only
+def live_sync_cafereal_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="cafereal")
+
+
 @celery_app.task(bind=True, name="live_orders_cafecool")
 @market_day_only
 def live_orders_cafecool_task(self) -> dict:

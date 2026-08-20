@@ -48,6 +48,12 @@ STRATEGY_CAFEOPEN = "cafeopen"  # exactly 8 chars — the Order.strategy limit
 # vs −9.50% (50%+). The gap between the two curves IS the ceiling's contribution.
 # ⚠ 표본 4건 대 10건이고 평균 우위는 혜인(+64%) 한 건에 의존한다 — 전향적으로 잰다.
 STRATEGY_CAFECOOL = "cafecool"  # exactly 8 chars — the Order.strategy limit
+# cafereal — cafe 를 **실계좌**로 돌리는 전략 (2026-08-20). 픽·사이징·청산 규칙이
+# cafe 와 완전히 같고 다른 것은 단 하나, 주문이 시뮬이 아니라 KIS 실주문이라는 것.
+# 그래서 cafe(시뮬) 곡선과의 차이가 곧 **체결 가정이 부풀린 정확한 크기**다 —
+# 호가 스냅샷 8건이 전부 상한가·매도잔량 0이었던 그 질문의 직접적인 답이 된다.
+# 별도 계좌·별도 appkey 를 쓴다(KIS 한도는 appkey 단위).
+STRATEGY_CAFEREAL = "cafereal"  # exactly 8 chars — the Order.strategy limit
 
 
 # ─── Account axis ───────────────────────────────────────────────────

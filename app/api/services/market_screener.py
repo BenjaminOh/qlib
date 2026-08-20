@@ -23,7 +23,7 @@ from datetime import date
 
 from ..config import settings
 from ..db import (CafeCandidate, CafeScout, MarketPoolSnapshot, Order,
-                  OrderbookSnapshot, SessionLocal, STRATEGY_CAFE, STRATEGY_CAFECOOL,
+                  OrderbookSnapshot, SessionLocal, STRATEGY_CAFE, STRATEGY_CAFECOOL, STRATEGY_CAFEREAL,
                   STRATEGY_SURGE, SurgePick, init_db)
 
 log = logging.getLogger(__name__)
@@ -456,6 +456,20 @@ def submit_cafe_orders(trade_date: date | None = None) -> dict:
     return _submit_cafe_like(trade_date, strategy=STRATEGY_CAFE, ret20_max=None)
 
 
+def submit_cafereal_orders(trade_date: date | None = None) -> dict:
+    """15:28 — cafe 와 같은 픽을 **실계좌**로 산다.
+
+    규칙(픽·슬롯·손절·익절)이 cafe 와 완전히 같고 다른 것은 주문이 실제라는 것뿐이다.
+    그래서 cafe(시뮬) 곡선과의 격차가 곧 **체결 가정이 부풀린 크기**다 — 호가 8건이
+    전부 상한가·매도잔량 0이었던 그 질문에 유일하게 답할 수 있는 방법이다.
+
+    계좌 미설정이면 조용히 건너뛴다. 카페 계좌는 선택 사항이고, 없다고 해서
+    나머지 전략이 멈춰서는 안 된다.
+    """
+    return _submit_cafe_like(trade_date, strategy=STRATEGY_CAFEREAL,
+                             ret20_max=None, real=True)
+
+
 def submit_cafecool_orders(trade_date: date | None = None) -> dict:
     """15:28 — cafe 와 같은 후보에서 ret20 상한을 넘는 종목만 뺀 쌍둥이.
 
@@ -468,17 +482,32 @@ def submit_cafecool_orders(trade_date: date | None = None) -> dict:
 
 
 def _submit_cafe_like(trade_date: date | None, *, strategy: str,
-                      ret20_max: float | None) -> dict:
-    """cafe 계열 15:28 시뮬 매수 공통부.
+                      ret20_max: float | None, real: bool = False) -> dict:
+    """cafe 계열 15:28 매수 공통부.
 
     `ret20_max` 가 주어지면 진입 시점 ret20(%)이 그 값 이상인 후보를 건너뛴다.
     cafe 는 None 이라 종전과 완전히 동일하게 동작한다.
+
+    `real=True` 면 별도 계좌로 **실주문**을 낸다 — 잔고도 장부가 아니라 KIS 가
+    진실이고, 주문 방식은 `trading_accounts` 의 cafe 행을 따른다.
     """
-    from .kis_client import get_kis_client
-    from .live_trader import _persist_simulated_fill, _simulated_balance
+    from .account_policy import BasePriceUnavailable, get_policies, order_price
+    from .kis_client import (ACCOUNT_CAFE, AccountNotConfigured, get_kis_client)
+    from .live_trader import (CAFE_ACCOUNT_ID, KIS_THROTTLE_SECONDS,
+                              _persist_order, _persist_simulated_fill,
+                              _simulated_balance)
+    import time as _time
     init_db()
     day = trade_date or date.today()
-    client = get_kis_client()
+    if real:
+        try:
+            client = get_kis_client(ACCOUNT_CAFE)
+        except (AccountNotConfigured, ValueError) as exc:
+            log.info("cafereal 건너뜀 — %s", exc)
+            return {"status": "no_account", "strategy": strategy,
+                    "trade_date": day.isoformat(), "reason": str(exc)}
+    else:
+        client = get_kis_client()
     seed_slots = max(settings.live_cafe_slots, 1)
     bought: list[dict] = []
     skipped_hot: list[dict] = []
@@ -490,10 +519,13 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
         if not cands:
             return {"status": "no_candidates", "trade_date": day.isoformat(),
                     "strategy": strategy}
-        snapshot = _simulated_balance(db, strategy=strategy)
+        # 실계좌는 KIS 잔고가 진실이다. 장부로 재구성하면 수동 매매나 미체결이
+        # 반영되지 않아 실제보다 많이 사려 든다.
+        snapshot = client.get_balance() if real else _simulated_balance(db, strategy=strategy)
         held = {h.code for h in snapshot.holdings}
         slot_budget = max(snapshot.total_eval, snapshot.cash) / seed_slots
         cash = snapshot.cash
+        buy_pol = get_policies(db, CAFE_ACCOUNT_ID)[0] if real else None
         for c in cands:
             if c.code in held or len(bought) >= settings.live_cafe_max_buys:
                 continue
@@ -523,8 +555,28 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
                        "summary": "", "metrics": json.loads(c.metrics_json or "{}"),
                        "top_features": [], "stop_px": c.stop_px,
                        "fill_source": "quote" if q.get("price") else "fallback_scan_price"}
-            _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
-                                    strategy=strategy, reasons=reasons)
+            if real:
+                try:
+                    entry_px = (order_price(client, c.code, buy_pol, day, quote=q)
+                                if buy_pol.is_limit else None)
+                except BasePriceUnavailable as exc:
+                    log.warning("cafereal BUY %s 건너뜀 — 기준가 없음: %s", c.code, exc)
+                    continue
+                if entry_px:
+                    qty = int(min(cash, slot_budget) // entry_px)
+                    if qty <= 0:
+                        continue
+                res = client.place_order(c.code, "BUY", qty, price=entry_px)
+                _persist_order(db, day, c.code, "BUY", qty, entry_px, res,
+                               strategy=strategy, reasons=reasons)
+                if not res.ok:
+                    log.warning("cafereal BUY REJECTED code=%s qty=%d error=%s",
+                                c.code, qty, res.error)
+                _time.sleep(KIS_THROTTLE_SECONDS)
+                px = entry_px or px
+            else:
+                _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
+                                        strategy=strategy, reasons=reasons)
             # Out-of-universe KOSDAQ codes miss the kr_data name lookup —
             # the ranking TR already gave us the real name, so pin it.
             db.query(Order).filter(Order.trade_date == day,

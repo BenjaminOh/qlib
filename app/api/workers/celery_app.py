@@ -147,6 +147,11 @@ celery_app.conf.beat_schedule = {
     },
     # cafecool — cafe 와 같은 15:28 슬롯. 같은 후보 행을 읽고 ret20 상한만
     # 다르게 적용하므로 스캔·순위는 공유되고 진입 조건 하나만 갈린다.
+    # cafereal — 같은 15:28 슬롯, 실계좌 주문. 계좌 미설정이면 즉시 반환한다.
+    "live-orders-at-close-cafereal": {
+        "task": "live_orders_cafereal",
+        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
+    },
     "live-orders-at-close-cafecool": {
         "task": "live_orders_cafecool",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
@@ -197,6 +202,10 @@ celery_app.conf.beat_schedule = {
     },
     "live-sync-cafe-after-close": {
         "task": "live_sync_cafe",
+        "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),
+    },
+    "live-sync-cafereal-after-close": {
+        "task": "live_sync_cafereal",
         "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),
     },
     "live-sync-cafecool-after-close": {

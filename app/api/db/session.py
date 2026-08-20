@@ -95,19 +95,39 @@ def _seed_default_account() -> None:
     therefore reproduces exactly the pre-existing behaviour (market buy, market
     sell) rather than switching the live account to limit orders on deploy.
     """
-    from .models import DEFAULT_ACCOUNT_ID, ORD_TYPE_MARKET, TradingAccount
+    from .models import (BASE_QUOTE, DEFAULT_ACCOUNT_ID, ORD_TYPE_LIMIT,
+                         ORD_TYPE_MARKET, TradingAccount)
 
     with SessionLocal() as db:
-        if db.get(TradingAccount, DEFAULT_ACCOUNT_ID) is not None:
+        added = False
+        if db.get(TradingAccount, DEFAULT_ACCOUNT_ID) is None:
+            db.add(TradingAccount(
+                account_id=DEFAULT_ACCOUNT_ID,
+                label="기본 계좌",
+                buy_ord_type=ORD_TYPE_MARKET,
+                sell_ord_type=ORD_TYPE_MARKET,
+            ))
+            added = True
+        # cafe 계좌 — cafereal 전략이 쓰는 두 번째 실계좌의 주문 방식.
+        # 기본값을 확정 정책(매수 시장가 금지 · 현재가 −3% 지정가)으로 둔다.
+        # ⚠ 카페 픽은 대개 상한가라 −3% 지정가로는 거의 체결되지 않는다. 그것
+        # 자체가 측정값이지만(체결률), 체결을 보고 싶으면 화면에서 시장가로 바꿀 것.
+        # 안전한 쪽을 기본으로 두는 이유: 잘못 켜져도 돈이 나가지 않는다.
+        if db.get(TradingAccount, "cafe") is None:
+            db.add(TradingAccount(
+                account_id="cafe",
+                label="카페 실매매 계좌",
+                buy_ord_type=ORD_TYPE_LIMIT,
+                buy_base=BASE_QUOTE,
+                buy_offset_pct=0.03,   # 분수. 매수는 base×(1−offset) = −3%
+                buy_cancel_hhmm="15:30",
+                sell_ord_type=ORD_TYPE_MARKET,
+            ))
+            added = True
+        if not added:
             return
-        db.add(TradingAccount(
-            account_id=DEFAULT_ACCOUNT_ID,
-            label="기본 계좌",
-            buy_ord_type=ORD_TYPE_MARKET,
-            sell_ord_type=ORD_TYPE_MARKET,
-        ))
         try:
             db.commit()
         except Exception:  # noqa: BLE001 — another worker seeded it first
             db.rollback()
-            log.info("init_db: default account row already present")
+            log.info("init_db: account rows already present")

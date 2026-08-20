@@ -228,7 +228,9 @@ export const api = {
     fetchApi<GridResultResponse>(`/api/v1/backtests/grid/${groupId}`),
 
   // ── Live trading ───────────────────────────────────────────
-  getLiveBalance: () => fetchApi<LiveBalanceResponse>("/api/v1/live/balance"),
+  /** account="main" 기본 계좌, "cafe" 카페 실매매 계좌. 합산하지 않는다. */
+  getLiveBalance: (account: "main" | "cafe" = "main") =>
+    fetchApi<LiveBalanceResponse>(`/api/v1/live/balance?account=${account}`),
   getHalt: () => fetchApi<HaltStatus>("/api/v1/live/halt"),
   /** reason=null releases the halt; any string engages it. */
   setHalt: (reason: string | null) =>
@@ -349,7 +351,8 @@ export interface LiveBalanceResponse {
   fetched_at: string;
   mode: "real" | "paper" | "mock";
   /** Freshness of this payload. */
-  source?: "live" | "cache" | "stale" | "db" | "empty";
+  /** no_account = 해당 계좌 자격증명 미설정 (에러가 아님) */
+  source?: "live" | "cache" | "stale" | "db" | "empty" | "no_account";
   /** True when KIS was unreachable and these are last-known-good numbers. */
   stale?: boolean;
 }

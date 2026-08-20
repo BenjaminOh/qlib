@@ -1241,16 +1241,78 @@ class KISClient:
         return last  # pragma: no cover — loop always returns
 
 
-# ─── Module-level singleton (lazy) ───────────────────────────────
+# ─── Per-account clients (lazy singletons) ───────────────────────
+#
+# One client per account, not per call: each holds its own access token and
+# KIS kills the previous token the instant a new one is issued for the same
+# appkey. Rebuilding clients would thrash the 1/min issuance limit.
+#
+# Accounts are keyed by name. "main" is the original account backed by the
+# KIS_* settings; "cafe" is the second real account (KIS_CAFE_*) that trades
+# the cafe screener picks. Redis keys for tokens, cooldowns and the request
+# gate are already scoped by appkey hash (`_appkey_scope`), so two accounts
+# with different appkeys never contend — which is exactly why the second
+# account MUST use its own appkey.
 
-_default_client: KISClient | None = None
-_default_lock = threading.Lock()
+ACCOUNT_MAIN = "main"
+ACCOUNT_CAFE = "cafe"
+
+_clients: dict[str, KISClient] = {}
+_clients_lock = threading.Lock()
 
 
-def get_kis_client() -> KISClient:
-    global _default_client
-    if _default_client is None:
-        with _default_lock:
-            if _default_client is None:
-                _default_client = KISClient()
-    return _default_client
+class AccountNotConfigured(RuntimeError):
+    """Raised when an account's credentials are absent.
+
+    Callers treat this as "skip this strategy today", not as a failure: the
+    cafe account is optional and the system must run normally without it.
+    """
+
+
+def _build_client(account: str) -> KISClient:
+    if account == ACCOUNT_MAIN:
+        return KISClient()
+    if account == ACCOUNT_CAFE:
+        if not (settings.kis_cafe_app_key and settings.kis_cafe_app_secret
+                and settings.kis_cafe_account_no):
+            missing = [n for n, v in (
+                ("KIS_CAFE_APP_KEY", settings.kis_cafe_app_key),
+                ("KIS_CAFE_APP_SECRET", settings.kis_cafe_app_secret),
+                ("KIS_CAFE_ACCOUNT_NO", settings.kis_cafe_account_no)) if not v]
+            raise AccountNotConfigured(
+                "cafe 계좌 미설정 — " + ", ".join(missing) + " 없음")
+        if settings.kis_cafe_app_key == settings.kis_app_key:
+            # Same appkey means shared token and shared rate limit: the 09:00
+            # real-account run and the 15:28 cafe run would evict each other's
+            # token. Refuse rather than debug that at 15:28.
+            raise AccountNotConfigured(
+                "cafe 계좌의 appkey 가 기본 계좌와 같다 — KIS 한도는 appkey 단위라 "
+                "토큰과 호출 한도를 서로 깎는다. 별도 appkey 를 발급할 것.")
+        return KISClient(
+            env=settings.kis_cafe_env or settings.kis_env,
+            app_key=settings.kis_cafe_app_key,
+            app_secret=settings.kis_cafe_app_secret,
+            account_no=settings.kis_cafe_account_no,
+            account_product=settings.kis_cafe_account_product or None)
+    raise ValueError(f"unknown account: {account!r}")
+
+
+def get_kis_client(account: str = ACCOUNT_MAIN) -> KISClient:
+    """Client for `account`. Default keeps every existing call site unchanged."""
+    c = _clients.get(account)
+    if c is None:
+        with _clients_lock:
+            c = _clients.get(account)
+            if c is None:
+                c = _build_client(account)
+                _clients[account] = c
+    return c
+
+
+def cafe_account_configured() -> bool:
+    """True if the cafe account can be built — cheap check for schedulers."""
+    try:
+        get_kis_client(ACCOUNT_CAFE)
+        return True
+    except (AccountNotConfigured, ValueError):
+        return False

@@ -378,9 +378,9 @@ def test_balance_cache_stays_per_account(monkeypatch):
     """Balance is account data — it must NOT collapse onto the appkey."""
     bc = pytest.importorskip("app.api.services.balance_cache")
 
-    monkeypatch.setattr(bc, "get_kis_client", lambda: _c("SAME_KEY", "11111111-01"))
+    monkeypatch.setattr(bc, "get_kis_client", lambda account="main": _c("SAME_KEY", "11111111-01"))
     keys_a = bc._keys()
-    monkeypatch.setattr(bc, "get_kis_client", lambda: _c("SAME_KEY", "22222222-01"))
+    monkeypatch.setattr(bc, "get_kis_client", lambda account="main": _c("SAME_KEY", "22222222-01"))
     keys_b = bc._keys()
 
     assert keys_a[0] != keys_b[0], "계좌가 다르면 잔고 캐시는 분리돼야 한다"

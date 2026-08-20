@@ -26,9 +26,11 @@ const fmtKRW = (v: number) => {
 
 export default function LiveDashboardPage() {
   const [chartView, setChartView] = useState<"strategy" | "stocks">("strategy");
+  // 계좌는 합산하지 않는다 — 별개의 장부라 더하면 어느 쪽이 벌고 잃는지 가려진다.
+  const [account, setAccount] = useState<"main" | "cafe">("main");
   const balance = useQuery({
-    queryKey: ["live-balance"],
-    queryFn: api.getLiveBalance,
+    queryKey: ["live-balance", account],
+    queryFn: () => api.getLiveBalance(account),
     refetchInterval: 30_000,
     // Matches the server-side snapshot window, so a remount inside it reuses
     // the cached payload instead of re-hitting KIS.
@@ -208,12 +210,36 @@ export default function LiveDashboardPage() {
         )}
       </section>
 
-      {/* Holdings */}
+      {/* Holdings — 계좌별. 합산하지 않는다. */}
       <section className="bg-white rounded-lg border border-gray-200 p-3 sm:p-5">
-        <h2 className="text-lg font-semibold mb-1">📦 현재 보유 종목</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+          <h2 className="text-lg font-semibold">📦 현재 보유 종목</h2>
+          <div className="flex gap-1" role="tablist" aria-label="계좌 선택">
+            {([["main", "기본 계좌"], ["cafe", "카페 계좌"]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                role="tab"
+                aria-selected={account === v}
+                onClick={() => setAccount(v)}
+                className={`px-3 py-1 rounded text-xs font-medium border transition-colors ${
+                  account === v
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <p className="text-xs text-gray-500 mb-3">
-          {b ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}` : "…"}
-          {" · 평균단가/현재가는 KIS 모의투자 API 기준이라 실제 KRX 시세와 다를 수 있습니다."}
+          {b?.source === "no_account"
+            ? "카페 계좌가 아직 설정되지 않았습니다 (KIS_CAFE_* 환경변수)."
+            : b
+              ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}`
+              : "…"}
+          {b?.source !== "no_account" &&
+            " · 평균단가/현재가는 KIS API 기준이라 실제 KRX 시세와 다를 수 있습니다."}
         </p>
         {balance.isLoading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-gray-400">
