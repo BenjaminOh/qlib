@@ -61,14 +61,14 @@ export default function GuidePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10). 시장가/지정가는 <a href="/live/accounts" className="text-blue-600 underline">계좌 주문 설정</a>을 따름</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10, <strong>빈 슬롯을 채움 · 하루 최대 4</strong>). 같은 시각 cafeopen 쌍둥이가 어제 cafe 픽에 −3% 지정가 예약. 시장가/지정가는 <a href="/live/accounts" className="text-blue-600 underline">계좌 주문 설정</a>을 따름</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:20</td><td className="px-3 py-1.5">체결가 대사 — 실체결가·실현손익 확정 저장</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:30</td><td className="px-3 py-1.5">실계좌 잔고 동기화</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">14:30 / 15:00</td><td className="px-3 py-1.5">🔭 <strong>정찰 스캔</strong> — 카페 규칙 후보 미리보기 (매매 없음, 조기 진입 연구)</td><td className="px-3 py-1.5">🔭 후보 5</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:05</td><td className="px-3 py-1.5">☕ <strong>카페 정규 스크린</strong> — 패턴 후보 확정 + 풀 전체 전야 피처 저장</td><td className="px-3 py-1.5">☕ 후보·손절</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:12</td><td className="px-3 py-1.5">⚡ <strong>급등 전야 TOP10</strong> 선정 (풀 스냅샷 채점 — KIS 추가 호출 0)</td><td className="px-3 py-1.5">⚡ TOP10</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:20~26</td><td className="px-3 py-1.5">close·flow·trail·scale 시뮬 매수 (신호 픽, 실시간가)</td><td className="px-3 py-1.5">—</td></tr>
-              <tr><td className="px-3 py-1.5 font-mono">15:28 / 15:29</td><td className="px-3 py-1.5">cafe / surge 시뮬 매수 (각자 후보 상위 2, 실시간가)</td><td className="px-3 py-1.5">—</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:28 / 15:29</td><td className="px-3 py-1.5">cafe · <strong>cafecool</strong> / surge 시뮬 매수 (각자 후보 상위 2, 실시간가). cafecool 은 같은 후보에서 20일 상승률 50% 이상만 제외</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:40~47</td><td className="px-3 py-1.5">전략별 계좌 동기화 · 일일 손익 확정</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:45</td><td className="px-3 py-1.5">주가 데이터 갱신 → <strong>모델 재학습·다음 거래일 신호 생성</strong></td><td className="px-3 py-1.5">📌 추천 TOP10</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:48</td><td className="px-3 py-1.5"><strong>브래킷 청산 판정</strong>(전 시뮬, 당일 봉 기준) + limit 예약 체결 판정</td><td className="px-3 py-1.5">📤 청산 (발생 시)</td></tr>
@@ -81,7 +81,7 @@ export default function GuidePage() {
 
       {/* 2. 전략 매트릭스 */}
       <section id="strategies" className="not-prose">
-        <h2 className="text-2xl font-bold text-gray-900 mb-1">🎯 9전략 매트릭스 — 무엇을 검증하는가</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">🎯 10전략 매트릭스 — 무엇을 검증하는가</h2>
         <p className="text-sm text-gray-600 mb-3">
           모든 전략의 시드는 1,000만 원. 곡선 간 격차가 곧 실험의 답입니다.
           <strong className="text-amber-700"> 공정 비교 구간은 2026-08-06 이후</strong>
@@ -102,7 +102,7 @@ export default function GuidePage() {
               <tr>
                 <td className="px-3 py-2 whitespace-nowrap">{CURVE("#10b981")}<strong>open</strong> (실계좌)</td>
                 <td className="px-3 py-2">qlib 신호 top-10</td>
-                <td className="px-3 py-2">09:00, 계좌 설정 방식 (하루 최대 2) — 기본 시장가</td>
+                <td className="px-3 py-2">09:00, 계좌 설정 방식 — 기본 시장가. <strong className="text-amber-700">빈 슬롯을 채웁니다(하루 최대 4)</strong></td>
                 <td className="px-3 py-2">top-30 이탈 시 매도 (n_drop=2)</td>
                 <td className="px-3 py-2">기준선 — 모델 그대로의 성적</td>
               </tr>
@@ -146,7 +146,7 @@ export default function GuidePage() {
                 <td className="px-3 py-2">카페 추천자 역설계 스크리너 (전 시장)</td>
                 <td className="px-3 py-2">15:28 실시간가 (상위 2)</td>
                 <td className="px-3 py-2">익절 +10% / <strong>구조적 손절</strong>(패턴 앵커, 캡 −15%)</td>
-                <td className="px-3 py-2">추천자의 문법이 규칙으로도 통하는가</td>
+                <td className="px-3 py-2">추천자의 문법이 규칙으로도 통하는가 <strong className="text-red-700">(진입 체결 가정 미검증 — 아래 감사 참조)</strong></td>
               </tr>
               <tr>
                 <td className="px-3 py-2 whitespace-nowrap">{CURVE("#db2777")}<strong>surge</strong></td>
@@ -154,6 +154,20 @@ export default function GuidePage() {
                 <td className="px-3 py-2">15:29 실시간가 (상위 2)</td>
                 <td className="px-3 py-2">close와 동일 (진입 아이디어만 분리 검증)</td>
                 <td className="px-3 py-2">통계 프로파일이 &ldquo;내일의 급등&rdquo;을 맞추는가</td>
+              </tr>
+              <tr>
+                <td className="px-3 py-2 whitespace-nowrap">{CURVE("#0d9488")}<strong>cafeopen</strong></td>
+                <td className="px-3 py-2">cafe가 <em>어제</em> 산 종목 그대로</td>
+                <td className="px-3 py-2"><strong>익일 시가 −3% 지정가</strong> (10:00 미체결 취소)</td>
+                <td className="px-3 py-2">cafe와 동일</td>
+                <td className="px-3 py-2">★ cafe의 15:28 체결 가정이 곡선을 얼마나 부풀렸나 — <strong>진입 시점만</strong> 다른 쌍둥이</td>
+              </tr>
+              <tr>
+                <td className="px-3 py-2 whitespace-nowrap">{CURVE("#84cc16")}<strong>cafecool</strong></td>
+                <td className="px-3 py-2">cafe와 <strong>같은 후보</strong>에서 과열분만 제외</td>
+                <td className="px-3 py-2">cafe와 동일 (15:28)</td>
+                <td className="px-3 py-2">cafe와 동일</td>
+                <td className="px-3 py-2">★ <strong>20일 상승률 상한 50%</strong>가 성과를 개선하나 — <strong>진입 조건만</strong> 다른 쌍둥이</td>
               </tr>
             </tbody>
           </table>
@@ -198,6 +212,33 @@ export default function GuidePage() {
               <tr><td className="px-3 py-1.5"><strong>D</strong> 낙폭과대 반등</td><td className="px-3 py-1.5">고점 −40% + 당일 +5% + 20일선 회복</td><td className="px-3 py-1.5">당일 저가 ×0.97</td></tr>
             </tbody>
           </table>
+        </div>
+        <div className="mb-3 bg-red-50 border border-red-200 rounded p-4">
+          <h3 className="font-bold text-red-900 mb-2">⚠️ A패턴 진입 감사 (2026-08-20) — 곡선을 그대로 믿으면 안 되는 이유</h3>
+          <p className="text-sm text-gray-700 mb-2">
+            후보 20건 전수를 일봉으로 되짚었습니다. 두 가지가 나왔습니다.
+          </p>
+          <ul className="list-disc pl-6 text-sm text-gray-700 space-y-1.5">
+            <li><strong>진입 자체가 재현 불가능했습니다.</strong> 호가 스냅샷 8건이 <strong>전부 상한가이고
+              매도 잔량 0주</strong>였습니다. 파는 사람이 없으면 주문을 넣어도 체결되지 않는데,
+              시뮬은 그 호가에 샀다고 기록했습니다. 20건 중 <strong>17건이 상한가 진입</strong>입니다.</li>
+            <li><strong>사도 성적이 나빴습니다.</strong> 진입 후 D+1 −2.4% · D+3 −4.0% · D+5 −3.6%,
+              상승 비율 35~43%. <strong>5일 내 −10% 이상 낙폭이 13/20건</strong>, 최악 −42.8%(본느).</li>
+            <li><strong>원인은 조건에 상한이 없다는 것.</strong> A패턴은 20일 상승률 <em>하한</em> +30%만
+              두고 상한이 없어 <strong>+368%까지 통과</strong>했습니다(후보 평균 +68%, 100%가 +30% 이상).
+              구간을 갈라보면 50%가 경계였습니다 — D+5 중앙값 <strong>+3.2%</strong>(30~50%) vs
+              <strong>−9.5%</strong>(50%+).</li>
+          </ul>
+          <p className="text-sm text-gray-700 mt-2">
+            그래서 <strong>cafe는 고치지 않고</strong>(곡선 단절 방지) 상한 50%만 다른 쌍둥이
+            <strong> cafecool</strong>을 띄워 전향적으로 비교합니다. 같은 이유로 기존 cafe 데이터는
+            2026-08-20 전량 삭제하고 세 곡선을 같은 시드에서 재출발시켰습니다.
+          </p>
+          <p className="text-xs text-gray-500 mt-2">
+            단, 표본이 4건 대 10건으로 작고 30~50% 구간의 평균 우위는 혜인(+64%) 한 건에 의존합니다
+            (빼면 −2.6%). <strong>낙폭은 구간별로 갈리지 않아</strong>(중앙값 −13%대 동일) 손절 캡 −15%는
+            그대로 필요합니다. 원자료는 <code>docs/06-research/2026-08-20-cafe-entry-audit.md</code>.
+          </p>
         </div>
         <details className="mb-3 bg-white border border-stone-200 rounded" open>
           <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-stone-800 bg-stone-100">
@@ -282,6 +323,16 @@ export default function GuidePage() {
         <ul className="list-disc pl-6 text-sm text-gray-700 space-y-1.5">
           <li><strong>전략 동결</strong>: 테스트 종료까지 설계 변경 금지 — 원인 귀속 보호.
             버그 수정(설계와 다르게 동작)만 승인 후 허용, 관측·연구 기능은 자유</li>
+          <li><strong className="text-amber-700">자금 투입 (2026-08-20 수정)</strong>: 실계좌는 topk=10 설계인데
+            매수가 n_drop(2)에 묶여 <strong>매도 2 / 매수 2가 매일 반복</strong>됐습니다. 순증이 0이라 보유가
+            4종목에 고착되고 <strong>투입률이 20~41%</strong>로 50%를 넘은 적이 없었습니다. 이제 빈 슬롯을
+            채우되 하루 4건으로 제한합니다(한 번에 6종목을 사면 전부 같은 날 진입가를 공유하므로).
+            <strong className="text-red-700"> 노출이 최대 2.5배로 커지는데 실계좌에는 손절·익절·트레일링이
+            하나도 없습니다</strong> — 유일한 출구가 순위 이탈 매도입니다. 손절 도입이 다음 과제입니다</li>
+          <li><strong>카페 데이터 리셋 (2026-08-20)</strong>: cafe 계열 주문·체결·스냅샷·후보 104행을
+            전량 삭제했습니다. 기존 곡선이 <strong>체결 불가능한 진입</strong> 위에 서 있어(위 감사 참조)
+            그대로 두면 cafecool 비교의 대조군이 오염됩니다. cafe·cafeopen·cafecool 세 곡선이
+            같은 날 같은 시드에서 다시 출발합니다. 삭제 전 원자료는 연구 문서로 박제했습니다</li>
           <li><strong>데이터 이력</strong>: 2026-08-05 이전 시뮬 성적은 전일 종가 체결 편향으로 무효 →
             8/6 클린 리셋 후 실시간가 공정 체결. 시뮬 체결가에는 quote/폴백 출처 기록</li>
           <li><strong>주문 정책은 계좌 설정</strong>: 매수/매도의 시장가·지정가, 기준가(전일 종가·당일
