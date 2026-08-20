@@ -23,7 +23,7 @@ from datetime import date
 
 from ..config import settings
 from ..db import (CafeCandidate, CafeScout, MarketPoolSnapshot, Order,
-                  OrderbookSnapshot, SessionLocal, STRATEGY_CAFE,
+                  OrderbookSnapshot, SessionLocal, STRATEGY_CAFE, STRATEGY_CAFECOOL,
                   STRATEGY_SURGE, SurgePick, init_db)
 
 log = logging.getLogger(__name__)
@@ -378,7 +378,9 @@ def submit_surge_orders(trade_date: date | None = None) -> dict:
             bought.append({"code": c.code, "name": c.name, "rank": c.rank,
                            "qty": qty, "price": px})
         db.commit()
-    return {"status": "ok", "trade_date": day.isoformat(), "buys": bought}
+    return {"status": "ok", "trade_date": day.isoformat(),
+            "strategy": strategy, "buys": bought,
+            "skipped_overheated": skipped_hot}
 
 
 def capture_orderbook(slot: str, trade_date: date | None = None) -> dict:
@@ -451,6 +453,27 @@ def capture_orderbook(slot: str, trade_date: date | None = None) -> dict:
 
 def submit_cafe_orders(trade_date: date | None = None) -> dict:
     """15:28 — sim-buy today's top candidates at the current KIS quote."""
+    return _submit_cafe_like(trade_date, strategy=STRATEGY_CAFE, ret20_max=None)
+
+
+def submit_cafecool_orders(trade_date: date | None = None) -> dict:
+    """15:28 — cafe 와 같은 후보에서 ret20 상한을 넘는 종목만 뺀 쌍둥이.
+
+    후보 스캔을 다시 돌리지 않고 `cafe_candidates` 를 그대로 읽는다. 같은 행을
+    공유하므로 두 곡선의 차이는 **오직 ret20 상한**이며, 스캔 비용도 KIS 호출도
+    늘지 않는다(진입 시세 조회만 각자 한다).
+    """
+    return _submit_cafe_like(trade_date, strategy=STRATEGY_CAFECOOL,
+                             ret20_max=settings.live_cafecool_ret20_max)
+
+
+def _submit_cafe_like(trade_date: date | None, *, strategy: str,
+                      ret20_max: float | None) -> dict:
+    """cafe 계열 15:28 시뮬 매수 공통부.
+
+    `ret20_max` 가 주어지면 진입 시점 ret20(%)이 그 값 이상인 후보를 건너뛴다.
+    cafe 는 None 이라 종전과 완전히 동일하게 동작한다.
+    """
     from .kis_client import get_kis_client
     from .live_trader import _persist_simulated_fill, _simulated_balance
     init_db()
@@ -458,20 +481,33 @@ def submit_cafe_orders(trade_date: date | None = None) -> dict:
     client = get_kis_client()
     seed_slots = max(settings.live_cafe_slots, 1)
     bought: list[dict] = []
+    skipped_hot: list[dict] = []
     with SessionLocal() as db:
         cands = (db.query(CafeCandidate)
                    .filter(CafeCandidate.trade_date == day)
                    .order_by(CafeCandidate.rank.asc())
                    .all())
         if not cands:
-            return {"status": "no_candidates", "trade_date": day.isoformat()}
-        snapshot = _simulated_balance(db, strategy=STRATEGY_CAFE)
+            return {"status": "no_candidates", "trade_date": day.isoformat(),
+                    "strategy": strategy}
+        snapshot = _simulated_balance(db, strategy=strategy)
         held = {h.code for h in snapshot.holdings}
         slot_budget = max(snapshot.total_eval, snapshot.cash) / seed_slots
         cash = snapshot.cash
         for c in cands:
             if c.code in held or len(bought) >= settings.live_cafe_max_buys:
                 continue
+            if ret20_max is not None:
+                try:
+                    ret20 = json.loads(c.metrics_json or "{}").get("ret20")
+                except Exception:  # noqa: BLE001
+                    ret20 = None
+                # ret20 를 못 읽으면 보수적으로 건너뛴다 — 과열 여부를 모르는
+                # 종목을 사는 것이 이 쌍둥이의 취지에 어긋난다.
+                if ret20 is None or ret20 >= ret20_max:
+                    skipped_hot.append({"code": c.code, "name": c.name,
+                                        "ret20": ret20})
+                    continue
             q = client.get_quote(c.code)
             px = q.get("price") or c.close
             if not px or px <= 0 or q.get("halted"):
@@ -488,12 +524,12 @@ def submit_cafe_orders(trade_date: date | None = None) -> dict:
                        "top_features": [], "stop_px": c.stop_px,
                        "fill_source": "quote" if q.get("price") else "fallback_scan_price"}
             _persist_simulated_fill(db, day, c.code, "BUY", qty, px,
-                                    strategy=STRATEGY_CAFE, reasons=reasons)
+                                    strategy=strategy, reasons=reasons)
             # Out-of-universe KOSDAQ codes miss the kr_data name lookup —
             # the ranking TR already gave us the real name, so pin it.
             db.query(Order).filter(Order.trade_date == day,
                                    Order.code == c.code,
-                                   Order.strategy == STRATEGY_CAFE,
+                                   Order.strategy == strategy,
                                    Order.name.in_((None, c.code))).update(
                 {"name": c.name}, synchronize_session=False)
             cash -= qty * px

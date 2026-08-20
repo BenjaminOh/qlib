@@ -31,6 +31,7 @@ from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
+    STRATEGY_CAFECOOL,
     STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID,
     BASE_OPEN, BASE_QUOTE, init_db,
 )
@@ -56,6 +57,7 @@ def _seed_for(strategy: str) -> float:
         STRATEGY_CAFE: settings.live_seed_cash_cafe,
         STRATEGY_SURGE: settings.live_seed_cash_surge,
         STRATEGY_CAFEOPEN: settings.live_seed_cash_cafeopen,
+        STRATEGY_CAFECOOL: settings.live_seed_cash_cafecool,
     }
     return seeds.get(strategy, settings.live_seed_cash_open)
 
@@ -69,7 +71,7 @@ def _seed_for(strategy: str) -> float:
 #   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-                      STRATEGY_SURGE, STRATEGY_CAFEOPEN)
+                      STRATEGY_SURGE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL)
 
 EXIT_RULES: dict[str, dict] = {
     STRATEGY_CLOSE: {"tp": 0.10},
@@ -94,6 +96,9 @@ EXIT_RULES: dict[str, dict] = {
     # you change cafe's rule here, change this one in the same edit or the
     # A/B stops measuring what it claims to.
     STRATEGY_CAFEOPEN: {"tp": 0.10, "stop_source": "entry"},
+    # cafecool: cafe 와 청산이 완전히 같아야 한다. 진입 조건(ret20 상한)
+    # 하나만 다른 쌍둥이라, 여기를 바꾸면 무엇을 재는지 알 수 없게 된다.
+    STRATEGY_CAFECOOL: {"tp": 0.10, "stop_source": "entry"},
 }
 
 
@@ -369,6 +374,26 @@ def _is_risky(code: str, client: KISClient | None = None,
     return None
 
 
+def _buy_count(*, held: int, selling: int, topk: int, n_drop: int,
+               simulated: bool) -> int:
+    """How many new positions to open today.
+
+    TopkDropout assumes the book is ALREADY at `topk` and only swaps `n_drop`
+    per day. Capping buys at `n_drop` therefore gave the real account no way to
+    ramp up — 매도2/매수2 repeated daily and holdings sat at 4 of 10 slots for
+    weeks (투입률 20~41%, never past 50%). Empty slots are now filled, bounded by
+    `live_max_buys_per_day` so six positions never share one day's entry print.
+
+    Simulated curves keep the old `n_drop` cap on purpose: they exist to compare
+    exit rules against a fixed baseline, and changing how fast they deploy
+    capital would move a second variable and void the comparison.
+    """
+    if simulated:
+        return n_drop
+    empty = max(0, topk - (held - selling))
+    return min(max(n_drop, empty), settings.live_max_buys_per_day)
+
+
 def _select_affordable_buys(candidates: list[str],
                             slot_budget: float,
                             n_drop: int,
@@ -486,8 +511,26 @@ def submit_daily_orders(today: date | None = None,
             dropped = held_codes - set(target_codes)
             to_sell_codes = _rank_sorted_sells(db, today, dropped, n_drop)
         # Buy candidates keep full rank order — affordability filtering below
-        # (after sells refresh the cash) decides which n_drop actually get bought.
+        # (after sells refresh the cash) decides which of them actually get bought.
         buy_candidates = [c for c in target_codes if c not in held_codes]
+
+        # How many to buy. TopkDropout assumes you ALREADY hold topk and only
+        # swaps n_drop each day, so capping buys at n_drop gave the real account
+        # no way to ramp up: 매도2/매수2 repeated daily and holdings sat at 4 of
+        # 10 slots for weeks (투입률 20~41%, never past 50%). Fill the empty
+        # slots instead, but no more than live_max_buys_per_day at a time —
+        # taking six positions on one day would hand them all the same entry
+        # print, so a bad day would be a bad day for the whole portfolio.
+        #
+        # REAL ACCOUNT ONLY. The simulated curves keep the old n_drop cap: they
+        # exist to compare exit rules against a fixed baseline, and changing how
+        # fast they deploy capital would move a second variable and break the
+        # comparison (same reason cafe/cafeopen are byte-identical but for one knob).
+        n_buy = _buy_count(held=len(held_codes), selling=len(to_sell_codes),
+                           topk=n_topk, n_drop=n_drop, simulated=simulated)
+        if n_buy != n_drop:
+            log.info("live_orders: 매수 상한 %d (보유 %d/%d, 매도 %d)",
+                     n_buy, len(held_codes), n_topk, len(to_sell_codes))
 
         # Execution style comes from the account row. Simulated curves are
         # explicitly excluded (see docstring), so they take the same market
@@ -587,10 +630,10 @@ def submit_daily_orders(today: date | None = None,
                     return None
 
             to_buy, skipped_expensive = _select_affordable_buys(
-                buy_candidates, slot_budget, n_drop, price_fn=_entry_price,
+                buy_candidates, slot_budget, n_buy, price_fn=_entry_price,
                 risk_fn=lambda code: _is_risky(code, client, quote=quote_cache.get(code)))
         else:
-            to_buy, skipped_expensive = _select_affordable_buys(buy_candidates, slot_budget, n_drop)
+            to_buy, skipped_expensive = _select_affordable_buys(buy_candidates, slot_budget, n_buy)
         if to_buy and not simulated:
             # `cash` is 예수금 총액, which on a real account still counts funds
             # committed to unsettled (D+2) trades. Sizing against it opens a

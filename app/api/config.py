@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # If the chart shows wildly off percentages, the seed here doesn't match
     # what ended up in starting/ending_equity rows — set the env override.
     live_seed_cash_open: float = 10_000_000.0
+    # Daily cap on NEW buys for the real account. TopkDropout only swaps n_drop
+    # per day, which left the account stuck at 4 of 10 slots (투입률 40%). Buys
+    # now fill empty slots up to this number — 4 ramps 4→8→10 over two sessions
+    # instead of taking every position on a single day's print. Set to topk to
+    # fill immediately, or to n_drop (2) to restore the old behaviour.
+    live_max_buys_per_day: int = 4
     live_seed_cash_close: float = 10_000_000.0
     # - flow  : same seed and execution as close, picks re-ranked by
     #           기관/외국인 net buying. Equal seeds are REQUIRED for the A/B
@@ -82,6 +88,13 @@ class Settings(BaseSettings):
     # deliberately NOT duplicated (it reads live_cafe_*) so the two curves
     # can never drift apart on anything but the entry. Seed must equal cafe's.
     live_seed_cash_cafeopen: float = 10_000_000.0
+    # cafecool — cafe's entry-condition twin. Same seed/slots on purpose: the
+    # A/B only means something if capital deployment is identical and the ret20
+    # ceiling is the single moving part.
+    live_seed_cash_cafecool: float = 10_000_000.0
+    # ret20 상한(%). cafe 는 하한 +30%만 있고 상한이 없어 +368%까지 통과했다.
+    # 20건 실측에서 50%를 경계로 D+5 중앙값이 +3.19% / −9.50% 로 갈렸다.
+    live_cafecool_ret20_max: float = 50.0
     live_cafeopen_discount: float = 0.03
     # The resting window: order placed at 09:00, judged against the session
     # range at this hour. 10:00 = the first hour only.

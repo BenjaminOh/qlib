@@ -39,6 +39,15 @@ STRATEGY_SURGE = "surge"
 # −3% limit off the NEXT morning's open and cancels it unfilled at 10:00.
 # The gap between the two curves IS the entry-fill assumption's contribution.
 STRATEGY_CAFEOPEN = "cafeopen"  # exactly 8 chars — the Order.strategy limit
+# cafecool — cafe's ENTRY-CONDITION twin (2026-08-20). Identical picks, sizing
+# and exits; the ONLY difference is an upper bound on ret20. cafe's A pattern
+# requires ret20 >= +30% with no ceiling, so all 20 candidates to date entered
+# already-overheated names (평균 ret20 +68%, 최고 본느 +368%) and the forward
+# returns were negative across the board (D+1 −2.18%, D+5 −3.31%, 65%가 5일 내
+# −10% 이상 낙폭). Splitting at 50% separated them: D+5 중앙값 +3.19% (30~50%)
+# vs −9.50% (50%+). The gap between the two curves IS the ceiling's contribution.
+# ⚠ 표본 4건 대 10건이고 평균 우위는 혜인(+64%) 한 건에 의존한다 — 전향적으로 잰다.
+STRATEGY_CAFECOOL = "cafecool"  # exactly 8 chars — the Order.strategy limit
 
 
 # ─── Account axis ───────────────────────────────────────────────────

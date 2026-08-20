@@ -145,6 +145,12 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders_cafe",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
+    # cafecool — cafe 와 같은 15:28 슬롯. 같은 후보 행을 읽고 ret20 상한만
+    # 다르게 적용하므로 스캔·순위는 공유되고 진입 조건 하나만 갈린다.
+    "live-orders-at-close-cafecool": {
+        "task": "live_orders_cafecool",
+        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
+    },
     # Book depth for the 15:28 buy — research only, no trades. 15:07 is
     # 정규장 (real ask ladder); 15:27 is inside 동시호가 one minute before the
     # order, where 예상체결수량 replaces the ladder. Both are needed: they
@@ -191,6 +197,10 @@ celery_app.conf.beat_schedule = {
     },
     "live-sync-cafe-after-close": {
         "task": "live_sync_cafe",
+        "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),
+    },
+    "live-sync-cafecool-after-close": {
+        "task": "live_sync_cafecool",
         "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),
     },
     # FALLBACK slot — primary trigger is the live_signal chain (it knows the

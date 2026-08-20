@@ -334,6 +334,27 @@ def live_orders_cafe_task(self) -> dict:
     return submit_cafe_orders()
 
 
+@celery_app.task(bind=True, name="live_orders_cafecool")
+@market_day_only
+def live_orders_cafecool_task(self) -> dict:
+    """15:28 KST — cafecool: cafe 와 같은 후보에서 ret20 상한 초과분만 뺀 쌍둥이.
+
+    cafe 와 같은 분에 돈다. 같은 `cafe_candidates` 행을 읽으므로 스캔은 한 번뿐이고,
+    두 곡선의 차이는 진입 조건 하나로 한정된다.
+    """
+    from ..services.market_screener import submit_cafecool_orders
+    self.update_state(state="RUNNING")
+    return submit_cafecool_orders()
+
+
+@celery_app.task(bind=True, name="live_sync_cafecool")
+@market_day_only
+def live_sync_cafecool_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="cafecool")
+
+
 @celery_app.task(bind=True, name="live_sync_cafe")
 @market_day_only
 def live_sync_cafe_task(self) -> dict:
