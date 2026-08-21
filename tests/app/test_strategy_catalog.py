@@ -72,3 +72,86 @@ def test_strategy_codes_fit_the_column():
     """Order.strategy 는 String(8) — 더 긴 이름은 저장 자체가 안 된다."""
     for s in ALL_STRATEGIES:
         assert len(s) <= 8, f"{s} 는 {len(s)}자"
+
+
+# ─── 통계 엔진이 새 탭을 받아내는가 ─────────────────────────────────
+#
+# 회고 탭이 카탈로그에서 만들어지면서, 예전에는 화면에서 도달할 수 없던
+# cafereal·cafecool·cafeopen 으로도 /live/retro 가 호출된다. 통계 엔진이 그
+# 전략들에서 터지거나, 반대로 전략 경계를 넘어 섞이면 사고다.
+
+
+@pytest.fixture
+def retro_db(monkeypatch):
+    """빈 인메모리 DB + qlib 가격 조회 차단."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.api.db import Base
+    from app.api.services import retrospective as rs
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+
+    class _NoClose:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(rs, "SessionLocal", lambda: _NoClose())
+    # daily_ic 는 qlib 스토어를 읽는다 — 이 테스트가 재는 대상이 아니다.
+    monkeypatch.setattr(rs, "daily_ic", lambda *a, **k: [])
+    yield session, rs
+    session.close()
+    engine.dispose()
+
+
+def _episode(session, strategy, code):
+    """매수→매도 한 쌍. 유니버스 밖 코드도 넣어 가격 시계열이 비는 경로를 태운다."""
+    import datetime as dt
+    import json
+
+    from app.api.db import Fill, Order
+
+    for side, day, px in (("BUY", 18, 1000.0), ("SELL", 20, 1100.0)):
+        o = Order(trade_date=dt.date(2026, 8, day), strategy=strategy, code=code,
+                  name=code, side=side, qty=10, price=px, ord_dvsn="SM",
+                  status="SIMULATED",
+                  reasons_json=json.dumps({"basis": "t", "metrics": {"ret5": 25.0}}))
+        session.add(o)
+        session.flush()
+        session.add(Fill(order_id=o.id, strategy=strategy, qty=10, price=px,
+                         pnl=1000.0 if side == "SELL" else None))
+    session.commit()
+
+
+def test_retro_engine_handles_every_strategy_tab(retro_db):
+    session, rs = retro_db
+    for s in ALL_STRATEGIES:
+        _episode(session, s, "457370")   # 유니버스 밖(카페 픽 성격)
+        _episode(session, s, "000720")   # 유니버스 안
+
+    for s in ALL_STRATEGIES:
+        out = rs.build_retro(s)          # 터지면 실패
+        # 전략 경계가 새면 안 된다 — 11개 전략에 2건씩 넣었으니 각 2건이어야 한다.
+        assert len(out["episodes"]) == 2, f"{s} 에 다른 전략 에피소드가 섞였다"
+        assert out["scoreboard"]
+
+
+def test_overnight_hypothesis_stays_open_only(retro_db):
+    """H-오버나이트는 09:00 시장가 매도에서만 의미가 있다.
+
+    시뮬 전략은 봉 수준에서 체결되므로 그 숫자는 밤사이 이동이 아니다. 새 탭이
+    생겼다고 다른 전략 에피소드가 이 가설에 섞이면 채점이 오염된다.
+    """
+    session, rs = retro_db
+    for s in ALL_STRATEGIES:
+        _episode(session, s, "000720")
+
+    eps = [rs.enrich_episode(e) for e in rs.build_episodes("cafereal")]
+    overnight = [e for e in eps if e.get("overnight_pct") is not None
+                 and e.get("strategy") == "open"]
+    assert overnight == []
