@@ -5,20 +5,18 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import OrdersTable from "@/components/OrdersTable";
+import { strategyTabs } from "@/lib/strategies";
 
 type Filter = "ALL" | "BUY" | "SELL" | "REJECTED";
 
-/** Strategy filter chips — "" = every strategy, others = that strategy only. */
+/** Strategy filter chips — "" = every strategy, others = that strategy only.
+ *
+ * 목록을 손으로 적어두었더니 cafereal·cafecool·cafeopen 이 빠졌다. 카페 실매매
+ * 주문이 「전체 전략」에 섞여서만 보이고 골라낼 방법이 없었다는 뜻이다.
+ * 이제 전략 카탈로그에서 만든다 — 전략을 추가하면 칩도 따라온다. */
 const STRATEGY_TABS: { key: string; label: string }[] = [
   { key: "", label: "전체 전략" },
-  { key: "open", label: "실계좌 open" },
-  { key: "close", label: "종가" },
-  { key: "flow", label: "수급" },
-  { key: "trail", label: "트레일" },
-  { key: "scale", label: "사다리" },
-  { key: "limit", label: "지정가" },
-  { key: "cafe", label: "☕ 카페" },
-  { key: "surge", label: "⚡ 급등" },
+  ...strategyTabs(),
 ];
 
 type View = "all" | "real" | "sim";

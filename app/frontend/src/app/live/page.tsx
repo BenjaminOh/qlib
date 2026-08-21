@@ -11,6 +11,7 @@ import StockCurvesChart from "@/components/StockCurvesChart";
 import HoldingsTable from "@/components/HoldingsTable";
 import OrdersTable from "@/components/OrdersTable";
 import CafeCandidates from "@/components/CafeCandidates";
+import { PRIMARY_STRATEGY } from "@/lib/strategies";
 import SurgePicks from "@/components/SurgePicks";
 import SignalPicksTable from "@/components/SignalPicksTable";
 import ExitsTable from "@/components/ExitsTable";
@@ -68,11 +69,18 @@ export default function LiveDashboardPage() {
   const b = balance.data;
   const today = pnl.data?.rows?.[pnl.data.rows.length - 1];
   const seedCash = pnl.data?.seed_cash;
-  // Cumulative card reflects the OPEN strategy (KIS real paper account) since
-  // that's what `b` (live balance) corresponds to. Close strategy is plotted
-  // on the chart alongside but tracked separately in the DB.
-  const seedOpen = seedCash?.open;
-  const cumulative = b && seedOpen ? b.total_eval / seedOpen - 1 : null;
+  // 누적 수익률의 분모는 **지금 보고 있는 계좌**의 시드여야 한다.
+  //
+  // 예전 주석은 "`b` 가 open 에 대응하므로 open 시드를 쓴다"였는데, 계좌 토글이
+  // 생기면서(커밋 a670953f) 그 전제가 깨졌다. `b` 만 계좌를 따라 바뀌고 분모는
+  // open 에 고정돼 있어서, 카페 계좌 탭을 누르면 카페 잔고를 기본 계좌 시드로
+  // 나눴다. 카페 계좌가 미설정이면 total_eval=0 이라 누적 −100.00% 가 빨간
+  // 배지로 떴다 — 손실난 계좌처럼 보이지만 실은 계좌가 없는 것이다.
+  const seedForAccount = seedCash?.[PRIMARY_STRATEGY[account]] ?? seedCash?.open;
+  // 계좌가 아예 없으면 0원을 −100% 로 그리지 않고 "—" 로 비운다.
+  const noAccount = b?.source === "no_account";
+  const cumulative =
+    b && seedForAccount && !noAccount ? b.total_eval / seedForAccount - 1 : null;
 
   // "투입자본 수익률" — return on actually deployed capital (excludes idle cash).
   // Answers "what did the stocks I bought do?" rather than "what did my whole

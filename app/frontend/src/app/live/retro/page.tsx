@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, RetroEpisode } from "@/lib/api";
 import { TradeHistory } from "@/components/HoldingsTable";
 import ChartLink from "@/components/ChartLink";
+import { strategyTabs } from "@/lib/strategies";
 
 const pct = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(digits)}%`;
@@ -14,16 +15,9 @@ const pctCls = (v: number | null | undefined) =>
   v == null ? "text-gray-400" : v >= 0 ? "text-emerald-700" : "text-red-700";
 
 /** 매매 회고 — 에피소드 원장 + 가설 스코어보드 + 신호 IC. */
-const RETRO_TABS: { key: string; label: string }[] = [
-  { key: "open", label: "실계좌 open" },
-  { key: "surge", label: "⚡ 급등" },
-  { key: "cafe", label: "☕ 카페" },
-  { key: "close", label: "종가" },
-  { key: "flow", label: "수급" },
-  { key: "trail", label: "트레일" },
-  { key: "scale", label: "사다리" },
-  { key: "limit", label: "지정가" },
-];
+// 전략 카탈로그에서 만든다. 손으로 적었을 때 cafereal 탭이 없어서, API 는
+// strategy 파라미터를 받는데도 화면에서는 카페 실매매 회고에 도달할 수 없었다.
+const RETRO_TABS: { key: string; label: string }[] = strategyTabs();
 
 export default function RetroPage() {
   const [open, setOpen] = useState<string | null>(null);

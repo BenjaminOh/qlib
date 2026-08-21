@@ -79,3 +79,32 @@ export const PRIMARY_STRATEGY: Record<string, string> = {
 export function strategyLabel(strategy: string): string {
   return STRATEGY_SHORT[strategy] ?? strategy;
 }
+
+/**
+ * 화면에 놓을 순서. 백엔드 `app/api/db/models.py` 의 ALL_STRATEGIES 와 같은
+ * 순서·같은 구성이어야 한다 (그쪽은 테스트로 고정돼 있다).
+ *
+ * 이 목록이 없던 동안 주문 이력 칩과 회고 탭이 각자 하드코딩돼 있었고, 어제
+ * 추가된 cafereal·cafecool·cafeopen 이 양쪽에서 빠졌다. 카페 실매매 주문을
+ * 골라볼 칩이 없다는 뜻이었다.
+ */
+export const STRATEGY_ORDER: string[] = [
+  "open", "cafereal",                                  // 실주문
+  "close", "flow", "trail", "scale", "limit",          // qlib 시뮬
+  "cafe", "cafeopen", "cafecool",                      // 카페 시뮬
+  "surge",
+];
+
+/** 계열 아이콘 — 칩에서 카페·급등 계열을 한눈에 묶어 보이게 한다. */
+export const STRATEGY_ICON: Record<string, string> = {
+  cafe: "\u2615", cafeopen: "\u2615", cafecool: "\u2615", cafereal: "\u2615",
+  surge: "\u26a1",
+};
+
+/** 필터 칩·탭 목록. 라벨은 STRATEGY_SHORT 에 계열 아이콘을 붙인 것. */
+export function strategyTabs(): { key: string; label: string }[] {
+  return STRATEGY_ORDER.map((key) => {
+    const icon = STRATEGY_ICON[key];
+    return { key, label: icon ? `${icon} ${strategyLabel(key)}` : strategyLabel(key) };
+  });
+}

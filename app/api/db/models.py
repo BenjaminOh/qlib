@@ -81,6 +81,23 @@ ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
     CAFE_ACCOUNT_ID: (STRATEGY_CAFEREAL,),
 }
 
+# 표시 순서를 가진 전 전략 목록. 화면의 필터 칩·회고 탭·곡선 기준선이 전부
+# 여기서 파생된다. **전략을 추가할 때 갱신할 곳은 이 튜플 하나다.**
+#
+# 왜 필요한가: 이 목록이 손으로 복사된 곳이 네 군데였고, 어제 추가된 cafereal 과
+# cafecool 이 그중 셋에서 빠졌다. 곡선 기준선(seed_cash)에서 빠지면 EquityChart 가
+# 그 전략의 데이터를 통째로 버려 선이 아예 그려지지 않고, 주문 이력 칩에서
+# 빠지면 그 전략의 주문만 골라볼 방법이 없어진다. 오타가 아니라 구조였다.
+#
+# 순서 = 화면에 놓을 순서. 실주문을 먼저, 그다음 qlib 시뮬, 카페 계열, 급등.
+ALL_STRATEGIES: tuple[str, ...] = (
+    STRATEGY_OPEN, STRATEGY_CAFEREAL,                       # 실주문
+    STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
+    STRATEGY_SCALE, STRATEGY_LIMIT,                         # qlib 시뮬
+    STRATEGY_CAFE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL,    # 카페 시뮬
+    STRATEGY_SURGE,
+)
+
 # Order-execution vocabulary shared by the model, the policy service and the
 # API validators. Kept here so there is exactly one spelling of each value.
 ORD_TYPE_MARKET = "market"

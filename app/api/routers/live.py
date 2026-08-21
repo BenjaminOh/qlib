@@ -19,7 +19,7 @@ from sqlalchemy import desc
 from ..auth import get_current_user
 from ..config import settings
 from ..db import (
-    ACCOUNT_STRATEGIES,
+    ACCOUNT_STRATEGIES, ALL_STRATEGIES,
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     TradingAccount, ORD_TYPE_MARKET, ORD_TYPE_LIMIT, ORD_TYPES, PRICE_BASES,
 )
@@ -483,6 +483,18 @@ def _position_timeline(code: str, strategy: str,
                     item.pnl_amt = (day_close - item.avg_price) * pos_qty
             out.append(item)
         return out
+
+
+def _seed_cash_map() -> dict[str, float]:
+    """{전략: 시드현금} — 곡선의 기준선(0%)이 되는 값.
+
+    live_trader._seed_for 를 재사용한다: 이미 11개 전략을 전부 매핑하고 미지의
+    전략은 open 시드로 폴백하므로, 여기서 두 번째 사본을 만들 이유가 없다.
+    import 를 함수 안에 두는 것은 이 라우터의 규약이다 — live_trader 는 qlib 을
+    끌어오고, API 프로세스는 그걸 피한다.
+    """
+    from ..services.live_trader import _seed_for
+    return {s: _seed_for(s) for s in ALL_STRATEGIES}
 
 
 def _close_safe(code: str) -> float | None:
@@ -1567,17 +1579,13 @@ def get_daily_pnl(days: int = Query(180, ge=1, le=730)):
                   .order_by(DailyPnL.trade_date.asc())
                   .all())
         return DailyPnLResponse(
-            seed_cash={
-                "open": settings.live_seed_cash_open,
-                "close": settings.live_seed_cash_close,
-                "flow": settings.live_seed_cash_flow,
-                "trail": settings.live_seed_cash_trail,
-                "scale": settings.live_seed_cash_scale,
-                "limit": settings.live_seed_cash_limit,
-                "cafe": settings.live_seed_cash_cafe,
-                "surge": settings.live_seed_cash_surge,
-                "cafeopen": settings.live_seed_cash_cafeopen,
-            },
+            # 전 전략을 ALL_STRATEGIES 에서 순회한다. 손으로 적었을 때
+            # cafereal 과 cafecool 이 빠져 있었고, EquityChart 는 시드가 없는
+            # 전략의 포인트를 통째로 버리므로(`if (r && seed)`) 그 두 곡선은
+            # DailyPnL 에 행이 쌓여도 범례에조차 뜨지 않았다. cafe(시뮬) 대비
+            # cafereal(실계좌)의 격차를 재려고 만든 전략인데 그 격차를 볼 수
+            # 없었다는 뜻이다.
+            seed_cash=_seed_cash_map(),
             rows=[DailyPnLRow(
                 trade_date=r.trade_date,
                 strategy=r.strategy,
