@@ -3,10 +3,9 @@
 import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { LiveOrderRow, fmtDateTime, parseUtc } from "@/lib/api";
-import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
 import ChartLink from "@/components/ChartLink";
 import OrderStoryPanel from "@/components/OrderStoryPanel";
-import { STRATEGY_SHORT } from "@/lib/strategies";
+import { STRATEGY_COLORS, STRATEGY_LABELS, STRATEGY_SHORT } from "@/lib/strategies";
 
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {

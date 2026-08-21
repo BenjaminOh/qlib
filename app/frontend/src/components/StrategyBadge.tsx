@@ -1,7 +1,7 @@
 "use client";
 
 import { HoldingStrategy } from "@/lib/api";
-import { MANUAL_STRATEGY, strategyLabel } from "@/lib/strategies";
+import { MANUAL_STRATEGY, STRATEGY_LABELS, strategyLabel } from "@/lib/strategies";
 
 /**
  * 보유 종목이 어느 전략에서 왔는지 표시하는 배지.
@@ -24,11 +24,15 @@ export default function StrategyBadge({
     : lot.confirmed
       ? "border-emerald-200 text-emerald-700 bg-emerald-50"
       : "border-amber-300 text-amber-700 bg-amber-50";
-  const title = isManual
-    ? "주문 원장으로 설명되지 않는 수량입니다 — 수동 매매, 대체입고, 액면분할 등"
+  // 툴팁은 두 가지를 답한다: (1) 이 전략이 무엇인가, (2) 이 수량이 확정인가.
+  // 짧은 라벨은 "누가 골랐나"까지만 말하므로 규칙은 여기서 채운다.
+  const what = STRATEGY_LABELS[lot.strategy] ?? strategyLabel(lot.strategy);
+  const how = isManual
+    ? ""
     : lot.confirmed
-      ? `${strategyLabel(lot.strategy)} 전략의 체결 기록과 일치합니다`
-      : `${strategyLabel(lot.strategy)} 전략의 주문은 있으나 체결 정산 기록이 없습니다 — 추정치 (원장 ${lot.ledger_qty.toLocaleString()}주)`;
+      ? "\n\n✅ 이 계좌의 체결 기록과 수량이 일치합니다."
+      : `\n\n⚠ 주문은 있으나 체결 정산 기록이 없습니다 — 추정치 (원장 ${lot.ledger_qty.toLocaleString()}주).`;
+  const title = `${what}${how}`;
 
   return (
     <span

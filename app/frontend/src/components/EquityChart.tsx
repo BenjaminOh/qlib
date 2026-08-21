@@ -12,34 +12,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { DailyPnLRow } from "@/lib/api";
-
-export const STRATEGY_COLORS: Record<string, string> = {
-  open: "#10b981",   // emerald — KIS real paper account
-  close: "#6366f1",  // indigo — DB-only simulated portfolio
-  flow: "#f59e0b",   // amber — close execution, 수급 재랭킹 픽
-  trail: "#0ea5e9",  // sky — trailing −7% exits
-  scale: "#a855f7",  // purple — +7% half take, remainder trails
-  limit: "#ef4444",  // red — −3% resting-limit entries (사장님 방식)
-  cafe: "#78716c",   // stone — recommender-mimic screener
-  surge: "#db2777",  // pink — surge-eve profile picks
-  cafeopen: "#0d9488", // teal — cafe's picks, next-morning limit entry
-  cafecool: "#84cc16", // lime — cafe's picks minus the overheated ones
-  cafereal: "#c026d3", // fuchsia — cafe's picks on a REAL second account
-};
-
-export const STRATEGY_LABELS: Record<string, string> = {
-  open: "시초가 매수 (open)",
-  close: "종가 매수 · 익절 +10%/전저점 손절 (시뮬)",
-  flow: "수급 추종 · 브래킷 (시뮬)",
-  trail: "트레일링 −7% (시뮬)",
-  scale: "사다리 익절 10/15/20% (시뮬)",
-  limit: "지정가 −3% 매수 · +10% 예약매도 (시뮬)",
-  cafe: "카페 모사 스크리너 (시뮬)",
-  surge: "급등 전야 프로파일 (시뮬)",
-  cafeopen: "카페 모사 · 익일 시가 −3% 지정가 (시뮬)",
-  cafecool: "카페 모사 · ret20 상한 50% (시뮬)",
-  cafereal: "카페 모사 · 실계좌 (2번 계좌)",
-};
+import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/lib/strategies";
 
 type WideRow = { date: string } & Record<string, number | string | undefined>;
 
