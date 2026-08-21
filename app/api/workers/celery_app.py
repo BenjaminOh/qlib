@@ -156,6 +156,20 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders_cafecool",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
+    # cafereal 대사 — 15:28 주문의 체결 여부를 확정한다. 15:35 는 15:30 동시호가
+    # 직후이고 15:46 의 live_sync(스냅샷) 보다 앞선다: 순서가 뒤바뀌면 그날
+    # 스냅샷이 미확정 원장 위에서 찍힌다. 익일 09:05 는 재확인 — 동시호가 체결이
+    # KIS 조회에 반영되는 시점이 확정적이지 않아 15:35 에 놓칠 수 있다.
+    # 키 이름이 겹치면 뒤엣것이 앞을 덮어쓴다(2026-08-20 live-sync-cafe 사고).
+    "reconcile-cafereal-after-close": {
+        "task": "reconcile_fills_cafereal",
+        "schedule": crontab(hour=15, minute=35, day_of_week="mon-fri"),
+    },
+    "reconcile-cafereal-next-morning": {
+        "task": "reconcile_fills_cafereal",
+        "schedule": crontab(hour=9, minute=5, day_of_week="mon-fri"),
+        "kwargs": {"prev_day": True},
+    },
     # Book depth for the 15:28 buy — research only, no trades. 15:07 is
     # 정규장 (real ask ladder); 15:27 is inside 동시호가 one minute before the
     # order, where 예상체결수량 replaces the ladder. Both are needed: they

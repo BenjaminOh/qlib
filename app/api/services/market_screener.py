@@ -523,6 +523,18 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
         # 반영되지 않아 실제보다 많이 사려 든다.
         snapshot = client.get_balance() if real else _simulated_balance(db, strategy=strategy)
         held = {h.code for h in snapshot.holdings}
+        # 미체결 지정가는 잔고에 없다. 중복 방지가 잔고만 보면, 같은 종목이
+        # 이틀 연속 후보로 잡힐 때 어제 걸어둔 주문 위에 하나를 더 쌓는다 —
+        # 둘 다 체결되면 슬롯 하나에 두 배를 산다. 아직 살아 있는 이 전략의
+        # 주문도 "이미 잡은 자리"로 친다.
+        #
+        # 시뮬 전략에는 영향이 없다: _persist_simulated_fill 은 SIMULATED 로
+        # 기록하므로 이 집합이 항상 비어 있다. 동결된 곡선은 그대로다.
+        held |= {code for (code,) in
+                 db.query(Order.code)
+                   .filter(Order.strategy == strategy,
+                           Order.status.in_(("SUBMITTED", "PARTIAL")))
+                   .distinct()}
         slot_budget = max(snapshot.total_eval, snapshot.cash) / seed_slots
         cash = snapshot.cash
         buy_pol = get_policies(db, CAFE_ACCOUNT_ID)[0] if real else None

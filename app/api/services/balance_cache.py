@@ -25,7 +25,7 @@ from datetime import datetime
 
 from ..config import settings
 from .kis_client import (
-    ACCOUNT_CAFE, ACCOUNT_MAIN, AccountNotConfigured, AccountSnapshot, Holding,
+    ACCOUNT_MAIN, AccountNotConfigured, AccountSnapshot, Holding,
     fail_fast_tokens, get_kis_client,
 )
 
@@ -87,10 +87,11 @@ def _keys(account: str = ACCOUNT_MAIN) -> tuple[str, str, str]:
     return base, f"{base}:last", f"{base}:down"
 
 
-# Which strategy's PositionSnapshot backs each account's last-resort fallback.
-# The cafe account only ever holds cafereal positions, so its DB tier must read
-# that strategy — reading `open` would show the wrong account's holdings.
-_FALLBACK_STRATEGY = {ACCOUNT_MAIN: "open", ACCOUNT_CAFE: "cafereal"}
+# Which strategy's PositionSnapshot backs each account's last-resort fallback
+# now comes from db.models.ACCOUNT_STRATEGIES — the single source of truth for
+# "which strategies trade this account", whose [0] is the account's primary.
+# It used to be a second copy of that map here, which is exactly how the two
+# drift apart the day a third account lands.
 
 
 def _encode(snap: AccountSnapshot, as_of: datetime) -> str:
@@ -120,8 +121,9 @@ def _from_db(account: str = ACCOUNT_MAIN) -> tuple[AccountSnapshot, datetime] | 
     """
     try:
         from ..db import PositionSnapshot, SessionLocal
+        from .holding_attribution import primary_strategy
 
-        strategy = _FALLBACK_STRATEGY.get(account, "open")
+        strategy = primary_strategy(account)
         with SessionLocal() as db:
             row = (db.query(PositionSnapshot)
                      .filter(PositionSnapshot.strategy == strategy)

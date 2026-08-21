@@ -6,11 +6,17 @@ import { api, ExitRow, StockTrade } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
 import ChartLink from "@/components/ChartLink";
 
-/** Full buy→sell timeline for an exited stock (same data as holdings drill-down). */
-function ExitTimeline({ code }: { code: string }) {
+/** Full buy→sell timeline for an exited stock (same data as holdings drill-down).
+ *
+ * `strategy` must match the ledger /live/exits was read from — the exits list
+ * and this drill-down showing different strategies would be two answers to the
+ * same question. Also keeps the query cache keyed the same way HoldingsTable
+ * keys it, so the two surfaces share one entry instead of racing.
+ */
+function ExitTimeline({ code, strategy }: { code: string; strategy: string }) {
   const trades = useQuery({
-    queryKey: ["stock-trades", code],
-    queryFn: () => api.getStockTrades(code),
+    queryKey: ["stock-trades", code, strategy],
+    queryFn: () => api.getStockTrades(code, strategy),
   });
   if (trades.isLoading) return <p className="text-xs text-gray-400 py-2">이력 불러오는 중…</p>;
   if (!trades.data?.length) return <p className="text-xs text-gray-400 py-2">이력 없음</p>;
@@ -42,7 +48,14 @@ function ExitTimeline({ code }: { code: string }) {
   );
 }
 
-export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
+export default function ExitsTable({
+  exits,
+  strategy = "open",
+}: {
+  exits: ExitRow[];
+  /** Which ledger the exits came from — /live/exits defaults to "open". */
+  strategy?: string;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <>
@@ -88,7 +101,7 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
             </div>
             {expanded && (
               <div className="mt-2 bg-gray-50/60 rounded px-2">
-                <ExitTimeline code={e.code} />
+                <ExitTimeline code={e.code} strategy={strategy} />
               </div>
             )}
           </div>
@@ -148,7 +161,7 @@ export default function ExitsTable({ exits }: { exits: ExitRow[] }) {
                 {expanded && (
                   <tr key={`${e.code}-tl`} className="bg-gray-50/60">
                     <td colSpan={6} className="px-4 py-2">
-                      <ExitTimeline code={e.code} />
+                      <ExitTimeline code={e.code} strategy={strategy} />
                     </td>
                   </tr>
                 )}

@@ -6,6 +6,7 @@ import { LiveOrderRow, fmtDateTime, parseUtc } from "@/lib/api";
 import { STRATEGY_COLORS, STRATEGY_LABELS } from "@/components/EquityChart";
 import ChartLink from "@/components/ChartLink";
 import OrderStoryPanel from "@/components/OrderStoryPanel";
+import { STRATEGY_SHORT } from "@/lib/strategies";
 
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {
@@ -49,12 +50,6 @@ const KIND_TITLES: Record<string, string> = {
   market: "시장가 주문 — 표시 가격은 09:20 대사에서 확정된 실체결 평균가입니다",
   limit: "지정가 주문 — 표시 가격은 주문 지정가입니다",
   sim: "시뮬레이션 장부 체결가 — KIS에 주문이 나가지 않았으므로 지정가/시장가 구분이 없습니다",
-};
-
-const STRATEGY_SHORT: Record<string, string> = {
-  open: "실계좌", close: "종가", flow: "수급", trail: "트레일",
-  scale: "사다리", limit: "지정가", cafe: "카페", surge: "급등",
-  cafeopen: "카페익일", cafecool: "카페냉각", cafereal: "카페실계좌",
 };
 
 export default function OrdersTable({

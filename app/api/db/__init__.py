@@ -8,7 +8,7 @@ from .session import Base, SessionLocal, engine, init_db
 from .models import (
     DailyPnL, Fill, MarketFlow, CafeCandidate, CafeScout, MarketPoolSnapshot, SurgePick,
     Order, OrderbookSnapshot, PositionSnapshot, Signal, TradingAccount, User,
-    DEFAULT_ACCOUNT_ID, ACCOUNT_ID_LEN,
+    DEFAULT_ACCOUNT_ID, CAFE_ACCOUNT_ID, ACCOUNT_ID_LEN, ACCOUNT_STRATEGIES,
     ORD_TYPE_MARKET, ORD_TYPE_LIMIT, ORD_TYPES,
     BASE_PREV_CLOSE, BASE_OPEN, BASE_QUOTE, PRICE_BASES,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
@@ -35,7 +35,9 @@ __all__ = [
     "User",
     "TradingAccount",
     "DEFAULT_ACCOUNT_ID",
+    "CAFE_ACCOUNT_ID",
     "ACCOUNT_ID_LEN",
+    "ACCOUNT_STRATEGIES",
     "ORD_TYPE_MARKET",
     "ORD_TYPE_LIMIT",
     "ORD_TYPES",

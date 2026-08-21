@@ -32,7 +32,8 @@ from ..db import (
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
     STRATEGY_CAFECOOL, STRATEGY_CAFEREAL,
-    STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID,
+    STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID, CAFE_ACCOUNT_ID,
+    ACCOUNT_STRATEGIES,
     BASE_OPEN, BASE_QUOTE, init_db,
 )
 from .account_policy import (
@@ -75,8 +76,11 @@ def _seed_for(strategy: str) -> float:
 # Bracket strategies that trade a REAL account. Their exits place KIS orders
 # and their balance comes from the broker, not the order book.
 REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL,)
-# trading_accounts row that supplies cafereal's buy/sell order style.
-CAFE_ACCOUNT_ID = "cafe"
+# CAFE_ACCOUNT_ID (the trading_accounts row supplying cafereal's order style)
+# now comes from db.models, next to ACCOUNT_STRATEGIES — it was a third spelling
+# of "cafe" alongside kis_client.ACCOUNT_CAFE and the seed literal. Re-exported
+# here so market_screener's existing `from .live_trader import CAFE_ACCOUNT_ID`
+# keeps working.
 
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
@@ -735,15 +739,40 @@ def reconcile_fills(trade_date: date | None = None,
     ESTIMATE the fill from bars — and the estimate drifted as better bars
     arrived (the '확정 손익 keeps changing' bug). KIS knows the real average
     fill; write it into Order.price once and the number is immutable.
-    Idempotent: orders that already carry a price are skipped.
+
+    Runs against the account that PLACED the orders, chosen from the strategy.
+    It used to hard-default to the main client, and its only caller invoked it
+    bare — so `cafereal` was never reconciled at all and its orders sat at
+    SUBMITTED forever, indistinguishable from fills that never happened.
+
+    Idempotent: `FILLED` orders are excluded by the query, so a re-run can only
+    touch rows still open. That is deliberate — a PARTIAL that later fills the
+    rest must be allowed to promote, and its average price and fill quantity
+    re-pinned. Only the terminal state is frozen.
     """
     init_db()
     trade_date = trade_date or date.today()
-    client = client or get_kis_client()
+    account_id = next((a for a, strategies in ACCOUNT_STRATEGIES.items()
+                       if strategy in strategies), None)
+    if account_id is None:
+        # 시뮬 전략은 브로커에 주문이 없다. 대사할 대상 자체가 없다.
+        return {"status": "skipped", "reason": "simulated_strategy",
+                "strategy": strategy}
+    if client is None:
+        try:
+            client = get_kis_client(account_id)
+        except Exception as exc:  # noqa: BLE001
+            log.info("reconcile_fills: %s 계좌 미설정 — %s", account_id, exc)
+            return {"status": "no_account", "strategy": strategy,
+                    "account_id": account_id, "reason": str(exc)}
     if client.is_mock:
         return {"status": "skipped", "reason": "mock"}
     fills = client.get_daily_fills(trade_date, trade_date)
     matched = updated = 0
+    # order_id → KIS 가 알려준 **실제 체결수량**. 지금까지 이 값은 상태 판정에만
+    # 쓰이고 버려져서, Fill 행에는 늘 주문 수량이 들어갔다 — 부분체결 주문이
+    # 장부에서 항상 과대 계상됐다는 뜻이다.
+    ccld: dict[int, int] = {}
     with SessionLocal() as db:
         rows = (db.query(Order)
                   .filter(Order.trade_date == trade_date,
@@ -757,10 +786,15 @@ def reconcile_fills(trade_date: date | None = None,
             if f is None:
                 continue
             matched += 1
-            if o.price is not None:
-                continue  # already pinned
+            qty = int(f.get("ccld_qty") or 0)
+            if qty <= 0:
+                # 접수는 됐지만 한 주도 붙지 않았다. 예전 코드는 여기서
+                # `0 >= o.qty` 가 False 라 PARTIAL 을 찍었다 — 체결이 전혀
+                # 없는 주문이 부분체결로 둔갑했다.
+                continue
+            ccld[o.id] = qty
             o.price = f["avg_price"]
-            o.status = "FILLED" if f["ccld_qty"] >= o.qty else "PARTIAL"
+            o.status = "FILLED" if qty >= o.qty else "PARTIAL"
             updated += 1
 
         # Pass 2 — the PAPER env returns nothing from daily-ccld ("모의투자
@@ -769,7 +803,15 @@ def reconcile_fills(trade_date: date | None = None,
         #  * An order submitted into the 09:00 opening auction fills AT the
         #    opening price by definition (single-price auction) — take 시가
         #    from the quote endpoint (market-data TRs work on paper).
-        pending = [o for o in rows if o.price is None]
+        #
+        # ⚠ `open` 전용이다. 두 대체 규칙 모두 09:00 단일가 경매를 전제로 하고,
+        # 특히 "보유 중인 종목의 BUY 는 잔고 평단이 곧 체결가" 는 **체결 여부를
+        # 전혀 확인하지 않는다** — 어제부터 들고 있던 종목이기만 하면 오늘 주문을
+        # FILLED 로 찍는다. 15:28 에 −3% 지정가를 걸고 체결되지 않은 cafereal
+        # 주문에 이걸 적용하면 미체결이 '확정 체결'로 둔갑한다. 원장을 바로잡으려
+        # 켠 정산기가 정확히 반대 방향으로 거짓말하게 되므로 여기서 막는다.
+        pending = ([o for o in rows if o.price is None]
+                   if strategy == STRATEGY_OPEN else [])
         if pending:
             try:
                 bal_avg = {h.code: h.avg_price for h in client.get_balance().holdings}
@@ -807,9 +849,11 @@ def reconcile_fills(trade_date: date | None = None,
                                 Order.price.isnot(None))
                         .all())
         for o in filled_now:
-            if db.query(Fill).filter(Fill.order_id == o.id).first():
-                continue
-            fee = trade_cost(o.side, o.qty, o.price)
+            # 체결수량이 진실이다. KIS 가 알려주지 않은 경우(paper 대체 규칙)만
+            # 주문 수량으로 물러난다. 예전에는 언제나 o.qty 를 썼기 때문에
+            # PARTIAL 주문이 장부에서 늘 주문 수량 전부로 잡혔다.
+            qty = ccld.get(o.id, o.qty)
+            fee = trade_cost(o.side, qty, o.price)
             pnl = None
             if o.side == "SELL":
                 avg = _episode_avg(db, o)
@@ -817,9 +861,20 @@ def reconcile_fills(trade_date: date | None = None,
                     # Realised pnl is NET: the sell's own cost plus the buy-side
                     # cost carried in at `avg`. Reporting gross here is what made
                     # the curve drift away from the account statement.
-                    pnl = round((o.price - avg) * o.qty
-                                - fee - trade_cost("BUY", o.qty, avg), 2)
-            db.add(Fill(order_id=o.id, filled_at=datetime.utcnow(), qty=o.qty,
+                    pnl = round((o.price - avg) * qty
+                                - fee - trade_cost("BUY", qty, avg), 2)
+            existing = db.query(Fill).filter(Fill.order_id == o.id).first()
+            if existing is not None:
+                if existing.qty == qty and existing.price == o.price:
+                    continue
+                # 부분체결이 나중에 더 채워졌다. 행을 새로 만들면 같은 주문이
+                # 장부에 두 번 잡히므로, 있는 행을 갱신한다.
+                log.info("reconcile: %s(%s) 부분체결 갱신 %s → %s주 @ %s",
+                         o.name or o.code, o.code, existing.qty, qty, o.price)
+                existing.qty, existing.price = qty, o.price
+                existing.fee, existing.pnl = fee, pnl
+                continue
+            db.add(Fill(order_id=o.id, filled_at=datetime.utcnow(), qty=qty,
                         price=o.price, fee=fee, pnl=pnl, strategy=strategy))
         db.commit()
     result = {"status": "ok", "trade_date": trade_date.isoformat(),
@@ -1514,17 +1569,6 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             "exits": exits, "ambiguous": ambiguous}
 
 
-def _prev_trading_day(day: date) -> date | None:
-    """The trading day strictly before `day`, or None if the calendar misses."""
-    try:
-        from qlib.data import D
-        cal = D.calendar(end_time=day.isoformat())
-        days = [pd.Timestamp(c).date() for c in cal if pd.Timestamp(c).date() < day]
-        return days[-1] if days else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def submit_cafeopen_orders(trade_date: date | None = None) -> dict:
     """09:00 — rest a −3% limit buy for every code cafe bought YESTERDAY.
 
@@ -1542,6 +1586,11 @@ def submit_cafeopen_orders(trade_date: date | None = None) -> dict:
     """
     init_db()
     day = trade_date or date.today()
+    # 방어적으로 남겨둔 가드. 이 파일에는 _prev_trading_day 가 두 번 정의돼
+    # 있었고, 파이썬은 나중 정의를 바인딩하므로 **이 호출은 처음부터 늘 뒤엣것**
+    # (주말 폴백이 있어 None 을 반환하지 않는 쪽)을 받고 있었다. 죽은 앞쪽
+    # 정의를 지웠으니 이 분기는 도달하지 않지만, 훗날 캘린더 실패 시 None 을
+    # 돌려주도록 바꾸더라도 조용히 잘못된 날짜로 주문하지 않게 남겨둔다.
     prev = _prev_trading_day(day)
     if prev is None:
         return {"status": "no_calendar", "trade_date": day.isoformat()}
@@ -1662,10 +1711,22 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
     rows, and the pnl/episode queries select on `status in (FILLED, PARTIAL)` —
     flipping it to CANCELLED would drop real fills out of the ledger. Those are
     logged for a human instead of silently rewritten.
+
+    Scoped to ONE account, both in the query and in the KIS client. It used to
+    be neither: the query matched every 지정가 order regardless of strategy and
+    the cancels went out on the main client. It never fired only because main
+    is 시장가 with no cutoff, so the function returned at `no_cutoff` before
+    reaching the query — meaning the day an operator switched main to 지정가
+    from the accounts screen, this sweep would have started cancelling the cafe
+    account's orders through the main account's credentials.
     """
     init_db()
     day = trade_date or date.today()
     now = now or datetime.now()
+    strategies = ACCOUNT_STRATEGIES.get(account_id, ())
+    if not strategies:
+        return {"status": "no_strategies", "trade_date": day.isoformat(),
+                "account_id": account_id}
 
     with SessionLocal() as db:
         buy_pol, sell_pol = get_policies(db, account_id)
@@ -1677,6 +1738,7 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
 
         rows = (db.query(Order)
                   .filter(Order.trade_date == day,
+                          Order.strategy.in_(strategies),
                           Order.ord_dvsn == "00",          # 지정가만
                           Order.status.in_(("SUBMITTED", "PARTIAL")))
                   .all())
@@ -1697,7 +1759,15 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
             return {"status": "ok", "trade_date": day.isoformat(),
                     "account_id": account_id, "cancelled": 0, "failed": 0}
 
-        client = client or get_kis_client()
+        # 취소는 그 주문을 낸 계좌에서 나가야 한다. 계좌가 아직 설정되지
+        # 않았다면 취소할 주문도 있을 수 없으므로 조용히 끝낸다.
+        if client is None:
+            try:
+                client = get_kis_client(account_id)
+            except Exception as exc:  # noqa: BLE001
+                log.info("cancel sweep: %s 계좌 클라이언트 없음 — %s", account_id, exc)
+                return {"status": "no_account", "trade_date": day.isoformat(),
+                        "account_id": account_id, "cancelled": 0, "failed": 0}
         cancelled, failed = 0, []
         for o in due:
             org_no, odno = _order_ids_from_response(o.raw_response)

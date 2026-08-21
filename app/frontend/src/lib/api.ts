@@ -248,8 +248,15 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getLiveSignals: () => fetchApi<LiveSignalsResponse>("/api/v1/live/signals"),
-  getStockTrades: (code: string) =>
-    fetchApi<StockTrade[]>(`/api/v1/live/stock/${code}/trades`),
+  /**
+   * 종목별 매매 이력. `strategy` 를 넘기지 않으면 서버가 "open" 원장을 본다 —
+   * 카페 계좌 종목을 인자 없이 조회하면 늘 빈 목록이 나오던 이유다.
+   */
+  getStockTrades: (code: string, strategy?: string) =>
+    fetchApi<StockTrade[]>(
+      `/api/v1/live/stock/${code}/trades` +
+        (strategy ? `?strategy=${strategy}` : ""),
+    ),
   getRecentExits: () => fetchApi<ExitRow[]>("/api/v1/live/exits"),
   getStockCurves: (strategy = "open", days = 120) =>
     fetchApi<StockCurvesResponse>(
@@ -305,6 +312,15 @@ export interface StockTrade {
   reasons: StockTradeReasons | null;
 }
 
+/** 보유 수량 중 한 전략에 귀속된 몫. qty 의 합은 항상 보유 수량과 같다. */
+export interface HoldingStrategy {
+  strategy: string;
+  qty: number;
+  ledger_qty: number;
+  /** false = 정산되지 않은 주문에서 추정한 값 */
+  confirmed: boolean;
+}
+
 export interface LiveHolding {
   code: string;
   name: string | null;
@@ -314,6 +330,10 @@ export interface LiveHolding {
   eval_value: number;
   pnl: number;
   pnl_pct: number;
+  /** 전략 귀속. 구버전 API 와 섞여도 깨지지 않도록 옵셔널. */
+  strategies?: HoldingStrategy[];
+  /** "confirmed" | "inferred" | "mismatch" | "unknown" */
+  attribution?: string;
 }
 
 export interface HaltStatus {

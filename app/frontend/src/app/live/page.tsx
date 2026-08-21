@@ -247,7 +247,7 @@ export default function LiveDashboardPage() {
             보유 종목 불러오는 중…
           </div>
         ) : (
-          <HoldingsTable holdings={b?.holdings || []} totalEval={b?.total_eval} />
+          <HoldingsTable holdings={b?.holdings || []} totalEval={b?.total_eval} account={account} />
         )}
       </section>
 

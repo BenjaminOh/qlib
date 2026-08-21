@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api, LiveHolding, StockTrade } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
 import ChartLink from "@/components/ChartLink";
+import { StrategyBadges } from "@/components/StrategyBadge";
+import { MANUAL_STRATEGY, PRIMARY_STRATEGY, strategyLabel } from "@/lib/strategies";
 
 const fmtKRW = (v: number) => {
   const a = Math.abs(v);
@@ -15,11 +17,19 @@ const fmtKRW = (v: number) => {
 };
 const fmtPct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
-export function TradeHistory({ code }: { code: string }) {
+/**
+ * 종목별 매매 이력.
+ *
+ * `strategy` 는 어느 원장을 볼지 고른다. 이 인자가 없던 시절에는 서버 기본값인
+ * "open" 원장만 보였고, 그래서 카페 계좌 종목을 펼치면 항상 "기록된 매매
+ * 이력이 없습니다"가 떴다. queryKey 에도 반드시 포함해야 계좌를 전환했을 때
+ * 이전 계좌의 이력이 캐시에서 되살아나지 않는다.
+ */
+export function TradeHistory({ code, strategy }: { code: string; strategy?: string }) {
   const [detail, setDetail] = useState<number | null>(null);
   const trades = useQuery({
-    queryKey: ["stock-trades", code],
-    queryFn: () => api.getStockTrades(code),
+    queryKey: ["stock-trades", code, strategy ?? "open"],
+    queryFn: () => api.getStockTrades(code, strategy),
   });
 
   if (trades.isLoading)
@@ -135,12 +145,38 @@ export function TradeHistory({ code }: { code: string }) {
   );
 }
 
+/**
+ * 이 종목의 매매 이력이 읽어야 할 원장.
+ *
+ * 서버가 청구를 수량 내림차순(manual 은 항상 마지막)으로 보내므로 첫 실제
+ * 전략이 곧 최대 보유 전략이다. 귀속이 전부 "수동/미상"이거나 아예 비어 있으면
+ * 계좌 대표 전략으로 물러난다.
+ */
+function ledgerStrategy(h: LiveHolding, account: string): string {
+  const real = (h.strategies ?? []).filter((l) => l.strategy !== MANUAL_STRATEGY);
+  return real[0]?.strategy ?? PRIMARY_STRATEGY[account] ?? "open";
+}
+
+/** 원장과 잔고가 어긋날 때만 붙는 설명. 확정이면 undefined. */
+function attributionNote(h: LiveHolding): string | undefined {
+  if (!h.attribution || h.attribution === "confirmed" || h.attribution === "unknown")
+    return undefined;
+  const ledger = (h.strategies ?? []).reduce((a, l) => a + l.ledger_qty, 0);
+  const nums = `원장 ${ledger.toLocaleString()}주 / 실제 ${h.qty.toLocaleString()}주`;
+  return h.attribution === "mismatch"
+    ? `${nums} — 주문 기록이 잔고와 어긋납니다`
+    : `${nums} — 일부 수량은 추정입니다`;
+}
+
 export default function HoldingsTable({
   holdings,
   totalEval,
+  account = "main",
 }: {
   holdings: LiveHolding[];
   totalEval?: number;
+  /** 어느 계좌의 잔고인가 — 귀속이 비었을 때 매매이력 원장을 고르는 데 쓴다. */
+  account?: string;
 }) {
   const [open, setOpen] = useState<string | null>(null);
 
@@ -180,6 +216,11 @@ export default function HoldingsTable({
               <div className="mt-0.5 text-[11px] text-gray-400 font-mono">
                 매수 총 {Math.round(h.qty * h.avg_price).toLocaleString()}원
               </div>
+              {(h.strategies?.length ?? 0) > 0 && (
+                <div className="mt-1" title={attributionNote(h)}>
+                  <StrategyBadges lots={h.strategies} />
+                </div>
+              )}
               <div className="flex items-baseline justify-between gap-2 mt-0.5 text-[11px] text-gray-400">
                 <span>
                   평가 {fmtKRW(h.eval_value)}
@@ -190,7 +231,12 @@ export default function HoldingsTable({
             </div>
             {expanded && (
               <div className="mt-2 bg-gray-50/60 rounded px-2">
-                <TradeHistory code={h.code} />
+                {(h.strategies?.length ?? 0) > 1 && (
+                  <p className="text-[10px] text-gray-400 pt-1">
+                    {strategyLabel(ledgerStrategy(h, account))} 원장 기준
+                  </p>
+                )}
+                <TradeHistory code={h.code} strategy={ledgerStrategy(h, account)} />
               </div>
             )}
           </div>
@@ -234,6 +280,11 @@ export default function HoldingsTable({
                       <span className="font-mono text-xs text-gray-500 ml-2">({h.code})</span>
                     )}
                     <ChartLink code={h.code} className="ml-2" />
+                    {(h.strategies?.length ?? 0) > 0 && (
+                      <span className="ml-2" title={attributionNote(h)}>
+                        <StrategyBadges lots={h.strategies} />
+                      </span>
+                    )}
                     <span className="text-[10px] text-gray-400 ml-2">{expanded ? "▲" : "▼ 매매이력"}</span>
                   </td>
                   <td className="px-3 py-2 text-right font-mono">{h.qty.toLocaleString()}</td>
@@ -250,7 +301,13 @@ export default function HoldingsTable({
                 {expanded && (
                   <tr key={`${h.code}-history`} className="bg-gray-50/60">
                     <td colSpan={9} className="px-4 py-2">
-                      <TradeHistory code={h.code} />
+                      {(h.strategies?.length ?? 0) > 1 && (
+                        <p className="text-[10px] text-gray-400 mb-1">
+                          {strategyLabel(ledgerStrategy(h, account))} 원장 기준 — 이 종목은
+                          여러 전략이 나눠 보유 중입니다.
+                        </p>
+                      )}
+                      <TradeHistory code={h.code} strategy={ledgerStrategy(h, account)} />
                     </td>
                   </tr>
                 )}

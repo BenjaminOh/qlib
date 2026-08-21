@@ -65,6 +65,21 @@ STRATEGY_CAFEREAL = "cafereal"  # exactly 8 chars — the Order.strategy limit
 # "strategy:account" tag has nowhere to live.
 DEFAULT_ACCOUNT_ID = "main"
 ACCOUNT_ID_LEN = 16
+CAFE_ACCOUNT_ID = "cafe"
+
+# 계좌 ↔ 그 계좌에 REAL 주문을 내는 전략들. 단일 진실원.
+#
+# 순서에 의미가 있다 — [0] 이 그 계좌의 대표(primary) 전략이고, balance_cache 의
+# PositionSnapshot 폴백이 읽는 행이 바로 그것이다. 한 계좌에서 두 번째 전략이
+# 실주문을 시작하면 여기 튜플에 덧붙이기만 하면 된다: 귀속(holding_attribution),
+# 잔고 폴백, 화면 배지가 전부 이 맵에서 파생된다.
+#
+# 시뮬 전략(close/flow/trail/scale/limit/cafe/surge/cafeopen/cafecool)은 어떤
+# 계좌에도 속하지 않는다. 그들의 포지션은 브로커가 아니라 Fill 장부에만 있다.
+ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
+    DEFAULT_ACCOUNT_ID: (STRATEGY_OPEN,),
+    CAFE_ACCOUNT_ID: (STRATEGY_CAFEREAL,),
+}
 
 # Order-execution vocabulary shared by the model, the policy service and the
 # API validators. Kept here so there is exactly one spelling of each value.

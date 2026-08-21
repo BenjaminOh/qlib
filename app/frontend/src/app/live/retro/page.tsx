@@ -185,7 +185,7 @@ export default function RetroPage() {
                         {expanded && (
                           <tr className="bg-gray-50/60">
                             <td colSpan={7} className="px-3 py-2">
-                              <TradeHistory code={e.code} />
+                              <TradeHistory code={e.code} strategy={strategy} />
                             </td>
                           </tr>
                         )}

@@ -19,10 +19,15 @@ from sqlalchemy import desc
 from ..auth import get_current_user
 from ..config import settings
 from ..db import (
+    ACCOUNT_STRATEGIES,
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     TradingAccount, ORD_TYPE_MARKET, ORD_TYPE_LIMIT, ORD_TYPES, PRICE_BASES,
 )
 from ..services.balance_cache import get_balance_for_read
+from ..services.holding_attribution import (
+    CONFIRMED_STATUSES, STATUS_UNKNOWN, UNCONFIRMED_STATUSES,
+    attribute_holdings, primary_strategy,
+)
 from ..services.kis_client import get_kis_client, set_trading_halt, trading_halted
 
 log = logging.getLogger(__name__)
@@ -31,6 +36,18 @@ router = APIRouter(prefix="/live", tags=["live"], dependencies=[Depends(get_curr
 
 
 # ─── Schemas ────────────────────────────────────────────────────────
+
+
+class HoldingStrategy(BaseModel):
+    """Which strategy this slice of the position is attributed to.
+
+    `qty` values across a holding always sum to the holding's `qty` — the KIS
+    balance is the denominator, the order ledger only decides how it splits.
+    """
+    strategy: str          # models.STRATEGY_* or holding_attribution.MANUAL
+    qty: int
+    ledger_qty: int = 0    # what the ledger claimed before allocation
+    confirmed: bool = True  # False = inferred from unreconciled orders
 
 
 class LiveHolding(BaseModel):
@@ -42,6 +59,12 @@ class LiveHolding(BaseModel):
     eval_value: float
     pnl: float
     pnl_pct: float
+    # Strategy attribution — additive fields. KIS has no idea who bought what,
+    # so these are derived from `orders.strategy` at read time.
+    strategies: list[HoldingStrategy] = []
+    # "confirmed" | "inferred" | "mismatch" | "unknown". Anything but
+    # "confirmed" means the badge is an estimate and must be shown as one.
+    attribution: str = STATUS_UNKNOWN
 
 
 class LiveBalanceResponse(BaseModel):
@@ -287,10 +310,21 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
         mode = "mock" if client.is_mock else client.env
     except (AccountNotConfigured, ValueError):
         mode = "unconfigured"
-    return LiveBalanceResponse(
-        cash=snap.cash,
-        total_eval=snap.total_eval,
-        holdings=[LiveHolding(
+
+    # Strategy attribution. Skipped when there is nothing to attribute, and
+    # never allowed to break the response: this endpoint's whole point is that
+    # it degrades instead of 500-ing, so a bad ledger costs the badges only.
+    attributed = {}
+    if snap.holdings and source not in ("empty", "no_account"):
+        try:
+            attributed = attribute_holdings(
+                {h.code: h.qty for h in snap.holdings}, account)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("balance: 전략 귀속 실패 — 배지 없이 응답: %s", exc)
+
+    def _holding(h) -> LiveHolding:
+        attr = attributed.get(h.code)
+        return LiveHolding(
             code=h.code,
             name=h.name or _stock_name_safe(h.code),
             qty=h.qty,
@@ -299,7 +333,17 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
             eval_value=h.eval_value,
             pnl=h.pnl,
             pnl_pct=h.pnl_pct,
-        ) for h in snap.holdings],
+            strategies=[HoldingStrategy(strategy=c.strategy, qty=c.qty,
+                                        ledger_qty=c.ledger_qty,
+                                        confirmed=c.confirmed)
+                        for c in attr.claims] if attr else [],
+            attribution=attr.status if attr else STATUS_UNKNOWN,
+        )
+
+    return LiveBalanceResponse(
+        cash=snap.cash,
+        total_eval=snap.total_eval,
+        holdings=[_holding(h) for h in snap.holdings],
         fetched_at=as_of,
         mode=mode,
         source=source,
@@ -366,19 +410,32 @@ def _price_series(code: str) -> dict[str, tuple[float | None, float | None]]:
         return {}
 
 
+# Which order statuses count as "this actually moved shares". Derived from the
+# attribution module so the ledger has ONE vocabulary: it splits the same set
+# into confirmed vs inferred, and a surface that disagreed with it would report
+# a different position than the badges do.
+_EXECUTED_STATUSES = CONFIRMED_STATUSES + UNCONFIRMED_STATUSES
+
+
 def _position_timeline(code: str, strategy: str,
                        kis_avg: float | None = None,
                        kis_now: float | None = None) -> list[StockTradeRow]:
     """Chronological order timeline with running position reconstruction.
 
     Shared by /stock/{code}/trades, /exits and the realized-pnl roll-up so
-    every surface computes avg price / realized pnl identically."""
+    every surface computes avg price / realized pnl identically.
+
+    Reads the FULL order history for the pair, deliberately unbounded. It used
+    to `.limit(200)` on an ASCENDING order — the OLDEST 200 rows — so a code
+    that ever crossed that count would freeze its running position at row 200
+    and report a stale holding forever. Cumulative replay cannot be truncated
+    from either end; per-(code, strategy) volume is bounded by trading days, so
+    there is nothing to cap."""
     prices = _price_series(code)
     with SessionLocal() as db:
         rows = (db.query(Order)
                   .filter(Order.code == code, Order.strategy == strategy)
                   .order_by(Order.trade_date.asc(), Order.id.asc())
-                  .limit(200)
                   .all())
         out: list[StockTradeRow] = []
         pos_qty = 0
@@ -401,7 +458,7 @@ def _position_timeline(code: str, strategy: str,
                 trade_date=r.trade_date, strategy=r.strategy, side=r.side,
                 qty=r.qty, status=r.status, error=r.error, reasons=reasons,
             )
-            executed = r.status in ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
+            executed = r.status in _EXECUTED_STATUSES
             if executed:
                 px = r.price
                 item.price_est = px is None
@@ -451,11 +508,17 @@ def _prev_close_cached(code: str, day: date) -> float | None:
         return None
 
 
-def _kis_holding_prices(code: str) -> tuple[float | None, float | None]:
+def _kis_holding_prices(code: str, account: str = "main"
+                        ) -> tuple[float | None, float | None]:
     """(avg_price, live quote) from the KIS balance — intraday fallback for
-    dates whose bar hasn't landed in kr_data yet (arrives at 15:45)."""
+    dates whose bar hasn't landed in kr_data yet (arrives at 15:45).
+
+    `account` matters: this used to call get_balance_for_read() with no
+    argument, so a cafe holding's intraday prices were read off the MAIN
+    account's balance — either the wrong stock's numbers or none at all.
+    """
     try:
-        snap, _, _ = get_balance_for_read()
+        snap, _, _ = get_balance_for_read(account)
         h = next((h for h in snap.holdings if h.code == code), None)
         if h is not None:
             return h.avg_price or None, h.eval_price or None
@@ -465,15 +528,31 @@ def _kis_holding_prices(code: str) -> tuple[float | None, float | None]:
 
 
 @router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
-def get_stock_trades(code: str, strategy: str = Query("open")):
-    """Per-stock trade timeline (see _position_timeline)."""
-    kis_avg, kis_now = _kis_holding_prices(code) if strategy == "open" else (None, None)
+def get_stock_trades(code: str,
+                     strategy: str | None = Query(None),
+                     account: str | None = Query(None,
+                                                 pattern="^(main|cafe)$")):
+    """Per-stock trade timeline (see _position_timeline).
+
+    Pick the ledger by `strategy`, or by `account` (→ that account's primary
+    strategy). Neither given falls back to "open" for backwards compatibility.
+
+    Why `account` exists: the holdings table called this with no argument at
+    all, so expanding a row on the 카페 계좌 tab searched the *open* ledger and
+    always rendered "기록된 매매 이력이 없습니다".
+    """
+    strategy = strategy or (primary_strategy(account) if account else "open")
+    # Intraday prices come from the broker for REAL accounts only — a simulated
+    # strategy's position doesn't exist at any broker, so there is nothing to
+    # read. Which account to ask is decided by the strategy, not by the caller.
+    kis_account = next((acct for acct, strats in ACCOUNT_STRATEGIES.items()
+                        if strategy in strats), None)
+    kis_avg, kis_now = (_kis_holding_prices(code, kis_account)
+                        if kis_account else (None, None))
     return _position_timeline(code, strategy, kis_avg=kis_avg, kis_now=kis_now)
 
 
 # ─── Per-stock return curves (holding-period lines for the chart) ────
-
-_EXECUTED_STATUSES = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
 
 
 class StockCurvePoint(BaseModel):

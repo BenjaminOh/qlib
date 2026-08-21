@@ -96,10 +96,19 @@ def cancel_unfilled_orders_task(self) -> dict:
     A sweep rather than one scheduled slot: the cutoff is per-account data
     (and per side), so there is no single time beat could fire at. Ticks with
     nothing due cost one indexed query and return.
+
+    Sweeps EVERY account. It used to call the function bare, which defaulted to
+    account_id="main" — and main is 시장가 with no cutoff, so the sweep returned
+    at `no_cutoff` every single tick. The cafe account's seeded 15:30 buy cutoff
+    had therefore never once executed, leaving unfilled cafereal limits resting
+    into the close. Iterating the account map also means a third account starts
+    being swept the day it is added, with no beat entry to remember.
     """
+    from ..db import ACCOUNT_STRATEGIES
     from ..services.live_trader import cancel_unfilled_orders
     self.update_state(state="RUNNING")
-    return cancel_unfilled_orders()
+    return {account_id: cancel_unfilled_orders(account_id=account_id)
+            for account_id in ACCOUNT_STRATEGIES}
 
 
 @celery_app.task(
@@ -485,6 +494,44 @@ def reconcile_fills_task(self) -> dict:
     self.update_state(state="RUNNING")
     result = reconcile_fills()
     notify_reconcile(result if isinstance(result, dict) else {})
+    return result
+
+
+@celery_app.task(
+    bind=True,
+    name="reconcile_fills_cafereal",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=3,
+)
+@market_day_only
+def reconcile_fills_cafereal_task(self, prev_day: bool = False) -> dict:
+    """cafereal 실주문 대사. 15:35(당일) + 익일 09:05(재확인) 두 번 돈다.
+
+    cafereal 은 15:28 에 −3% 지정가를 낸다. 상한가 종목이 대부분이라 대개
+    체결되지 않는데, **그 체결률이 이 실험의 측정값 자체**다. 지금까지는
+    reconcile_fills 를 부르는 곳이 open 하나뿐이라 cafereal 주문이 영구히
+    SUBMITTED 로 남았고, "안 샀다"와 "샀는지 모른다"를 구분할 수 없었다.
+
+    두 번 도는 이유: 15:30 동시호가 체결이 KIS 조회에 반영되는 시점이
+    확정적이지 않다. 15:35 에 못 잡으면 다음 날 아침에 다시 잡는다.
+    Idempotent 하므로 두 번 도는 것 자체는 무해하다.
+
+    `prev_day=True` 면 직전 거래일을 대사한다 — 익일 아침 슬롯용.
+    """
+    from datetime import date
+
+    from ..db import STRATEGY_CAFEREAL
+    from ..services.live_trader import _prev_trading_day, reconcile_fills
+    from ..services.notify import notify_reconcile
+    self.update_state(state="RUNNING")
+    day = _prev_trading_day(date.today()) if prev_day else date.today()
+    result = reconcile_fills(day, strategy=STRATEGY_CAFEREAL)
+    slot = "익일 09:05 재확인" if prev_day else "15:35 대사"
+    notify_reconcile(result if isinstance(result, dict) else {},
+                     strategy=STRATEGY_CAFEREAL, slot_label=slot)
     return result
 
 

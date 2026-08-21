@@ -213,14 +213,21 @@ def notify_bracket_exits(strategy: str, result: dict) -> None:
     send_telegram("\n".join(lines))
 
 
-def notify_reconcile(summary: dict) -> None:
-    """09:20 — actual fill prices + realised pnl per order."""
+def notify_reconcile(summary: dict, *, strategy: str = "open",
+                     slot_label: str = "09:20 대사") -> None:
+    """Actual fill prices + realised pnl per order, for one strategy's ledger.
+
+    `strategy` used to be hard-coded to "open" in the query below, so calling
+    this for another ledger would have listed the wrong account's orders under
+    the new one's heading. cafereal (15:28 실주문) now reconciles too, and its
+    fill rate is the whole point of that experiment — it needs its own message.
+    """
     if not telegram_enabled():
         return
     pinned = summary.get("pinned") or summary.get("updated") or 0
     if not pinned:
         return
-    lines = [f"✅ <b>체결 확정</b> ({summary.get('trade_date', '')} 09:20 대사)", ""]
+    lines = [f"✅ <b>체결 확정</b> ({summary.get('trade_date', '')} {slot_label})", ""]
     try:
         from datetime import date as _date
 
@@ -230,7 +237,7 @@ def notify_reconcile(summary: dict) -> None:
             rows = (db.query(Order, Fill)
                       .join(Fill, Fill.order_id == Order.id)
                       .filter(Order.trade_date == td,
-                              Order.strategy == "open",
+                              Order.strategy == strategy,
                               Order.status.in_(("FILLED", "PARTIAL")))
                       .order_by(Order.side.desc())
                       .all())
