@@ -336,11 +336,52 @@ def test_orderable_cash_parses_ord_psbl_cash(monkeypatch):
 
         @staticmethod
         def json():
-            return {"output": {"ord_psbl_cash": "3000000", "max_buy_qty": "49"}}
+            return {"output": {"ord_psbl_cash": "3000000", "max_buy_qty": "49",
+                               "nrcvb_buy_amt": "2500000"}}
 
     monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: Resp())
 
-    assert c.get_orderable_cash("005930", price=61_000) == {"cash": 3_000_000.0, "max_qty": 49}
+    assert c.get_orderable_cash("005930", price=61_000) == {
+        "cash": 3_000_000.0, "max_qty": 49, "nrcvb": 2_500_000.0}
+
+
+def test_orderable_cash_carries_nrcvb_for_observation():
+    """미수없는매수금액을 관측용으로 실어 나른다.
+
+    get_orderable_cash 의 docstring 은 ord_psbl_cash 를 "미수 없이 쓸 수 있는
+    금액"이라 단정하지만 검증된 적이 없다. KIS 에는 nrcvb_buy_amt 라는 전용
+    필드가 따로 있고, ord_psbl_cash 가 증거금 레버리지 금액이라면 호출부의
+    min() 을 푸는 순간 미수 방어가 사라진다. 판정 전까지 아무도 이 값을 쓰지
+    않지만, 실려 오지 않으면 판정 자체를 할 수 없다.
+    """
+    import inspect
+    src = inspect.getsource(kc.KISClient.get_orderable_cash)
+    assert "nrcvb_buy_amt" in src
+
+
+def test_orderable_cash_zero_is_indistinguishable_from_failure(monkeypatch):
+    """⚠ 알려진 결함을 고정한다 — 고치는 게 아니라 기록하는 테스트다.
+
+    `float(...) or None` 때문에 ord_psbl_cash == 0 이면 None 이 되고, 호출부의
+    `if psbl.get("cash"):` 가 falsy 로 빠져 **가장 위험한 값에서만 미수 가드가
+    통째로 꺼진다.** 조회 실패({})와 0원이 같은 값으로 뭉개져 있다.
+
+    이 동작을 바꾸는 것은 매매 동작 변경이라 별도 승인 대상이다. 지금은 계측만
+    한다(live_trader 가 두 경우를 서로 다른 로그로 구분한다).
+    """
+    c = _client(monkeypatch)
+
+    class Resp:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json():
+            return {"output": {"ord_psbl_cash": "0", "max_buy_qty": "0"}}
+
+    monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: Resp())
+    out = c.get_orderable_cash("005930", price=61_000)
+    assert out["cash"] is None      # 0.0 이 아니라 None — 여기가 트랩
 
 
 # ─── appkey-scoped redis keys ───────────────────────────────────────

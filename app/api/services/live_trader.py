@@ -625,6 +625,25 @@ def submit_daily_orders(today: date | None = None,
         topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
         total_equity = max(snapshot_after.total_eval, cash)
         slot_budget = total_equity / max(topk, 1)
+        # 관측 (2026-08-24) — 예수금이 당일 매도대금을 담는가.
+        #
+        # gap = 총평가 − Σ보유평가 − 예수금. 0 이 아니면 tot_evlu_amt 와
+        # dnca_tot_amt 가 서로 다른 시점을 보고 있다는 뜻이다. 매도가 있었던 날
+        # gap > 0 이고 그 크기가 당일 매도 체결금액과 비슷하면, 예수금은 아직
+        # 매도대금을 담지 않은 것이고 아래 min() 이 그 돈을 버리게 된다.
+        # 근거: docs/05-daily/INSIGHTS.md:29 — "KIS 예수금은 D+2 정산, 매수
+        # 당일 cash 가 안 줄어 보임"(이 계좌에서 직접 관측).
+        holdings_eval = sum(h.eval_value for h in snapshot_after.holdings)
+        budget_obs = {
+            "dnca": round(cash),
+            "tot_evlu": round(snapshot_after.total_eval),
+            "holdings_eval": round(holdings_eval),
+            "gap": round(snapshot_after.total_eval - holdings_eval - cash),
+            "slot_budget": round(slot_budget),
+            "n_buy": n_buy,
+        }
+        if not simulated:
+            log.info("budget: %s", budget_obs)
         # For a limit policy the ORDER price — not the last close — is what
         # affordability, sizing and the order itself must all agree on. The
         # price_fn hook makes that one substitution instead of three.
@@ -659,13 +678,34 @@ def submit_daily_orders(today: date | None = None,
             psbl = client.get_orderable_cash(
                 to_buy[0][0], price=to_buy[0][1] if buy_pol.is_limit else None)
             time.sleep(KIS_THROTTLE_SECONDS)
+            # 관측 (2026-08-24) — 세 갈래를 전부 구분해 찍는다. 예전에는
+            # `psbl < cash` 일 때만 로그가 있어서 나머지 둘이 보이지 않았다:
+            #   * {}      조회 실패 → 예수금 그대로 (가드가 조용히 꺼진 날)
+            #   * None    ord_psbl_cash == 0 인데 kis_client 의 `or 0 → or None`
+            #             때문에 falsy 가 되어 **가장 위험한 값에서만** 가드가
+            #             통째로 건너뛰어진다. 실패와 0원이 같은 값으로 뭉개져 있다.
+            #   * 정상    psbl > cash 면 그 차액이 곧 버려지는 매도대금이다.
+            budget_obs["psbl"] = psbl.get("cash")
+            budget_obs["nrcvb"] = psbl.get("nrcvb")
+            if not psbl:
+                log.warning("live_orders: 주문가능현금 조회 실패 — 예수금 %.0f 기준으로 진행"
+                            " (미수 가드 꺼짐)", cash)
+            elif not psbl.get("cash"):
+                log.warning("live_orders: 주문가능현금 0원 — 예수금 %.0f 기준으로 진행"
+                            " (or-None 트랩: 실패와 0원이 구분되지 않음)", cash)
+            elif psbl["cash"] < cash:
+                log.info("live_orders: 주문가능현금 %.0f < 예수금 %.0f — 주문가능 기준 사용",
+                         psbl["cash"], cash)
+            else:
+                log.warning("live_orders: 주문가능현금 %.0f > 예수금 %.0f — 차액 %.0f 은"
+                            " min() 에 버려진다 (당일 매도대금으로 추정)",
+                            psbl["cash"], cash, psbl["cash"] - cash)
             if psbl.get("cash"):
-                if psbl["cash"] < cash:
-                    log.info("live_orders: 주문가능현금 %.0f < 예수금 %.0f — 주문가능 기준 사용",
-                             psbl["cash"], cash)
                 cash = min(cash, psbl["cash"])
+        starved: list[dict] = []
         if to_buy:
             per_code_budget = min(cash / max(len(to_buy), 1), slot_budget)
+            budget_obs["per_code_budget"] = round(per_code_budget)
             for code, px in to_buy:
                 fill_source = None
                 if simulated:
@@ -676,6 +716,20 @@ def submit_daily_orders(today: date | None = None,
                     px = qpx or px
                 qty = max(int(per_code_budget // px), 0)
                 if qty <= 0:
+                    # 관측 (2026-08-24) — 이 분기는 지금까지 완전히 침묵했다.
+                    # 로그도 rejected 카운트도 없어서, 예산이 모자라 슬롯이
+                    # 증발한 날과 애초에 후보가 없던 날이 구분되지 않았다.
+                    # (result["buys"] 는 "사려고 한 수"라 dict 도 거짓말을 한다.)
+                    #
+                    # 가격 필터(_select_affordable_buys)는 slot_budget=자산 기준,
+                    # 사이징은 per_code_budget=현금 기준이라 여기 걸린 종목은
+                    # skipped_expensive 에도 안 들어가고 "다음 순위가 슬롯을
+                    # 가져간다"는 복구도 발동하지 않는다. 슬롯이 그냥 사라진다.
+                    starved.append({"code": code, "px": round(px),
+                                    "budget": round(per_code_budget)})
+                    if not simulated:
+                        log.warning("live_orders: %s 0주 스킵 — 종목예산 %.0f < 단가 %.0f",
+                                    code, per_code_budget, px)
                     continue
                 buy_why = _buy_reasons(db, today, code, flow=flow_metrics.get(code))
                 if simulated:
@@ -722,6 +776,10 @@ def submit_daily_orders(today: date | None = None,
             "sells": len(to_sell_codes),
             "buys": len(to_buy),
             "skipped_expensive": skipped_expensive,
+            # 예산이 모자라 0주로 증발한 슬롯. 거부(rejected)가 아니므로 기존
+            # 카운터와 섞지 않는다 — 알림의 "거부" 의미를 훼손하면 안 된다.
+            "starved": starved,
+            "budget": budget_obs,
             "submitted": submitted,
             "rejected": rejected,
         }

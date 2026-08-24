@@ -668,3 +668,96 @@ def test_kill_switch_does_not_block_a_cancel(monkeypatch):
 
 def test_paper_and_real_use_different_cancel_tr_ids(monkeypatch):
     assert _kis(monkeypatch, "paper").tr_set["cancel"].startswith("V")
+
+
+# ─── 예산 계측 (2026-08-24) ─────────────────────────────────────────
+#
+# "완전투자 상태에서 매도대금을 당일 매수에 못 쓴다"는 의심을 재기 위한 계측.
+# 여기 테스트는 **동작을 고정하는 게 아니라 관측 가능성을 고정한다** — 굶주림
+# 자체는 아직 확정된 버그가 아니고(KIS 필드 의미론 미확정), 고치는 것은 별도
+# 승인 대상이다. 다만 "조용히 일어나는 것"만은 지금 막는다.
+
+
+class StarvingClient(RecordingClient):
+    """예수금은 바닥인데 주문가능현금에는 매도대금이 잡혀 있는 계좌.
+
+    한국 증권사 관행상 매도대금은 당일 매수에 쓸 수 있지만 예수금(dnca_tot_amt)
+    은 D+2 결제라 아직 반영되지 않는다 — docs/05-daily/INSIGHTS.md:29 에 이
+    계좌에서 직접 관측된 기록이 있다. 그 상태를 그대로 만든다.
+    """
+
+    def __init__(self, dnca, psbl, holdings=()):
+        super().__init__(cash=dnca, holdings=holdings)
+        self._psbl = psbl
+
+    def get_balance(self):
+        from app.api.services.kis_client import AccountSnapshot
+        # 총평가는 보유분까지 포함 — 완전투자 계좌의 모습
+        return AccountSnapshot(cash=self._cash, total_eval=10_000_000.0,
+                               holdings=list(self._holdings))
+
+    def get_orderable_cash(self, code, price=None):
+        self.psbl_calls.append(price)
+        return {"cash": self._psbl, "nrcvb": self._psbl}
+
+
+def test_starved_slots_are_reported_not_silent(orders_env, session):
+    """예산이 모자라 0주가 된 슬롯이 결과에 남아야 한다.
+
+    예전에는 `if qty <= 0: continue` 가 로그도 카운터도 없이 지나갔다. 게다가
+    result["buys"] 는 "사려고 한 수"라, 한 주도 못 산 날에도 dict 은 "buys: 2"
+    라고 말했다. 매수가 조용히 안 나간 날과 애초에 후보가 없던 날이 사람 눈에
+    똑같이 보였다.
+    """
+    _account(session, buy_ord_type="market", sell_ord_type="market")
+    # 예수금 5만 · 단가 1만 · 후보 2건 → 종목당 2.5만 → 2주씩은 살 수 있다.
+    # 예수금을 1천원으로 낮추면 0주가 된다.
+    client = StarvingClient(dnca=1_000.0, psbl=1_000.0)
+
+    res = lt.submit_daily_orders(client=client, strategy="open", simulated=False)
+
+    assert res["starved"], "0주 스킵이 결과에 안 실렸다 — 다시 침묵한다"
+    assert {s["code"] for s in res["starved"]} <= {"000001", "000002"}
+    assert res["starved"][0]["px"] == 10_000
+    # 거부가 아니다 — 기존 카운터의 의미를 훼손하면 안 된다.
+    assert res["rejected"] == 0
+    assert not any(o["side"] == "BUY" for o in client.orders)
+
+
+def test_budget_observation_carries_both_cash_figures(orders_env, session):
+    """예수금과 주문가능현금을 나란히 남겨야 판정이 가능하다.
+
+    판정 규칙: 매도가 체결된 날 `주문가능 − 예수금 ≈ 당일 매도 체결금액` 이면
+    min() 이 매도대금을 버리고 있다는 직접 증거다.
+    """
+    _account(session, buy_ord_type="market", sell_ord_type="market")
+    client = StarvingClient(dnca=50_000.0, psbl=2_700_000.0)
+
+    res = lt.submit_daily_orders(client=client, strategy="open", simulated=False)
+
+    b = res["budget"]
+    assert b["dnca"] == 50_000
+    assert b["psbl"] == 2_700_000
+    assert b["nrcvb"] == 2_700_000      # 미수 가정 판정용
+    # gap = 총평가 − Σ보유평가 − 예수금. 보유가 없으면 총평가 그대로 남는다.
+    assert b["gap"] == 10_000_000 - 0 - 50_000
+    assert b["slot_budget"] == 1_000_000
+
+
+def test_min_keeps_the_smaller_figure_unchanged(orders_env, session):
+    """계측이 동작을 바꾸지 않았음을 고정한다.
+
+    주문가능현금이 예수금보다 크면 min() 이 예수금을 고른다 — 그 차액이 곧
+    버려지는 매도대금이다. 이 동작을 **고치는 것은 별도 승인 대상**이고, 지금은
+    그대로 두되 보이게만 만든다.
+    """
+    _account(session, buy_ord_type="market", sell_ord_type="market")
+    client = StarvingClient(dnca=30_000.0, psbl=5_000_000.0)
+
+    res = lt.submit_daily_orders(client=client, strategy="open", simulated=False)
+
+    # 예수금 3만 / 후보 2건 → 종목당 1.5만 → 단가 1만이면 1주씩.
+    # 주문가능 500만을 썼다면 종목당 100만(slot 상한) → 100주씩이었을 것이다.
+    buys = [o for o in client.orders if o["side"] == "BUY"]
+    assert buys, "매수가 아예 안 나갔다 — 이 테스트의 전제가 깨졌다"
+    assert all(o["qty"] == 1 for o in buys), f"min() 동작이 바뀌었다: {buys}"

@@ -174,7 +174,23 @@ def notify_open_orders(result: dict) -> None:
     skipped = result.get("skipped_expensive") or []
     if skipped:
         tail += f" · 고가주 스킵 {len(skipped)}"
+    # 예산이 모자라 0주로 증발한 슬롯. 거부가 아니라서 위 카운터에 안 잡히고,
+    # 지금까지는 어디에도 흔적이 없었다 — 매수가 조용히 안 나간 날과 애초에
+    # 후보가 없던 날이 사람 눈에 똑같이 보였다.
+    starved = result.get("starved") or []
+    if starved:
+        tail += f" · 예산부족 스킵 {len(starved)}"
     lines.append(tail)
+    if starved:
+        b = result.get("budget") or {}
+        lines.append(
+            f"💸 예산부족 {len(starved)}건 — 예수금 {_won(b.get('dnca'))} · "
+            f"주문가능 {_won(b.get('psbl'))} · 종목예산 {_won(b.get('per_code_budget'))}")
+        # 매도대금이 예수금에 아직 안 잡혔다면 그 차액이 곧 버려진 돈이다.
+        if b.get("psbl") and b.get("dnca") is not None and b["psbl"] > b["dnca"]:
+            lines.append(
+                f"⚠️ 주문가능이 예수금보다 {_won(b['psbl'] - b['dnca'])}원 큼 — "
+                "그만큼이 매수 예산에서 빠졌습니다 (당일 매도대금 추정)")
     if result.get("rejected"):
         lines.append("⚠️ 거부 발생 — 대시보드 확인 필요")
     lines.append("⏰ 체결가·실현손익은 09:20 대사 후 다시 알려드립니다.")

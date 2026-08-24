@@ -684,10 +684,21 @@ class KISClient:
         except Exception as exc:  # noqa: BLE001
             log.warning("KIS inquire-psbl-order failed for %s: %s", code, exc)
             return {}
+        # 관측 (2026-08-24) — 이 docstring 은 ord_psbl_cash 를 "미수 없이 쓸 수 있는
+        # 금액"이라 단정하지만 그건 **검증된 적 없는 가정**이다. KIS 응답에는
+        # nrcvb_buy_amt(미수없는매수금액) 전용 필드가 따로 있고, ord_psbl_cash 가
+        # 종목별 증거금률을 반영한 레버리지 금액일 가능성이 남아 있다. 그렇다면
+        # 호출부의 min() 을 푸는 순간 이 코드의 미수 방어가 사라진다.
+        # 필드를 나란히 찍어 그 가정을 판정한다. 하루치면 충분하다.
+        log.info("psbl-order %s: ord_psbl=%s nrcvb=%s max_amt=%s max_qty=%s",
+                 code, out.get("ord_psbl_cash"), out.get("nrcvb_buy_amt"),
+                 out.get("max_buy_amt"), out.get("max_buy_qty"))
         return {
-            # 주문가능현금 — 미수 없이 쓸 수 있는 금액
+            # 주문가능현금 — 미수 없이 쓸 수 있는 금액(위 주석의 미검증 가정)
             "cash": float(out.get("ord_psbl_cash") or 0) or None,
             "max_qty": int(float(out.get("max_buy_qty") or 0)) or None,
+            # 미수없는매수금액. 아직 아무도 쓰지 않는다 — 관측용으로만 실어 보낸다.
+            "nrcvb": float(out.get("nrcvb_buy_amt") or 0) or None,
         }
 
     # ─── 국내휴장일 (개장일 여부) ───────────────────────────────
