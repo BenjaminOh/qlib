@@ -69,6 +69,14 @@ celery_app.conf.beat_schedule = {
         "task": "trail_watch",
         "schedule": crontab(minute="*/5", hour="9-15", day_of_week="mon-fri"),
     },
+    # 잔고 차이로 원장을 맞춘다. 09:20 reconcile-fills 와 다른 일이다 —
+    # 그쪽은 아침 주문의 체결가를 확정하고, 이쪽은 원장이 모르는 매도(09:25
+    # 사다리 예약의 체결, 사용자의 MTS 직접 매도)를 찾아낸다.
+    # 15:45 kr_data 갱신(그날 종가) 뒤, 16:25 브래킷 스윕 앞.
+    "reconcile-balance": {
+        "task": "reconcile_balance",
+        "schedule": crontab(hour=16, minute=0, day_of_week="mon-fri"),
+    },
     # Resting limit orders: cancel whatever is past its account cutoff. The
     # cutoff lives in trading_accounts (per account, per side), so this sweeps
     # instead of firing at one fixed time. Cheap on ticks with nothing due.

@@ -97,6 +97,12 @@ ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
 #   - reserve_ladder_exits   : 오늘 이미 걸어둔 예약을 다시 걸지 않는다
 EXIT_KIND_LADDER = "ladder_reserve"
 
+# 원장에 없던 매도를 잔고 차이로 되짚어 만든 **합성** 청산 행의 표식.
+# 사용자가 MTS 앱에서 직접 판 경우가 대표적이다. 이 행은 우리가 낸 주문이
+# 아니므로 `kis_order_id` 가 None 이고, 체결가는 추정일 수 있다
+# (모의계좌는 체결내역 TR 이 비어 있어 그날 종가로 물러난다).
+EXIT_KIND_MANUAL = "manual_exit"
+
 ALL_STRATEGIES: tuple[str, ...] = (
     STRATEGY_OPEN, STRATEGY_CAFEREAL,                       # 실주문
     STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,

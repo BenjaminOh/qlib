@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # order into the whole account. 0 disables the check (paper default is
     # generous; set this to something real before flipping KIS_ENV=real).
     live_max_order_value: float = 3_000_000.0
+    # 하루에 원장으로 봉합할 수 있는 불일치 종목 수 상한. 초과하면 아무것도
+    # 쓰지 않고 알림만 낸다 — 잔고가 부분 응답이거나 조회가 이상한 날 가짜
+    # 청산이 원장에 폭주하는 것을 막는다. 사람이 보고 판단할 몫이다.
+    live_manual_exit_max_per_day: int = 5
     # Fees applied to simulated + reconciled fills so the curve is not
     # systematically optimistic. KIS 온라인 수수료 ~0.014% (buy and sell),
     # 거래세 0.18% (sell only, 2026 기준 코스피 0.03%+농특세 0.15%/코스닥 0.18%).

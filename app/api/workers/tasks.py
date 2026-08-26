@@ -527,6 +527,35 @@ def trail_watch_task(self, strategy: str = "open") -> dict:
 
 @celery_app.task(
     bind=True,
+    name="reconcile_balance",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=3,
+)
+@market_day_only
+def reconcile_balance_task(self, strategy: str = "open") -> dict:
+    """16:00 KST — 잔고와 원장의 차이를 메운다.
+
+    09:20 `reconcile_fills` 와 다른 일이다. 그쪽은 그날 아침 주문의 **체결가를
+    확정**하고, 이쪽은 **원장이 모르는 매도를 찾아낸다** — 09:25 사다리 예약의
+    체결(09:20 정산기가 이미 지나간 뒤에 걸린다)과 사용자의 MTS 직접 매도가
+    둘 다 여기서만 잡힌다.
+
+    16:00 인 이유: 15:30 장 마감으로 잔고가 확정되고 15:45 `refresh_kr_data` 로
+    그날 종가가 들어온 뒤여야 하며, 16:25 `close_bracket_exits` 보다는 앞서야
+    한다.
+
+    멱등이다 — 한 번 쓰면 차이가 0이 되므로 재시도가 안전하다.
+    """
+    from ..services.balance_reconcile import reconcile_by_balance
+    self.update_state(state="RUNNING")
+    return reconcile_by_balance(strategy=strategy)
+
+
+@celery_app.task(
+    bind=True,
     name="reconcile_fills",
     autoretry_for=(Exception,),
     retry_backoff=True,
