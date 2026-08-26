@@ -53,7 +53,7 @@ export const STRATEGY_COLORS: Record<string, string> = {
  * "어떤 규칙으로 사고 파는가"는 여기서 답한다.
  */
 export const STRATEGY_LABELS: Record<string, string> = {
-  open: "qlib 모델 · 09:00 시가 실주문 (기본 계좌)",
+  open: "qlib 모델 · 09:00 시가 실주문 · 사다리 +10% 절반 + 잔여 트레일 −7% (기본 계좌)",
   close: "qlib 모델 · 종가 매수 · 익절 +10%/전저점 손절 (시뮬)",
   flow: "qlib 모델 · 수급 재랭킹 · 브래킷 (시뮬)",
   trail: "qlib 모델 · 트레일링 −7% (시뮬)",
