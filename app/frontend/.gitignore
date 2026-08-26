@@ -1,0 +1,4 @@
+
+# TypeScript 증분 빌드 캐시 — 로컬 산출물이라 커밋 대상이 아니다.
+# npx tsc --noEmit 을 돌리면 생긴다.
+tsconfig.tsbuildinfo
