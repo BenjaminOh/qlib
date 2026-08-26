@@ -152,13 +152,16 @@ class RecordingKIS:
 
     is_mock = False
 
-    def __init__(self, holdings, *, ok=True):
+    def __init__(self, holdings, *, ok=True, balance_raises=False):
         self._holdings = holdings
         self.ok = ok
+        self._balance_raises = balance_raises
         self.calls: list[tuple] = []
 
     def get_balance(self):
         self.calls.append(("balance",))
+        if self._balance_raises:
+            raise RuntimeError("read timed out")
         return AccountSnapshot(cash=0.0, total_eval=0.0, holdings=self._holdings)
 
     def place_order(self, code, side, qty, price=None):
@@ -521,3 +524,55 @@ def test_trail_watch_stays_out_of_the_morning_order_window(monkeypatch):
     _freeze(9, 30)
     T.trail_watch_task()
     assert ran == [1]
+
+
+# ─── KIS 장애 — 관측 실패는 판단 보류다 ─────────────────────────────
+
+
+def test_ladder_holds_when_the_balance_cannot_be_read(env):
+    """빈 잔고를 '보유 없음'으로 읽으면 그날 익절선이 통째로 사라진다.
+
+    2026-08-26 14:10~ 모의투자 게이트웨이(openapivts:29443)가 통째로
+    read-timeout 을 냈다. 실전 게이트웨이는 멀쩡했으니 우리 문제가 아니었다.
+    """
+    _buy(env)
+    kis = RecordingKIS([_holding()], balance_raises=True)
+    res = lt.reserve_ladder_exits(DAY, client=kis)
+
+    assert res["status"] == "balance_unavailable"
+    assert res["reserved"] == []
+    assert not any(c[0] == "order" for c in kis.calls)
+
+
+def test_trail_holds_when_the_balance_cannot_be_read(env, bars):
+    """시세를 못 읽었을 때 청산하지 않는 것과 같은 이유다.
+
+    5분마다 도는 태스크라 예외를 던지면 하루 78번의 트레이스백이 쌓이고,
+    정작 "오늘 트레일 보호가 없었다"는 사실이 그 안에 묻힌다.
+    """
+    _buy(env)
+    kis = RecordingKIS([_holding()], balance_raises=True)
+    kis.quote = {"price": 1.0}          # 읽혔다면 즉시 청산됐을 값
+    res = lt.watch_trailing_exits(DAY, client=kis)
+
+    assert res["status"] == "balance_unavailable"
+    assert res["exits"] == []
+    assert not any(c[0] in ("order", "cancel") for c in kis.calls)
+
+
+def test_all_three_tasks_degrade_the_same_way(env, bars):
+    """세 태스크의 잔고 실패 처리가 같은 모양이어야 한다.
+
+    하나만 예외를 던지면 그 태스크만 다르게 실패해, 장애 로그를 읽는 사람이
+    '이건 왜 여기만 터지지'를 매번 다시 판단해야 한다.
+    """
+    from app.api.services import balance_reconcile as BR
+
+    _buy(env)
+    statuses = set()
+    for fn in (lt.reserve_ladder_exits, lt.watch_trailing_exits,
+               BR.reconcile_by_balance):
+        kis = RecordingKIS([_holding()], balance_raises=True)
+        kis.quote = {}
+        statuses.add(fn(DAY, client=kis)["status"])
+    assert statuses == {"balance_unavailable"}

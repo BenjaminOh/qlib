@@ -1479,7 +1479,17 @@ def reserve_ladder_exits(trade_date: date | None = None, *,
         return {"status": "no_account", "strategy": strategy,
                 "trade_date": day.isoformat(), "reserved": []}
 
-    snapshot = client.get_balance()
+    # ⚠ 잔고를 못 읽으면 **아무것도 하지 않는다.** 빈 잔고를 "보유 없음"으로 읽으면
+    # 그날 익절선이 통째로 사라지고, 그 사실이 트레이스백 더미에 묻힌다.
+    # 2026-08-26 14:10~ 모의투자 게이트웨이(openapivts:29443)가 통째로 read-timeout 을
+    # 냈다 — 실전 게이트웨이는 멀쩡했으므로 우리 문제가 아니었다. 결과 dict 로
+    # 물러나는 쪽이 재시도 3회를 태우는 것보다 낫다: 어차피 다음 날 아침에 다시 건다.
+    try:
+        snapshot = client.get_balance()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ladder_reserve: 잔고 조회 실패 — 예약 보류: %s", exc)
+        return {"status": "balance_unavailable", "strategy": strategy,
+                "trade_date": day.isoformat(), "reserved": [], "error": str(exc)}
     reserved: list[dict] = []
     skipped: list[dict] = []
     with SessionLocal() as db:
@@ -1630,7 +1640,17 @@ def watch_trailing_exits(trade_date: date | None = None, *,
         return {"status": "no_account", "strategy": strategy,
                 "trade_date": day.isoformat(), "exits": []}
 
-    snapshot = client.get_balance()
+    # ⚠ 여기서도 잔고 실패는 **판단 보류**다. 시세를 못 읽었을 때 청산하지 않는 것과
+    # 같은 이유다(아래 quote 가드) — 관측 실패를 "떨어졌다"로 읽으면 안 된다.
+    # 5분마다 도는 태스크라 예외를 던지면 하루 78번의 트레이스백이 쌓이고, 정작
+    # **"오늘 트레일 보호가 없었다"** 는 사실이 그 안에 묻힌다.
+    try:
+        snapshot = client.get_balance()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trail_watch: 잔고 조회 실패 — 이번 틱 판단 보류: %s", exc)
+        return {"status": "balance_unavailable", "strategy": strategy,
+                "trade_date": day.isoformat(), "watched": [], "exits": [],
+                "error": str(exc)}
     exits: list[dict] = []
     watched: list[dict] = []
     with SessionLocal() as db:

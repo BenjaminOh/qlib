@@ -28,6 +28,21 @@
 - **[2026-07-29] KIS 주문 스로틀**: 1거래/초 (주문 1건 = hashkey+주문 2콜). 코드 간격 1.2초.
 - **[2026-07-29] KIS 예수금은 D+2 정산** — 매수 당일 cash가 안 줄어 보임. 정산 전 평가는
   total_eval 기준으로 볼 것.
+- **[2026-08-26] 모의투자 게이트웨이만 단독으로 죽을 수 있다 — 실전은 멀쩡했다.**
+  14:10경부터 `openapivts.koreainvestment.com:29443` 이 통째로 read-timeout(잔고·시세·
+  체결내역·휴장일 전부). 같은 시각 호스트에서 `openapi.koreainvestment.com:9443`(실전)은
+  **HTTP 200 / 0.11초**로 정상이었다. **컨테이너·네트워크 문제로 오진하지 말 것** —
+  판정은 호스트에서 두 게이트웨이를 각각 `curl` 하는 것으로 1초 만에 끝난다.
+  ```bash
+  ssh tmanager-prod 'curl -s -o /dev/null -w "vts: %{http_code} %{time_total}s\n" \
+      --max-time 8 https://openapivts.koreainvestment.com:29443/'
+  ```
+  이날 영향: 09:00 주문·09:20 정산은 장애 전이라 정상. 15:20 `live_orders_close` 는
+  **성공**했다(시뮬 전략은 kr_data 로 돌고 `_is_risky` 만 경고 후 통과). KIS 잔고가 필요한
+  15:40 `live_sync` 는 실패. 대시보드는 `balance_cache` 의 stale 로 버텼다.
+  → **잔고 조회 실패는 세 태스크(`ladder_reserve`·`trail_watch`·`reconcile_balance`) 모두
+  `{"status": "balance_unavailable"}` 로 조용히 물러난다.** 주문은 나가지 않는다.
+  빈 잔고를 "보유 없음"이나 "전량 매도"로 읽으면 각각 익절선 소실·가짜 청산이 된다.
 - **[2026-08-26] 모의계좌는 체결내역 TR 이 빈 값을 돌려준다 — 체결 판정이 잔고 차이에 의존한다.**
   `get_daily_fills`(VTTC8001R)가 "모의투자 조회할 내역이 없습니다"를 돌려준다(2026-07-30 검증,
   08-25/26 운영 로그 `kis_fills: 0, matched: 0`으로 재확인). 09:20 `reconcile_fills` 의 상태
