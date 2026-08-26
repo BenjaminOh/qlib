@@ -115,8 +115,19 @@ class LiveOrderRow(BaseModel):
     strategy: str = "open"
     # SELL rows only: realized pnl vs the running average price at sale.
     # Market orders estimate the fill from the day open ('realized_est').
+    #
+    # **net(수수료·세금 차감)이다.** 예전에는 프론트가 이 값에서 평단을 역산했다 —
+    #   const entry = o.price - o.realized_pnl / o.qty
+    # net 은 (매도가 − 평단) × 수량 이 아니므로 그 역산은 틀어진다. 그래서 평단과
+    # 수익률을 **서버가 직접 내려준다**. 표시값에서 입력값을 되푸는 패턴을 없애면,
+    # 이후 손익 정의가 또 바뀌어도 화면이 조용히 틀리지 않는다.
     realized_pnl: float | None = None
     realized_est: bool = False
+    avg_buy_price: float | None = None   # 매도 시점의 에피소드 평단
+    ret_pct: float | None = None         # net 손익 ÷ (평단 × 체결수량)
+    realized_gross: float | None = None  # 가격 등락만 본 손익 — 툴팁용
+    realized_cost: float | None = None   # 수수료 + 세금
+    pnl_basis: str | None = None         # "net" | "gross"
     # True order kind — 'market' | 'limit' | 'sim'. NOT inferable from `price`:
     # sync_fills pins the reconciled average fill onto market orders.
     order_kind: str = "market"
@@ -379,7 +390,16 @@ class StockTradeRow(BaseModel):
     day_close: float | None = None
     ret_pct: float | None = None    # (close - avg) / avg
     pnl_amt: float | None = None    # (close - avg) * cum_qty
-    realized_pnl: float | None = None  # sells only: (sell - avg) * qty
+    # 매도 실현손익. **net(수수료·세금 차감)이 기본**이다 — `Fill.pnl` 을 그대로 쓴다.
+    #
+    # 예전에는 여기서 (매도가 − 평단) × 수량 을 다시 계산했다(= gross). 그런데
+    # 원장(Fill.pnl)·곡선(DailyPnL.realised_pnl)·텔레그램(notify.py)은 전부 net 이라
+    # **화면만 다른 숫자를 말하고 있었다.** 097230 실측: 화면 −16,520 vs 원장 −18,613.46.
+    realized_pnl: float | None = None
+    realized_gross: float | None = None  # (매도가 − 평단) × 수량 — 툴팁·검산용
+    realized_cost: float | None = None   # gross − net = 수수료 + 세금
+    pnl_basis: str | None = None         # "net"(원장 확정) | "gross"(미정산 추정)
+    filled_qty: int | None = None        # Fill 이 알려준 실제 체결수량 (PARTIAL 진단)
     # Sells only: the episode average price BEFORE this sell. `avg_price`
     # above is the post-event value, which is None once the position closes.
     avg_price_before: float | None = None
@@ -437,6 +457,23 @@ def _position_timeline(code: str, strategy: str,
                   .filter(Order.code == code, Order.strategy == strategy)
                   .order_by(Order.trade_date.asc(), Order.id.asc())
                   .all())
+        # 주문별 Fill 합계 — 실현손익의 진실은 원장에 있다.
+        #
+        # ⚠ `.first()` 를 쓰면 안 된다. 한 주문에 Fill 행이 여러 개일 수 있고
+        # (reconcile_fills 의 "행을 새로 만들면 같은 주문이 장부에 두 번 잡힌다"
+        # 주석이 그 전력을 남겼다), 그때 하나만 읽으면 부분체결이 과소 계상된다.
+        from sqlalchemy import func
+
+        fills: dict[int, tuple[float | None, int]] = {}
+        order_ids = [r.id for r in rows]
+        for i in range(0, len(order_ids), 500):   # SQLite 변수 999개 상한
+            chunk = order_ids[i:i + 500]
+            for oid, pnl_sum, qty_sum in (
+                    db.query(Fill.order_id, func.sum(Fill.pnl), func.sum(Fill.qty))
+                      .filter(Fill.order_id.in_(chunk))
+                      .group_by(Fill.order_id).all()):
+                fills[oid] = (pnl_sum, int(qty_sum or 0))
+
         out: list[StockTradeRow] = []
         pos_qty = 0
         pos_cost = 0.0
@@ -472,7 +509,22 @@ def _position_timeline(code: str, strategy: str,
                     else:  # SELL
                         avg_before = (pos_cost / pos_qty) if pos_qty else 0.0
                         item.avg_price_before = avg_before or None
-                        item.realized_pnl = (px - avg_before) * min(r.qty, pos_qty)
+                        gross = (px - avg_before) * min(r.qty, pos_qty)
+                        item.realized_gross = gross
+                        # 원장에 net 이 있으면 그것이 답이다. 없으면(미정산 SUBMITTED,
+                        # 매수 레그가 없어 _episode_avg 가 None 인 경우 등) gross 로
+                        # 물러나되 그 사실을 pnl_basis 로 밝힌다 — 모델링한 비용을
+                        # 임의로 빼서 net 인 척하지 않는다(나중 확정치와 어긋난다).
+                        net, fq = fills.get(r.id, (None, 0))
+                        if net is not None:
+                            item.realized_pnl = float(net)
+                            item.realized_cost = round(gross - float(net), 2)
+                            item.pnl_basis = "net"
+                        else:
+                            item.realized_pnl = gross
+                            item.pnl_basis = "gross"
+                        if fq:
+                            item.filled_qty = fq
                         pos_cost -= avg_before * min(r.qty, pos_qty)
                         pos_qty = max(pos_qty - r.qty, 0)
                 item.cum_qty = pos_qty
@@ -842,13 +894,35 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
                 .all())
     # Realized pnl per SELL order via the shared position timeline.
     _executed = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
-    realized_by_id: dict[int, tuple[float, bool]] = {}
+    realized_by_id: dict[int, StockTradeRow] = {}
+
+    def _rz(order_id: int, field: str):
+        t = realized_by_id.get(order_id)
+        return getattr(t, field, None) if t is not None else None
+
+    def _ret_pct(t: StockTradeRow | None) -> float | None:
+        """net 손익 ÷ 매입금액.
+
+        분모는 **매입금액**(평단 × 체결수량)이다 — 증권사 앱의 "매입금액 대비
+        손익률"과 같은 기준이라야 사용자가 대조할 수 있다. 매수 수수료까지 원가에
+        넣으면 이론적으로 더 정합하지만 대조 기준이 사라진다.
+
+        수량은 `filled_qty` 우선이다. 타임라인 재생은 Order.qty 를 쓰는데
+        reconcile_fills 는 ccld_qty(실체결)로 Fill 을 쓴다 — PARTIAL 주문에서는
+        둘이 다르고, 그때 Order.qty 로 나누면 분모와 분자가 서로 다른 주식 수를
+        말하게 된다.
+        """
+        if t is None or t.realized_pnl is None or not t.avg_price_before:
+            return None
+        qty = t.filled_qty or t.qty
+        cost = t.avg_price_before * qty
+        return t.realized_pnl / cost if cost else None
     for code, strat in {(o.code, o.strategy) for o in rows
                         if o.side == "SELL" and o.status in _executed}:
         try:
             for t in _position_timeline(code, strat, kis_now=_close_safe(code)):
                 if t.order_id is not None and t.realized_pnl is not None:
-                    realized_by_id[t.order_id] = (t.realized_pnl, t.price_est)
+                    realized_by_id[t.order_id] = t
         except Exception:  # noqa: BLE001
             continue
     with SessionLocal() as db:
@@ -906,8 +980,13 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
             price=o.price,
             status=o.status,
             error=o.error,
-            realized_pnl=(realized_by_id.get(o.id) or (None, False))[0],
-            realized_est=(realized_by_id.get(o.id) or (None, False))[1],
+            realized_pnl=_rz(o.id, "realized_pnl"),
+            realized_est=bool(_rz(o.id, "price_est")),
+            avg_buy_price=_rz(o.id, "avg_price_before"),
+            ret_pct=_ret_pct(realized_by_id.get(o.id)),
+            realized_gross=_rz(o.id, "realized_gross"),
+            realized_cost=_rz(o.id, "realized_cost"),
+            pnl_basis=_rz(o.id, "pnl_basis"),
             kis_order_id=o.kis_order_id,
             strategy=o.strategy or "open",
             order_kind=o.kind,

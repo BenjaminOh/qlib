@@ -7,6 +7,24 @@ import ChartLink from "@/components/ChartLink";
 import OrderStoryPanel from "@/components/OrderStoryPanel";
 import { STRATEGY_COLORS, STRATEGY_LABELS, STRATEGY_SHORT } from "@/lib/strategies";
 
+/** 손익 셀 툴팁 — 큰 숫자는 계좌와 같은 net 이되, 가격 등락과 비용을 숨기지 않는다.
+ *
+ * 예전에는 프론트가 손익에서 평단을 역산해 %를 냈다. net 은 (매도가 − 평단) × 수량 이
+ * 아니라 그 역산이 틀어진다. 이제 서버가 avg_buy_price·ret_pct 를 직접 내려준다. */
+function pnlTitle(o: LiveOrderRow): string | undefined {
+  if (o.realized_pnl == null) return undefined;
+  const parts: string[] = [];
+  if (o.avg_buy_price != null && o.price != null) {
+    const gross = (o.price / o.avg_buy_price - 1) * 100;
+    parts.push(`가격 ${gross >= 0 ? "+" : ""}${gross.toFixed(2)}%`);
+  }
+  if (o.realized_cost != null && o.realized_cost !== 0) {
+    parts.push(`수수료·세금 −${Math.round(Math.abs(o.realized_cost)).toLocaleString()}원`);
+  }
+  if (o.pnl_basis === "gross") parts.push("미정산 — 비용 미반영 추정치");
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
 const statusBadge = (status: string) => {
   const m: Record<string, string> = {
     SUBMITTED: "bg-blue-100 text-blue-700",
@@ -187,22 +205,14 @@ export default function OrdersTable({
                     : o.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700"
                 }`}>
                   {o.realized_pnl != null ? (
-                    <>
+                    <span title={pnlTitle(o)}>
                       {`${o.realized_pnl >= 0 ? "+" : ""}${Math.round(o.realized_pnl).toLocaleString()}${o.realized_est ? "*" : ""}`}
-                      {(() => {
-                        // Back out the entry average from (sell price, qty, pnl)
-                        // so the return % needs no extra API field.
-                        if (o.price == null || o.qty <= 0) return null;
-                        const entry = o.price - o.realized_pnl / o.qty;
-                        if (entry <= 0) return null;
-                        const pct = (o.price / entry - 1) * 100;
-                        return (
-                          <span className="block text-[11px] opacity-80">
-                            {`${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%${o.realized_est ? "*" : ""}`}
-                          </span>
-                        );
-                      })()}
-                    </>
+                      {o.ret_pct != null && (
+                        <span className="block text-[11px] opacity-80">
+                          {`${o.ret_pct >= 0 ? "+" : ""}${(o.ret_pct * 100).toFixed(1)}%${o.realized_est ? "*" : ""}`}
+                        </span>
+                      )}
+                    </span>
                   ) : "—"}
                 </td>
                 <td className="px-3 py-2">

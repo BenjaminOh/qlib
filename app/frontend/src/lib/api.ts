@@ -428,7 +428,16 @@ export interface LiveOrderRow {
   status: string;
   error: string | null;
   kis_order_id: string | null;
+  /** net — 수수료·세금 차감. 원장(Fill.pnl)·곡선·텔레그램과 같은 숫자다. */
   realized_pnl: number | null;
+  /** 매도 시점의 에피소드 평단. 프론트에서 역산하지 말 것. */
+  avg_buy_price?: number | null;
+  /** net 손익 ÷ 매입금액. 서버가 계산한다(정의를 한 곳에 둔다). */
+  ret_pct?: number | null;
+  realized_gross?: number | null;
+  realized_cost?: number | null;
+  /** "net"(원장 확정) | "gross"(미정산 추정) */
+  pnl_basis?: string | null;
   realized_est: boolean;
   strategy: string;
   // True order kind — not inferable from `price`, since a reconciled market
