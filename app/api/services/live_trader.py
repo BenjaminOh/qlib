@@ -1555,6 +1555,168 @@ def reserve_ladder_exits(trade_date: date | None = None, *,
             "reserved": reserved, "skipped": skipped}
 
 
+# (strategy, code, entry_date, day) → 트레일선. 장중 내내 상수라 하루 한 번만
+# 계산한다. `_peak_close` 가 **오늘 종가를 제외**하기 때문에 상수인 것이지,
+# 게을러서가 아니다 — 트레일은 종가 기준으로 하루 한 칸씩 올라간다.
+# 5분 폴링이 78틱이라 이게 없으면 qlib 봉을 하루에 1,500번 다시 읽는다.
+_TRAIL_LINE_CACHE: dict[tuple, float | None] = {}
+
+
+def _trail_line(strategy: str, code: str, entry_date: date, day: date,
+                avg_price: float, trail: float) -> tuple[float, str]:
+    """(트레일선, 근거) — 구조적 손절과 트레일 중 **높은 쪽**.
+
+    구조적 손절(전 저점 −1%, 캡 −10%)이 바닥을 깔고, 주가가 오르면 트레일이
+    그 위로 올라선다. 최고 종가가 평단 아래면 트레일선이 손절선 아래로
+    내려가므로 손절이 이긴다 — 그래서 max 다.
+
+    이 한 줄이 open 의 **유일한** 하락 방어다. 2026-08-26 전까지 open 은
+    익절도 손절도 트레일도 없이 랭크 이탈로만 팔았다.
+    """
+    key = (strategy, code, entry_date, day)
+    if key in _TRAIL_LINE_CACHE:
+        return _TRAIL_LINE_CACHE[key]
+    _reset_qlib_caches()
+    cap_px = avg_price * (1.0 - settings.live_close_bracket_sl)
+    prev_low = _prev_low(code, entry_date, settings.live_close_bracket_low_window)
+    low_stop = (prev_low * (1.0 - settings.live_close_bracket_low_buffer)
+                if prev_low else None)
+    if low_stop is not None and cap_px < low_stop < avg_price:
+        line, kind = low_stop, "prev_low"
+    else:
+        line, kind = cap_px, "cap"
+    peak = _peak_close(code, entry_date, day)
+    if peak:
+        trail_px = peak * (1.0 - trail)
+        if trail_px > line:
+            line, kind = trail_px, "trail"
+    if len(_TRAIL_LINE_CACHE) > 500:   # 날짜가 바뀌면 키가 늘기만 한다
+        _TRAIL_LINE_CACHE.clear()
+    out = (line, kind)
+    _TRAIL_LINE_CACHE[key] = out
+    return out
+
+
+def watch_trailing_exits(trade_date: date | None = None, *,
+                         strategy: str = STRATEGY_OPEN,
+                         client: KISClient | None = None) -> dict:
+    """장중 5분마다 — 트레일선을 깨면 잔여를 전량 청산한다.
+
+    KIS 에는 **역지정가(스톱) 주문이 없다.** "이 값 이하면 판다"를 미리 걸 수
+    없으므로 직접 지켜보는 것 말고는 방법이 없다. 상승 쪽(+10% 절반)은
+    `reserve_ladder_exits` 가 지정가로 미리 걸어두므로 폴링이 필요 없다.
+
+    **취소가 매도보다 먼저다.** 09:25 예약이 매도가능수량을 붙잡고 있어서,
+    취소하지 않고 전량 매도를 내면 수량 부족으로 거부된다. 청산해야 할 순간에
+    거부되는 것이 이 태스크가 막아야 할 바로 그 사고다.
+
+    관측 실패(시세 없음)에는 **아무것도 하지 않는다.** 값을 못 읽은 것을
+    "떨어졌다"로 읽으면 KIS 장애가 전량 청산이 된다.
+    """
+    init_db()
+    day = trade_date or date.today()
+    rule = EXIT_RULES.get(strategy, {})
+    trail = rule.get("trail_rest")
+    if not trail:
+        return {"status": "no_trail", "strategy": strategy,
+                "trade_date": day.isoformat(), "exits": []}
+    account_id = _account_for(strategy)
+
+    from .kis_client import AccountNotConfigured
+    try:
+        client = client or get_kis_client(account_id)
+    except (AccountNotConfigured, ValueError) as exc:
+        log.info("trail_watch: %s 건너뜀 — %s", strategy, exc)
+        return {"status": "no_account", "strategy": strategy,
+                "trade_date": day.isoformat(), "exits": []}
+
+    snapshot = client.get_balance()
+    exits: list[dict] = []
+    watched: list[dict] = []
+    with SessionLocal() as db:
+        for h in snapshot.holdings:
+            if h.qty <= 0 or h.avg_price <= 0:
+                continue
+            entry = _episode_entry(db, strategy, h.code)
+            if entry is None or entry.trade_date >= day:
+                # 진입일 당일은 트레일이 없다 — 기준이 될 종가가 아직 없다.
+                continue
+            line, kind = _trail_line(strategy, h.code, entry.trade_date, day,
+                                     h.avg_price, float(trail))
+            if not line or line <= 0:
+                continue
+            quote = client.get_quote(h.code) or {}
+            price = quote.get("price")
+            if not price:
+                log.info("trail_watch %s: 시세 없음 — 판단 보류", h.code)
+                continue
+            watched.append({"code": h.code, "price": price,
+                            "line": round(line, 2), "kind": kind})
+            if price > line:
+                continue
+
+            # ── 이탈 ── 취소 먼저, 그 다음 전량 시장가.
+            resting = [o for o in db.query(Order)
+                                    .filter(Order.strategy == strategy,
+                                            Order.code == h.code,
+                                            Order.side == "SELL",
+                                            Order.trade_date == day,
+                                            Order.status == "SUBMITTED").all()
+                       if _is_ladder_reservation(o.reasons_json)]
+            freed = True
+            for o in resting:
+                org_no, odno = _order_ids_from_response(o.raw_response)
+                cres = client.cancel_order(code=h.code, side="SELL", qty=o.qty,
+                                           org_no=org_no or "", orgn_odno=odno or "")
+                if cres.ok:
+                    o.status = "CANCELLED"
+                    o.error = "트레일 발동 — 전량 청산을 위해 예약 취소"
+                else:
+                    freed = False
+                    log.warning("trail_watch %s: 예약 취소 실패 — %s",
+                                h.code, cres.error)
+            db.flush()
+
+            qty = int(h.qty)
+            if not freed and h.sellable_qty is not None and h.sellable_qty < qty:
+                # 예약을 못 풀었으면 풀린 만큼만 판다. 전량을 내면 통째로 거부돼
+                # 아무것도 못 팔고 끝난다.
+                qty = int(h.sellable_qty)
+            if qty <= 0:
+                continue
+            reasons = {
+                "action": "sell",
+                "basis": (f"트레일링 이탈 — {kind} 기준선 {round(line):,}원을 "
+                          f"현재가 {round(float(price)):,}원이 깨뜨림 "
+                          f"(평단 {round(h.avg_price):,}, 잔여 {qty}주 전량)"),
+                "summary": "", "metrics": {}, "top_features": [],
+                "exit": {"kind": "trail_exit", "judged": "intraday_quote",
+                         "line": round(line, 2), "line_kind": kind,
+                         "quote": float(price), "trail": float(trail),
+                         "entry_avg": h.avg_price,
+                         "entry_date": entry.trade_date.isoformat(),
+                         "entry_order_id": entry.id,
+                         "cancelled_reservations": len(resting)},
+            }
+            res = client.place_order(h.code, "SELL", qty, price=None)
+            _persist_order(db, day, h.code, "SELL", qty, None, res,
+                           strategy=strategy, reasons=reasons)
+            if not res.ok:
+                log.warning("trail_watch SELL REJECTED %s x%d — %s",
+                            h.code, qty, res.error)
+            log.info("trail_watch 청산 %s: 현재가 %s ≤ %s(%s) — %d주 시장가",
+                     h.code, price, round(line), kind, qty)
+            exits.append({"code": h.code, "name": _stock_name(h.code),
+                          "qty": qty, "quote": float(price),
+                          "line": round(line, 2), "line_kind": kind,
+                          "cancelled": len(resting), "ok": res.ok,
+                          "error": res.error})
+        db.commit()
+
+    return {"status": "ok", "strategy": strategy, "account_id": account_id,
+            "trade_date": day.isoformat(), "watched": watched, "exits": exits}
+
+
 def evaluate_bracket_exits(trade_date: date | None = None,
                            strategy: str = STRATEGY_CLOSE) -> dict:
     """Sim exits driven by the per-strategy EXIT_RULES table:

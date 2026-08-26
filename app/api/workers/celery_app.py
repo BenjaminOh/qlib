@@ -61,6 +61,12 @@ celery_app.conf.beat_schedule = {
         "task": "ladder_reserve",
         "schedule": crontab(hour=9, minute=25, day_of_week="mon-fri"),
     },
+    # 잔여분 트레일링 — 역지정가(스톱) 주문이 없으므로 직접 지켜본다.
+    # 트레일선은 전일까지의 최고 종가로 계산되어 장중 내내 상수다.
+    "trail-watch-open": {
+        "task": "trail_watch",
+        "schedule": crontab(minute="*/5", hour="9-15", day_of_week="mon-fri"),
+    },
     # Resting limit orders: cancel whatever is past its account cutoff. The
     # cutoff lives in trading_accounts (per account, per side), so this sweeps
     # instead of firing at one fixed time. Cheap on ticks with nothing due.

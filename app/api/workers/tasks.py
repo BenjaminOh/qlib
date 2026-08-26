@@ -496,6 +496,20 @@ def ladder_reserve_task(self, strategy: str = "open") -> dict:
     return reserve_ladder_exits(strategy=strategy)
 
 
+@celery_app.task(bind=True, name="trail_watch")
+@market_day_only
+def trail_watch_task(self, strategy: str = "open") -> dict:
+    """장중 5분마다 — 트레일선을 깨면 잔여를 전량 청산한다.
+
+    KIS 에 역지정가(스톱) 주문이 없어서 폴링 말고는 방법이 없다. 자동
+    재시도를 붙이지 **않는다**: 이 태스크는 실주문을 내고 5분 뒤 다음 틱이
+    똑같은 판정을 다시 하므로, 재시도는 중복 청산 위험만 늘린다.
+    """
+    from ..services.live_trader import watch_trailing_exits
+    self.update_state(state="RUNNING")
+    return watch_trailing_exits(strategy=strategy)
+
+
 @celery_app.task(
     bind=True,
     name="reconcile_fills",

@@ -334,3 +334,158 @@ def test_a_filled_reservation_does_reduce_the_badge(env):
 
     attr = attribute_holdings({CODE: QTY - 67}, DEFAULT_ACCOUNT_ID, db=env)[CODE]
     assert {c.strategy: c.qty for c in attr.claims} == {STRATEGY_OPEN: QTY - 67}
+
+
+# ─── 커밋 3 — 장중 트레일링 폴링 ────────────────────────────────────
+
+
+@pytest.fixture
+def bars(monkeypatch):
+    """금호에이치티 실측 봉. 08-25 종 8,550 / 08-26 종 7,310.
+
+    _peak_close 는 **오늘 종가를 제외**하므로 08-26 의 최고 종가는 8,550 이고,
+    트레일선은 8,550 × 0.93 = 7,951.5 — 평단 6,494 대비 +22.4%다. 그날 저가
+    7,280 이 이를 깼다. 그게 사용자가 본 "40% 갔다가 14.7%로 되돌아온" 구간이다.
+    """
+    lt._TRAIL_LINE_CACHE.clear()
+    monkeypatch.setattr(lt, "_reset_qlib_caches", lambda: None)
+    monkeypatch.setattr(lt, "_peak_close", lambda c, e, d: 8550.0)
+    monkeypatch.setattr(lt, "_prev_low", lambda c, e, w: 6100.0)
+    return None
+
+
+def _reserved(env, kis):
+    lt.reserve_ladder_exits(DAY, client=kis)
+    return _sells(env)[-1]
+
+
+def test_trail_line_is_peak_close_minus_seven_percent(env, bars):
+    line, kind = lt._trail_line(STRATEGY_OPEN, CODE, ENTRY_DAY, DAY, AVG, 0.07)
+    assert (round(line, 1), kind) == (7951.5, "trail")
+
+
+def test_trail_line_is_constant_through_the_session(env, bars, monkeypatch):
+    """같은 날 두 번 물어도 같은 값이어야 한다.
+
+    _peak_close 가 오늘 종가를 빼기 때문에 장중 상수다. 값이 틱마다 움직이면
+    급등 중에 선이 따라 올라와 정상 눌림에서 털린다.
+    """
+    first = lt._trail_line(STRATEGY_OPEN, CODE, ENTRY_DAY, DAY, AVG, 0.07)
+    monkeypatch.setattr(lt, "_peak_close", lambda c, e, d: 99999.0)  # 안 읽혀야 정상
+    assert lt._trail_line(STRATEGY_OPEN, CODE, ENTRY_DAY, DAY, AVG, 0.07) == first
+
+
+def test_structural_stop_wins_when_the_peak_is_below_entry(env, monkeypatch):
+    """최고 종가가 평단 아래면 트레일선은 손절선 아래로 내려간다 → 손절이 이긴다.
+
+    이게 없으면 물린 종목의 방어선이 계속 낮아진다.
+    """
+    lt._TRAIL_LINE_CACHE.clear()
+    monkeypatch.setattr(lt, "_reset_qlib_caches", lambda: None)
+    monkeypatch.setattr(lt, "_peak_close", lambda c, e, d: 6000.0)   # 평단 아래
+    monkeypatch.setattr(lt, "_prev_low", lambda c, e, w: 6100.0)
+    line, kind = lt._trail_line(STRATEGY_OPEN, CODE, ENTRY_DAY, DAY, AVG, 0.07)
+    assert kind == "prev_low" and line > 6000.0 * 0.93
+
+
+def test_breach_cancels_the_reservation_before_selling(env, bars):
+    """순서가 전부다.
+
+    예약이 매도가능수량을 붙잡고 있어서, 취소하지 않고 전량 매도를 내면
+    수량 부족으로 거부된다 — 청산해야 할 바로 그 순간에.
+    """
+    _buy(env)
+    kis = RecordingKIS([_holding()])
+    _reserved(env, kis)
+    kis.calls.clear()
+    kis.quote = {"price": 7280.0}          # 08-26 저가. 트레일선 7,951.5 이탈
+
+    out = lt.watch_trailing_exits(DAY, client=kis)
+
+    kinds = [c[0] for c in kis.calls]
+    assert kinds == ["balance", "quote", "cancel", "order"]
+    assert kis.calls[-1] == ("order", CODE, "SELL", QTY, None)   # 전량 시장가
+    assert out["exits"][0]["line_kind"] == "trail"
+    cancelled = [o for o in _sells(env) if o.status == "CANCELLED"]
+    assert len(cancelled) == 1
+
+
+def test_above_the_line_does_nothing(env, bars):
+    _buy(env)
+    kis = RecordingKIS([_holding()])
+    _reserved(env, kis)
+    kis.calls.clear()
+    kis.quote = {"price": 8000.0}          # 7,951.5 위
+
+    out = lt.watch_trailing_exits(DAY, client=kis)
+    assert out["exits"] == []
+    assert [c[0] for c in kis.calls] == ["balance", "quote"]
+
+
+def test_missing_quote_never_liquidates(env, bars):
+    """값을 못 읽은 것을 '떨어졌다'로 읽으면 KIS 장애가 전량 청산이 된다."""
+    _buy(env)
+    kis = RecordingKIS([_holding()])
+    kis.quote = {}
+
+    out = lt.watch_trailing_exits(DAY, client=kis)
+    assert out["exits"] == [] and out["watched"] == []
+    assert not any(c[0] == "order" for c in kis.calls)
+
+
+def test_entry_day_has_no_trail(env, bars):
+    """진입 당일은 기준이 될 종가가 아직 없다."""
+    _buy(env, day=DAY)
+    kis = RecordingKIS([_holding()])
+    kis.quote = {"price": 1.0}
+    assert lt.watch_trailing_exits(DAY, client=kis)["exits"] == []
+
+
+def test_both_tasks_skip_on_a_market_holiday(monkeypatch):
+    """beat 는 mon-fri 만 알고 한국 공휴일을 모른다. 2026-08-17 에 그렇게
+    닫힌 장으로 실주문 4건이 나갔다."""
+    from app.api.workers import tasks as T
+
+    monkeypatch.setattr("app.api.services.trading_calendar.is_market_open",
+                        lambda d: False)
+    called = []
+    monkeypatch.setattr(lt, "reserve_ladder_exits",
+                        lambda **kw: called.append("ladder"))
+    monkeypatch.setattr(lt, "watch_trailing_exits",
+                        lambda **kw: called.append("trail"))
+
+    class _S:
+        def update_state(self, **kw):
+            pass
+
+    assert T.ladder_reserve_task(_S())["status"] == "market_closed"
+    assert T.trail_watch_task(_S())["status"] == "market_closed"
+    assert called == []
+
+
+def test_kumho_ht_real_bars_produce_the_designed_levels(env, bars):
+    """이 설계를 고른 근거 자체를 박제한다 — 금호에이치티 08-25/26 실측.
+
+        08-25  시 6,580  고 8,550  저 6,450  종 8,550   ← 상한가 마감
+        08-26  시 9,100  고 10,000 저 7,280  종 7,310   ← 고가 +54% 후 되밀림
+
+    두 값이 나와야 한다:
+      · 사다리 = 6,494 × 1.10 → 호가단위 5원 그리드로 **7,140** (08-25 고가가 덮음)
+      · 트레일 = 최고종가 8,550 × 0.93 = **7,951.5** (08-26 저가 7,280 이 이탈)
+
+    두 값을 절반씩 채우면 블렌디드 **+16.2%** — 랭크 이탈만 쓰는 지금(+12.26%)
+    보다 낫고, 사다리 10/15/20 전량(+13.77%)보다도 낫다. 트레일 단독은
+    +22.44%지만 본전 회수가 없다.
+
+    ⚠ 이건 **상한값**이다. 실제로는 5분 폴링이라 이탈을 7,951.5 에서 잡지
+    못하고 그 아래 어딘가에서 시장가로 판다. 호가단위 내림도 0.03%p 를 깎는다.
+    """
+    ladder_px = lt.round_to_tick(AVG * 1.10)
+    line, kind = lt._trail_line(STRATEGY_OPEN, CODE, ENTRY_DAY, DAY, AVG, 0.07)
+    assert (ladder_px, round(line, 1), kind) == (7140, 7951.5, "trail")
+    assert 8550.0 >= ladder_px          # 08-25 고가가 사다리를 덮는다
+    assert 7280.0 <= line               # 08-26 저가가 트레일을 깬다
+
+    half = QTY // 2
+    gain = half * (ladder_px - AVG) + (QTY - half) * (line - AVG)
+    assert round(gain / (QTY * AVG) * 100, 1) == 16.2
