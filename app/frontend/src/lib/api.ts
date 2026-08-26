@@ -620,12 +620,22 @@ export interface ExitRow {
   code: string;
   name: string | null;
   strategy: string;
+  /** 코드별 1,2,… — 같은 종목이 기간 안에 두 번 청산되면 두 행이다. 행 key 로 쓴다. */
+  episode?: number;
+  entry_date?: string | null;
+  sell_count?: number;
   last_sell_date: string;
   sold_qty: number;
   avg_buy_price: number | null;
   est_sell_price: number | null;
   price_est: boolean;
+  /** net — 수수료·세금 차감. 원장(Fill.pnl)과 같은 숫자다. */
   realized_pnl: number | null;
+  realized_gross?: number | null;
+  realized_cost?: number | null;
+  /** net 손익 ÷ 매입금액. 서버가 계산한다 — 프론트에서 다시 유도하지 말 것. */
+  ret_pct?: number | null;
+  pnl_basis?: string | null;
   reasons: StockTradeReasons | null;
 }
 

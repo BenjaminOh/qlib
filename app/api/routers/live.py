@@ -734,70 +734,139 @@ def get_stock_curves(strategy: str = Query("open"),
     return StockCurvesResponse(strategy=strategy, curves=curves)
 
 
+EpisodeSpan = tuple["date | None", list["StockTradeRow"]]
+
+
+def _episodes(timeline: list[StockTradeRow]) -> list[EpisodeSpan]:
+    """타임라인을 청산 에피소드로 자른다 — 새 재생 로직 없이.
+
+    `_position_timeline` 이 이미 채우는 `cum_qty` 만으로 성립한다:
+    매도 후 보유가 0이 되면 그 에피소드가 닫힌 것이다.
+
+    반환은 `(진입일, 매도 행들)` 의 목록이며 **닫힌 에피소드만** 담는다.
+    아직 보유 중인 구간은 애초에 들어오지 않는다 — 그래서 호출부에 "보유 중이니
+    빼자" 는 가드가 따로 필요 없다.
+
+    진입일은 **보유가 0에서 처음 양수가 된 행**의 날짜다. 타임라인 전체에서 첫
+    매수를 고르면 안 된다 — 같은 종목의 이전 에피소드 매수를 집어온다.
+
+    ⚠ 알려진 한계: 가격을 못 구한 매도(`exec_price` None)는 `_position_timeline`
+    에서 포지션을 줄이지 못한다(`if px is not None` 가드). 그러면 `cum_qty` 가 0이
+    되지 않아 **에피소드가 영원히 안 닫히고 그 종목이 청산 카드에서 조용히
+    사라진다.** 재생 로직 수정은 별건이라 여기서는 현상 그대로 둔다.
+    """
+    out: list[tuple[date | None, list[StockTradeRow]]] = []
+    cur: list[StockTradeRow] = []
+    entry: date | None = None
+    for t in timeline:
+        if t.cum_qty is None:      # 미체결 — 포지션에 영향 없음
+            continue
+        if entry is None and t.cum_qty > 0:
+            entry = t.trade_date
+        if t.side == "SELL" and t.status in _EXECUTED_STATUSES:
+            cur.append(t)
+        if t.cum_qty == 0 and cur:
+            out.append((entry, cur))
+            cur, entry = [], None
+    return out
+
+
 class ExitRow(BaseModel):
+    """청산 **에피소드** 한 건 = 한 행.
+
+    에피소드 = 보유 0에서 시작해 다시 0이 될 때까지. 같은 종목이 기간 안에 두 번
+    청산됐으면 두 행이 나온다 — 두 번 "보유 목록에서 빠졌기" 때문이다.
+
+    ⚠ `retrospective.build_episodes` 와 단위가 다르다. 그쪽은 **매도 1건 = 1행**
+    (사다리 3분할이면 3행)이고 `ret_pct` 는 의도된 gross(가격 등락)다. 가설 채점의
+    표본 수 기준이 거기 걸려 있어 합치지 않는다.
+    """
     code: str
     name: str | None = None
     strategy: str
-    last_sell_date: date
+    episode: int = 1                 # 코드별 1,2,… (프론트 행 식별자)
+    entry_date: date | None = None   # 에피소드 진입일
+    last_sell_date: date             # 에피소드 종료일
+    sell_count: int = 1              # 사다리 청산이면 2 이상
     sold_qty: int
-    avg_buy_price: float | None = None
-    est_sell_price: float | None = None
+    avg_buy_price: float | None = None   # 첫 매도 시점의 평단 (역산하지 않는다)
+    est_sell_price: float | None = None  # 매도들의 수량가중 평균
     price_est: bool = True
-    realized_pnl: float | None = None
+    realized_pnl: float | None = None    # net 합
+    realized_gross: float | None = None
+    realized_cost: float | None = None
+    ret_pct: float | None = None         # net 손익 ÷ 매입금액 (서버가 계산)
+    pnl_basis: str | None = None         # "net" | "gross"
     reasons: dict | None = None
 
 
 @router.get("/exits", response_model=list[ExitRow])
 def get_recent_exits(days: int = Query(30, ge=1, le=180), strategy: str = Query("open")):
-    """Positions fully exited recently — the stocks that 'disappeared' from
-    the holdings card, with why they were sold and the (estimated) realized
-    pnl. Market sells have no recorded fill price until fill reconciliation
-    exists, so exec/realized values use the day-open estimate."""
+    """최근 청산된 포지션 — 보유 카드에서 사라진 종목과 그 이유·실현손익.
+
+    **에피소드 1건 = 1행이다.** 예전에는 기간 내 매도를 전부 합산하면서 평단·매도가·
+    날짜는 마지막 한 건만 써서, 한 줄이 서로 다른 두 매매를 말했다(100840 이
+    "70주 +116,700" 으로 떴는데 실제로는 37주·33주 두 에피소드였다). 093370 은
+    마지막 청산이 손실인데 이전 이익과 합쳐져 부호까지 뒤집혔다.
+
+    컷오프는 **에피소드 종료일**로 판정한다. 매도 시각으로 자르면 사다리 청산이
+    경계에 걸칠 때 앞쪽 매도가 합계에서 조용히 빠진다.
+    """
     cutoff = date.today() - timedelta(days=days)
-    try:
-        held = {h.code for h in get_balance_for_read()[0].holdings} if strategy == "open" else set()
-    except Exception:  # noqa: BLE001
-        held = set()
+    # 예전에는 KIS 잔고를 읽어 "아직 보유 중이면 청산이 아니다" 를 걸렀다. 이제
+    # 에피소드 종료를 **구조적으로**(보유가 0이 됨) 판정하므로 그 가드가 필요 없다 —
+    # 보유 중인 구간은 애초에 _episodes 에 들어오지 않는다. 잔고 조회를 뺀 덕에
+    # KIS 가 죽어도 이 카드가 비지 않고, 시뮬 전략에서도 똑같이 동작한다
+    # (예전 가드는 strategy=="open" 일 때만 채워졌다).
     with SessionLocal() as db:
         sold_codes = [r[0] for r in (db.query(Order.code)
                                        .filter(Order.strategy == strategy,
                                                Order.side == "SELL",
-                                               Order.status.in_(("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")),
+                                               Order.status.in_(_EXECUTED_STATUSES),
                                                Order.trade_date >= cutoff)
                                        .distinct())]
     out: list[ExitRow] = []
     for code in sold_codes:
-        if code in held:
-            continue  # partially rotated but still held — not an exit
-        # Exited stocks have no KIS holding to fall back on intraday; use the
-        # last stored close as the estimate until today's bar lands at 15:45.
-        lc = _close_safe(code)
-        timeline = _position_timeline(code, strategy, kis_now=lc)
-        sells = [t for t in timeline
-                 if t.side == "SELL" and t.status in ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
-                 and t.trade_date >= cutoff]
-        if not sells:
+        # 청산된 종목은 장중에 기댈 KIS 보유가 없다 — 마지막 저장 종가로 추정한다.
+        timeline = _position_timeline(code, strategy, kis_now=_close_safe(code))
+        episodes = _episodes(timeline)
+        if not episodes:
             continue
-        last = sells[-1]
-        # avg buy price the position carried INTO the final sell: reconstruct
-        # from realized = (sell - avg) * qty when both are known.
-        avg_buy = None
-        if last.realized_pnl is not None and last.exec_price is not None and last.qty:
-            avg_buy = last.exec_price - (last.realized_pnl / last.qty)
         with SessionLocal() as db:
             name_row = (db.query(Order.name)
                           .filter(Order.code == code, Order.name.isnot(None))
                           .order_by(desc(Order.id)).first())
-        out.append(ExitRow(
-            code=code, name=name_row[0] if name_row else None, strategy=strategy,
-            last_sell_date=last.trade_date,
-            sold_qty=sum(s.qty for s in sells),
-            avg_buy_price=avg_buy,
-            est_sell_price=last.exec_price,
-            price_est=last.price_est,
-            realized_pnl=sum(s.realized_pnl for s in sells if s.realized_pnl is not None) or None,
-            reasons=last.reasons,
-        ))
+        for n, (entry, sells) in enumerate(episodes, start=1):
+            last = sells[-1]
+            if last.trade_date < cutoff:
+                continue
+            qty = sum(s.filled_qty or s.qty for s in sells)
+            # 평단은 첫 매도가 들고 있던 값 그대로다 — 손익에서 역산하지 않는다.
+            # net 은 (매도가 − 평단) × 수량 이 아니라 역산이 틀어진다.
+            avg_buy = sells[0].avg_price_before
+            priced = [s for s in sells if s.exec_price is not None]
+            sell_px = (sum((s.exec_price or 0) * (s.filled_qty or s.qty) for s in priced)
+                       / sum((s.filled_qty or s.qty) for s in priced)) if priced else None
+            nets = [s.realized_pnl for s in sells if s.realized_pnl is not None]
+            grosses = [s.realized_gross for s in sells if s.realized_gross is not None]
+            costs = [s.realized_cost for s in sells if s.realized_cost is not None]
+            # 하나라도 미정산이면 이 행 전체가 추정이다.
+            basis = "net" if all(s.pnl_basis == "net" for s in sells) else "gross"
+            pnl = round(sum(nets), 2) if nets else None   # 반올림은 마지막에 한 번만
+            # 손익이 정확히 0인 청산을 "—" 로 지우지 않는다(예전 `or None` 버그).
+            ret = (pnl / (avg_buy * qty)) if (pnl is not None and avg_buy and qty) else None
+            out.append(ExitRow(
+                code=code, name=name_row[0] if name_row else None, strategy=strategy,
+                episode=n, entry_date=entry,
+                last_sell_date=last.trade_date, sell_count=len(sells),
+                sold_qty=qty, avg_buy_price=avg_buy, est_sell_price=sell_px,
+                price_est=any(s.price_est for s in sells),
+                realized_pnl=pnl,
+                realized_gross=round(sum(grosses), 2) if grosses else None,
+                realized_cost=round(sum(costs), 2) if costs else None,
+                ret_pct=ret, pnl_basis=basis,
+                reasons=last.reasons,
+            ))
     out.sort(key=lambda r: r.last_sell_date, reverse=True)
     return out
 

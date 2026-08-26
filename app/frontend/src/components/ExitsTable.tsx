@@ -1,10 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, ExitRow, StockTrade } from "@/lib/api";
 import { FeatureContribList, MetricBadges } from "@/components/ReasonBadges";
 import ChartLink from "@/components/ChartLink";
+
+/** 행 식별자 — 같은 종목이 기간 안에 두 번 청산되면 두 줄이 나온다.
+ *
+ * 예전에는 `key={e.code}` 였다. 한 코드가 두 줄이 되는 순간 React key 가 충돌하고
+ * 펼침 상태(`open === e.code`)도 공유돼 **두 줄이 같이 펼쳐진다.** */
+const rowKey = (e: ExitRow) => `${e.code}-${e.episode ?? 1}`;
 
 /** Full buy→sell timeline for an exited stock (same data as holdings drill-down).
  *
@@ -62,16 +68,16 @@ export default function ExitsTable({
     {/* Mobile: card list (< md) */}
     <div className="md:hidden divide-y divide-gray-100">
       {exits.map((e) => {
-        const expanded = open === e.code;
+        const rowId = rowKey(e);
+        const expanded = open === rowId;
         const pnlCls = e.realized_pnl == null ? "text-gray-400"
           : e.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700";
-        const pct = e.realized_pnl != null && e.avg_buy_price && e.sold_qty
-          ? (e.realized_pnl / (e.avg_buy_price * e.sold_qty)) * 100 : null;
+        const pct = e.ret_pct != null ? e.ret_pct * 100 : null;
         return (
-          <div key={e.code} className="py-2.5">
+          <div key={rowId} className="py-2.5">
             <div
               className="cursor-pointer active:bg-gray-50"
-              onClick={() => setOpen(expanded ? null : e.code)}
+              onClick={() => setOpen(expanded ? null : rowId)}
             >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm font-medium text-gray-900 truncate">
@@ -124,17 +130,16 @@ export default function ExitsTable({
         </thead>
         <tbody>
           {exits.map((e) => {
-            const expanded = open === e.code;
+            const rowId = rowKey(e);
+            const expanded = open === rowId;
             const pnlCls = e.realized_pnl == null ? "text-gray-400"
               : e.realized_pnl >= 0 ? "text-emerald-700" : "text-red-700";
-            const pct = e.realized_pnl != null && e.avg_buy_price && e.sold_qty
-              ? (e.realized_pnl / (e.avg_buy_price * e.sold_qty)) * 100 : null;
+            const pct = e.ret_pct != null ? e.ret_pct * 100 : null;
             return (
-              <>
+              <Fragment key={rowId}>
                 <tr
-                  key={e.code}
                   className="border-t border-gray-100 cursor-pointer hover:bg-gray-50"
-                  onClick={() => setOpen(expanded ? null : e.code)}
+                  onClick={() => setOpen(expanded ? null : rowId)}
                 >
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className="text-gray-900">{e.name ?? e.code}</span>
@@ -159,13 +164,13 @@ export default function ExitsTable({
                   </td>
                 </tr>
                 {expanded && (
-                  <tr key={`${e.code}-tl`} className="bg-gray-50/60">
+                  <tr className="bg-gray-50/60">
                     <td colSpan={6} className="px-4 py-2">
                       <ExitTimeline code={e.code} strategy={strategy} />
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>

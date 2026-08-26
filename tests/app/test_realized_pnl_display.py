@@ -177,3 +177,158 @@ def test_orders_view_ships_avg_and_pct_so_frontend_never_back_solves(api, sessio
     assert sell.ret_pct == pytest.approx(0.0967, abs=0.0005)
     # 가격 등락(gross) 9.90% 와 다르다 — 그게 정상이다.
     assert sell.realized_gross == pytest.approx(87_850.03, abs=0.1)
+
+
+# ─── 버그 1 — 에피소드 1건 = 1행 ────────────────────────────────────
+
+
+def _exits(api, monkeypatch, *, days=30, held=()):
+    monkeypatch.setattr(api, "get_balance_for_read",
+                        lambda a="main": (type("S", (), {"holdings": [
+                            type("H", (), {"code": c})() for c in held]})(), "live", None))
+    return api.get_recent_exits(days=days, strategy="open")
+
+
+def test_two_episodes_become_two_rows(api, session, monkeypatch):
+    """100840 실측. 예전에는 "70주 +116,700" 한 줄이었다.
+
+    08-07 BUY 37 → 08-12 SELL 37   Fill.pnl +28,850.01
+    08-25 BUY 33 → 08-26 SELL 33   Fill.pnl +85,834.02
+    """
+    _trade(session, code="100840", day=date(2026, 8, 7), side="BUY",
+           qty=37, price=28_120.27)
+    _trade(session, code="100840", day=date(2026, 8, 12), side="SELL",
+           qty=37, price=28_900.0, pnl=28_850.01)
+    _trade(session, code="100840", day=date(2026, 8, 25), side="BUY",
+           qty=33, price=26_887.878)
+    _trade(session, code="100840", day=date(2026, 8, 26), side="SELL",
+           qty=33, price=29_550.0, pnl=85_834.02)
+
+    rows = _exits(api, monkeypatch, days=3650)
+
+    assert len(rows) == 2, "에피소드가 둘인데 한 줄로 합쳐졌다"
+    # 네거티브 단언 — 합산 버그의 지문
+    assert all(r.sold_qty != 70 for r in rows), "37+33=70 으로 합산됐다"
+    assert all(abs((r.realized_pnl or 0) - 116_700) > 1 for r in rows)
+
+    latest = max(rows, key=lambda r: r.last_sell_date)
+    assert latest.sold_qty == 33
+    assert latest.realized_pnl == pytest.approx(85_834.02, abs=0.01)
+    assert latest.avg_buy_price == pytest.approx(26_887.878, abs=0.001)
+    assert latest.ret_pct == pytest.approx(0.0967, abs=0.0005)
+    assert latest.entry_date == date(2026, 8, 25)
+
+    older = min(rows, key=lambda r: r.last_sell_date)
+    assert older.sold_qty == 37
+    assert older.realized_pnl == pytest.approx(28_850.01, abs=0.01)
+
+
+def test_loss_episode_is_not_masked_by_an_earlier_gain(api, session, monkeypatch):
+    """093370 실측 — 합산 버그의 최악 사례. **부호가 뒤집혔다.**
+
+    08-13 SELL +55,370 · 08-21 SELL −16,621 → 합치면 +38,749 로 이익처럼 보인다.
+    """
+    _trade(session, code="093370", day=date(2026, 8, 12), side="BUY",
+           qty=97, price=10_689.0)
+    _trade(session, code="093370", day=date(2026, 8, 13), side="SELL",
+           qty=97, price=11_260.0, pnl=55_370.0)
+    _trade(session, code="093370", day=date(2026, 8, 19), side="BUY",
+           qty=81, price=12_280.0)
+    _trade(session, code="093370", day=date(2026, 8, 21), side="SELL",
+           qty=81, price=12_100.0, pnl=-16_621.0)
+
+    rows = _exits(api, monkeypatch, days=3650)
+    latest = max(rows, key=lambda r: r.last_sell_date)
+
+    assert latest.realized_pnl < 0, "마지막 청산은 손실인데 이익으로 표시됐다"
+    assert latest.realized_pnl == pytest.approx(-16_621.0, abs=0.01)
+    assert latest.ret_pct is not None and latest.ret_pct < 0
+
+
+def test_ladder_exit_stays_one_row(api, session, monkeypatch):
+    """한 에피소드를 나눠 팔면(사다리) 여전히 한 줄이다 — 수량가중 평균 매도가."""
+    _trade(session, code="005930", day=date(2026, 8, 20), side="BUY",
+           qty=100, price=60_000.0)
+    _trade(session, code="005930", day=date(2026, 8, 24), side="SELL",
+           qty=40, price=63_000.0, pnl=110_000.0)
+    _trade(session, code="005930", day=date(2026, 8, 26), side="SELL",
+           qty=60, price=66_000.0, pnl=340_000.0)
+
+    rows = _exits(api, monkeypatch, days=3650)
+
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.sold_qty == 100 and r.sell_count == 2
+    assert r.realized_pnl == pytest.approx(450_000.0)
+    # (40×63,000 + 60×66,000) / 100 = 64,800
+    assert r.est_sell_price == pytest.approx(64_800.0)
+
+
+def test_cutoff_uses_episode_close_not_each_sell(api, session, monkeypatch):
+    """사다리가 컷오프에 걸쳐도 앞쪽 매도가 누락되지 않는다."""
+    _trade(session, code="005930", day=date(2026, 1, 2), side="BUY",
+           qty=100, price=60_000.0)
+    _trade(session, code="005930", day=date(2026, 1, 3), side="SELL",
+           qty=40, price=63_000.0, pnl=110_000.0)     # 컷오프 밖
+    _trade(session, code="005930", day=date.today(), side="SELL",
+           qty=60, price=66_000.0, pnl=340_000.0)     # 컷오프 안
+
+    rows = _exits(api, monkeypatch, days=30)
+
+    assert len(rows) == 1
+    assert rows[0].sold_qty == 100, "컷오프 밖 매도가 빠졌다"
+    assert rows[0].realized_pnl == pytest.approx(450_000.0)
+
+
+def test_closed_exit_shows_even_while_holding_again(api, session, monkeypatch):
+    """같은 종목을 다시 사서 보유 중이어도 **이전에 닫힌** 청산은 계속 보인다.
+
+    예전 코드는 KIS 잔고를 읽어 "보유 중이면 청산이 아니다" 로 통째로 걸렀다.
+    그러면 08-12 에 실제로 청산된 37주가 화면에서 사라지고, 이 카드의 합계가
+    원장과 또 어긋난다. 이제 종료를 구조적으로(보유 0) 판정하므로 잔고를 안 본다.
+    """
+    _trade(session, code="100840", day=date(2026, 8, 7), side="BUY",
+           qty=37, price=28_120.27)
+    _trade(session, code="100840", day=date(2026, 8, 12), side="SELL",
+           qty=37, price=28_900.0, pnl=28_850.01)
+    _trade(session, code="100840", day=date(2026, 8, 25), side="BUY",
+           qty=33, price=26_887.878)
+
+    rows = _exits(api, monkeypatch, days=3650, held=("100840",))
+
+    assert len(rows) == 1, "닫힌 08-12 청산까지 사라졌다"
+    assert rows[0].sold_qty == 37
+
+
+def test_zero_pnl_exit_is_not_erased(api, session, monkeypatch):
+    """손익이 정확히 0인 청산이 "—" 로 지워지던 `or None` 버그."""
+    _trade(session, code="005930", day=date(2026, 8, 25), side="BUY",
+           qty=10, price=60_000.0)
+    _trade(session, code="005930", day=date(2026, 8, 26), side="SELL",
+           qty=10, price=60_000.0, pnl=0.0)
+
+    rows = _exits(api, monkeypatch, days=3650)
+    assert rows[0].realized_pnl == 0.0, "0원 손익이 None 으로 지워졌다"
+
+
+def test_exits_sum_equals_ledger_sum(api, session, monkeypatch):
+    """창 단위 불변식 — 버그1이 깨뜨렸던 바로 그 항등식.
+
+    Σ(/exits 행 손익) == Σ(그 창에서 닫힌 에피소드의 Fill.pnl)
+    """
+    for code, buys, sells in [
+        ("100840", [(date(2026, 8, 7), 37, 28_120.27), (date(2026, 8, 25), 33, 26_887.878)],
+                   [(date(2026, 8, 12), 37, 28_900.0, 28_850.01),
+                    (date(2026, 8, 26), 33, 29_550.0, 85_834.02)]),
+        ("097230", [(date(2026, 8, 21), 59, 17_320.0)],
+                   [(date(2026, 8, 26), 59, 17_040.0, -18_613.46)]),
+    ]:
+        for d, q, px in buys:
+            _trade(session, code=code, day=d, side="BUY", qty=q, price=px)
+        for d, q, px, pnl in sells:
+            _trade(session, code=code, day=d, side="SELL", qty=q, price=px, pnl=pnl)
+
+    rows = _exits(api, monkeypatch, days=3650)
+    ledger = sum(f.pnl for f in session.query(Fill).all() if f.pnl is not None)
+
+    assert sum(r.realized_pnl for r in rows) == pytest.approx(ledger, abs=0.01)
