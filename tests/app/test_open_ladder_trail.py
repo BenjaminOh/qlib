@@ -489,3 +489,35 @@ def test_kumho_ht_real_bars_produce_the_designed_levels(env, bars):
     half = QTY // 2
     gain = half * (ladder_px - AVG) + (QTY - half) * (line - AVG)
     assert round(gain / (QTY * AVG) * 100, 1) == 16.2
+
+
+def test_trail_watch_stays_out_of_the_morning_order_window(monkeypatch):
+    """09:00 주문 · 09:20 정산 · 09:25 예약과 같은 appkey 게이트를 다툰다.
+
+    INSIGHTS 에 기록된 사고가 정확히 이것이다 — 대시보드 폴링과 경합해 매도가
+    거부됐다. 주문을 늦추느니 30분 늦게 지켜보는 쪽이 낫다. 장 마감(15:30)
+    뒤로는 시세가 움직이지 않아 폴링이 무의미하다.
+    """
+    from app.api.workers import tasks as T
+
+    monkeypatch.setattr("app.api.services.trading_calendar.is_market_open",
+                        lambda d: True)
+    ran = []
+    monkeypatch.setattr(lt, "watch_trailing_exits", lambda **kw: ran.append(1))
+    # 바인딩된 celery 태스크를 직접 부르면 request id 가 없다. 창 판정과
+    # 무관한 부분이므로 막아둔다.
+    monkeypatch.setattr(T.trail_watch_task, "update_state", lambda **kw: None)
+
+    def _freeze(h, m):
+        monkeypatch.setattr(T, "datetime", type("D", (), {
+            "now": staticmethod(lambda: dt.datetime(2026, 8, 26, h, m))}))
+
+    for h, m in ((9, 0), (9, 25), (15, 30), (16, 25)):
+        _freeze(h, m)
+        assert T.trail_watch_task()["status"] == "outside_window", f"{h}:{m}"
+    assert ran == []
+
+    # 창 안이면 실제로 돈다.
+    _freeze(9, 30)
+    T.trail_watch_task()
+    assert ran == [1]

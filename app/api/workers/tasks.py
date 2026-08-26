@@ -2,7 +2,7 @@
 
 import functools
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from .celery_app import celery_app
 from ..services.backtest_service import run_backtest
@@ -496,6 +496,15 @@ def ladder_reserve_task(self, strategy: str = "open") -> dict:
     return reserve_ladder_exits(strategy=strategy)
 
 
+# 폴링이 도는 창. 아침 배치(09:00 주문 · 09:20 정산 · 09:25 예약)와 겹치면
+# **같은 appkey 게이트를 두고 주문과 경합한다** — INSIGHTS 에 기록된 사고가
+# 정확히 그것이다(대시보드 폴링과 경합해 매도가 거부됨). 주문을 늦추느니
+# 30분 늦게 지켜보는 쪽이 낫다. 뒤끝은 장 마감(15:30) 직전에 끊는다 —
+# 그 뒤로는 시세가 움직이지 않아 폴링이 무의미하다.
+TRAIL_WATCH_FROM = (9, 30)
+TRAIL_WATCH_UNTIL = (15, 25)
+
+
 @celery_app.task(bind=True, name="trail_watch")
 @market_day_only
 def trail_watch_task(self, strategy: str = "open") -> dict:
@@ -504,8 +513,14 @@ def trail_watch_task(self, strategy: str = "open") -> dict:
     KIS 에 역지정가(스톱) 주문이 없어서 폴링 말고는 방법이 없다. 자동
     재시도를 붙이지 **않는다**: 이 태스크는 실주문을 내고 5분 뒤 다음 틱이
     똑같은 판정을 다시 하므로, 재시도는 중복 청산 위험만 늘린다.
+
+    창 판정을 beat crontab 이 아니라 여기서 하는 이유: 이유가 코드 옆에
+    있어야 누가 스케줄을 손볼 때 왜 09:00 이 아닌지 보인다.
     """
     from ..services.live_trader import watch_trailing_exits
+    now = datetime.now()
+    if not (TRAIL_WATCH_FROM <= (now.hour, now.minute) <= TRAIL_WATCH_UNTIL):
+        return {"status": "outside_window", "at": now.strftime("%H:%M")}
     self.update_state(state="RUNNING")
     return watch_trailing_exits(strategy=strategy)
 

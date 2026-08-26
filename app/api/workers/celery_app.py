@@ -63,6 +63,8 @@ celery_app.conf.beat_schedule = {
     },
     # 잔여분 트레일링 — 역지정가(스톱) 주문이 없으므로 직접 지켜본다.
     # 트레일선은 전일까지의 최고 종가로 계산되어 장중 내내 상수다.
+    # 실제로 도는 창은 09:30~15:25 — 태스크 안에서 자른다(TRAIL_WATCH_FROM).
+    # 아침 배치와 같은 appkey 게이트를 두고 경합하면 주문이 밀린다.
     "trail-watch-open": {
         "task": "trail_watch",
         "schedule": crontab(minute="*/5", hour="9-15", day_of_week="mon-fri"),
