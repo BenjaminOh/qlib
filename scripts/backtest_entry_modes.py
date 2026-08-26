@@ -46,14 +46,42 @@ log = logging.getLogger("backtest_entry_modes")
 
 
 def parse_mode(mode: str) -> tuple[str, float | None]:
-    """'market' | 'limitN' (N = 할인 %) | 'switchN' (레짐이면 limitN, 아니면 market)."""
+    """진입 방식.
+
+      market  — 당일 **시가** (운영 `open` 이 실제로 하는 것)
+      close   — 당일 **종가**. 같은 신호를 그대로 쓰되 09:00 이 아니라 15:20 에 산다.
+                IC 분해에서 **매수일 장중이 알파 −0.068%p** 로 가장 나쁜 구간이었다
+                (모델이 고른 종목은 갭업으로 열린 뒤 되밀린다). 종가 진입은 그
+                구간을 통째로 피하면서 **지정가와 달리 반드시 체결된다.**
+      limitN  — 전일종가 −N%% 지정가. 갭업을 안 쫓지만 갭업 종목은 체결이 안 된다.
+      switchN — 레짐이면 limitN, 아니면 market.
+    """
     if mode == "market":
         return "market", None
+    if mode == "close":
+        return "close", None
     if mode.startswith("limit"):
         return "limit", float(mode[5:]) / 100.0
     if mode.startswith("switch"):
         return "switch", float(mode[6:]) / 100.0
     raise SystemExit(f"알 수 없는 모드: {mode}")
+
+
+def valid_bar(b: dict | None) -> dict | None:
+    """NaN·비양수 봉을 걸러낸다.
+
+    운영 `_day_ohlc`(live_trader.py) 는 `any(v <= 0 for v in bar.values())` 로만
+    거르는데 **NaN 은 어떤 비교도 False** 라 그대로 통과한다(`nan <= 0` is False).
+    2026년 20일 구간에서는 안 터지다가 2024~2026 전 구간에서 터졌다 — 거래정지·
+    상장폐지 종목의 봉이 NaN 으로 들어오고, 그걸 보유 평가에 쓰면 **자산 전체가
+    NaN 이 되어 전파**된다. `v != v` 가 NaN 판정이다.
+    """
+    if not b:
+        return None
+    for v in b.values():
+        if v != v or v <= 0:      # NaN 또는 비양수
+            return None
+    return b
 
 
 def load_regime(path: str | None) -> dict[str, dict]:
@@ -121,6 +149,7 @@ def main() -> int:
     cash = args.seed
     pos: dict[str, dict] = {}          # code -> {"qty": int, "cost": float}
     rows, trades = [], []
+    last_px: dict[str, float] = {}     # 정지 종목 평가용 마지막 유효 종가
     skipped_days = 0
 
     for day in days:
@@ -139,7 +168,18 @@ def main() -> int:
         ranks = dict(zip(sig["code"], sig["rank"]))
         target = list(sig[sig["rank"] <= topk]["code"])
 
-        bars = {c: _day_ohlc(c, day) for c in set(target) | set(pos)}
+        bars = {c: valid_bar(_day_ohlc(c, day)) for c in set(target) | set(pos)}
+        for c, b in bars.items():
+            if b:
+                last_px[c] = b["close"]
+
+        def mark(code: str) -> float:
+            """보유 평가가. 오늘 봉이 없으면(정지) **마지막 유효 종가**로 든다.
+            0 으로 떨어뜨리면 정지 종목을 상폐 처리하는 셈이 된다."""
+            b = bars.get(code)
+            if b:
+                return b["close"]
+            return last_px.get(code, pos[code]["cost"] / max(pos[code]["qty"], 1))
 
         # ── 1) 매도 — 랭크 이탈. 오늘 순위가 나쁜 것부터(_rank_sorted_sells 와 동일 규칙)
         held = set(pos)
@@ -159,7 +199,7 @@ def main() -> int:
             pos.pop(code)
 
         # ── 2) 매수
-        equity = cash + sum(p["qty"] * (bars.get(c) or {}).get("close", 0) for c, p in pos.items())
+        equity = cash + sum(pos[c]["qty"] * mark(c) for c in pos)
         slot_budget = equity / max(topk, 1)
         n_buy = _buy_count(held=len(pos), selling=0, topk=topk, n_drop=n_drop, simulated=False)
         cands = [c for c in target if c not in pos]
@@ -171,7 +211,12 @@ def main() -> int:
             bar = bars.get(c)
             if not bar:
                 continue
-            ref = bar["open"] if day_kind == "market" else (_prev_close_before(c, day) or bar["open"])
+            if day_kind == "market":
+                ref = bar["open"]
+            elif day_kind == "close":
+                ref = bar["close"]
+            else:
+                ref = _prev_close_before(c, day) or bar["open"]
             if ref > slot_budget:
                 continue
             planned.append(c)
@@ -182,6 +227,8 @@ def main() -> int:
             bar = bars[code]
             if day_kind == "market":
                 fill_px, filled = bar["open"], True
+            elif day_kind == "close":
+                fill_px, filled = bar["close"], True
             else:
                 prev_c = _prev_close_before(code, day)
                 if not prev_c:
@@ -194,6 +241,8 @@ def main() -> int:
                 trades.append({"date": day.isoformat(), "side": "BUY", "code": code,
                                "qty": 0, "px": fill_px, "filled": False})
                 continue
+            if fill_px != fill_px or fill_px <= 0 or per_code != per_code:
+                continue
             qty = int(per_code // fill_px)
             if qty <= 0:
                 continue
@@ -205,7 +254,7 @@ def main() -> int:
             trades.append({"date": day.isoformat(), "side": "BUY", "code": code,
                            "qty": qty, "px": fill_px, "filled": True})
 
-        eq = cash + sum(p["qty"] * (bars.get(c) or {}).get("close", 0) for c, p in pos.items())
+        eq = cash + sum(pos[c]["qty"] * mark(c) for c in pos)
         rows.append({"date": day.isoformat(), "cash": cash, "equity": eq, "n_pos": len(pos)})
 
     if not rows:
