@@ -157,6 +157,31 @@ function ledgerStrategy(h: LiveHolding, account: string): string {
   return real[0]?.strategy ?? PRIMARY_STRATEGY[account] ?? "open";
 }
 
+/**
+ * 원장 불일치를 **눈에 보이게** 표시한다.
+ *
+ * 예전에는 이 설명이 `title=` 툴팁뿐이었다 — 데스크톱에서 배지 위에 마우스를
+ * 1초 이상 올려야만 보이고 **모바일에서는 아예 렌더링되지 않았다.** 배지 숫자
+ * 자체는 KIS 수량으로 정확하게 나오므로 화면상 이상해 보이는 것이 아무것도
+ * 없었다. "원장이 잔고와 어긋난다"는 사용자가 알아야 할 사실이지 마우스를
+ * 올려야 알 수 있는 부가정보가 아니다.
+ */
+function AttributionFlag({ h }: { h: LiveHolding }) {
+  const note = attributionNote(h);
+  if (!note) return null;
+  const bad = h.attribution === "mismatch";
+  return (
+    <span
+      className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium align-middle ${
+        bad ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"
+      }`}
+      title={note}
+    >
+      {bad ? "⚠ 원장 불일치" : "추정"}
+    </span>
+  );
+}
+
 /** 원장과 잔고가 어긋날 때만 붙는 설명. 확정이면 undefined. */
 function attributionNote(h: LiveHolding): string | undefined {
   if (!h.attribution || h.attribution === "confirmed" || h.attribution === "unknown")
@@ -164,7 +189,7 @@ function attributionNote(h: LiveHolding): string | undefined {
   const ledger = (h.strategies ?? []).reduce((a, l) => a + l.ledger_qty, 0);
   const nums = `원장 ${ledger.toLocaleString()}주 / 실제 ${h.qty.toLocaleString()}주`;
   return h.attribution === "mismatch"
-    ? `${nums} — 주문 기록이 잔고와 어긋납니다`
+    ? `${nums} — 주문 기록에 없는 매도가 있습니다 (MTS 직접 매매 등). 16:00 잔고 대사가 원장을 채웁니다.`
     : `${nums} — 일부 수량은 추정입니다`;
 }
 
@@ -217,8 +242,9 @@ export default function HoldingsTable({
                 매수 총 {Math.round(h.qty * h.avg_price).toLocaleString()}원
               </div>
               {(h.strategies?.length ?? 0) > 0 && (
-                <div className="mt-1" title={attributionNote(h)}>
+                <div className="mt-1">
                   <StrategyBadges lots={h.strategies} />
+                  <AttributionFlag h={h} />
                 </div>
               )}
               <div className="flex items-baseline justify-between gap-2 mt-0.5 text-[11px] text-gray-400">
@@ -281,8 +307,9 @@ export default function HoldingsTable({
                     )}
                     <ChartLink code={h.code} className="ml-2" />
                     {(h.strategies?.length ?? 0) > 0 && (
-                      <span className="ml-2" title={attributionNote(h)}>
+                      <span className="ml-2">
                         <StrategyBadges lots={h.strategies} />
+                        <AttributionFlag h={h} />
                       </span>
                     )}
                     <span className="text-[10px] text-gray-400 ml-2">{expanded ? "▲" : "▼ 매매이력"}</span>

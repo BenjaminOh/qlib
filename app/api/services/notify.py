@@ -275,6 +275,49 @@ def notify_reconcile(summary: dict, *, strategy: str = "open",
     send_telegram("\n".join(lines))
 
 
+def notify_balance_reconcile(result: dict) -> None:
+    """16:00 잔고 대사 — 원장에 없던 매도를 봉합했을 때만 보낸다.
+
+    **봉합은 조용히 일어나면 안 된다.** 이건 추정 가격이 원장에 들어가는
+    유일한 경로다. 평상시(차이 0)에는 아무것도 보내지 않는다 — 매일 오는
+    "이상 없음"은 곧 안 읽는 알림이 된다.
+    """
+    if not telegram_enabled():
+        return
+    manual = result.get("manual") or []
+    matched = result.get("matched") or []
+    if not manual and not result.get("over_cap"):
+        return          # 사다리 체결만 정산된 날은 09:20 대사 알림으로 충분하다
+
+    day = result.get("trade_date", "")
+    if result.get("over_cap"):
+        send_telegram("\n".join([
+            f"🚨 <b>원장 불일치 과다</b> ({day})",
+            "",
+            f"{len(manual)}종목이 잔고와 어긋납니다 (상한 {result.get('cap')}).",
+            "<b>원장에 아무것도 쓰지 않았습니다.</b> 잔고 조회가 이상했을 수",
+            "있으니 확인이 필요합니다.",
+            "",
+            *(f"· {m.get('name') or m['code']} — 원장 {m.get('ledger_qty')}주 / "
+              f"잔고 {m.get('kis_qty')}주" for m in manual),
+        ]))
+        return
+
+    lines = [f"📒 <b>수동 매도 봉합</b> ({day} 16:00 잔고 대사)", "",
+             "주문 기록에 없는 매도를 찾아 원장에 채웠습니다.", ""]
+    for m in manual:
+        est = "체결내역" if m.get("price_source") == "ccld" else "종가 추정"
+        lines.extend([
+            f"📉 {_chart(m['code'], m.get('name'), bold=True)}",
+            f"💵 {m['qty']:,}주 @ {_won(m['price'])}원 ({est})",
+            f"📊 원장 {m.get('ledger_qty')}주 / 잔고 {m.get('kis_qty')}주",
+            "",
+        ])
+    if matched:
+        lines.append(f"(예약 매도 {len(matched)}건은 정상 체결로 처리)")
+    send_telegram("\n".join(lines))
+
+
 _SCOUT_PATTERNS = {"B": "급등 타이트 눌림", "A": "신고가 돌파", "R": "저항대 돌파",
                    "C": "급등 눌림 재진입", "D": "낙폭과대 반등"}
 

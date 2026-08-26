@@ -133,6 +133,15 @@ class LiveOrderRow(BaseModel):
     order_kind: str = "market"
     # reasons_json["basis"] — the decision basis captured at order time.
     basis: str | None = None
+    # reasons_json["exit"]["kind"] — 이 매도가 어떤 성격인가.
+    #   "ladder_reserve" = 09:25 에 미리 건 익절 지정가 (체결 전에는 예약)
+    #   "manual_exit"    = 원장에 없던 매도를 잔고 차이로 되짚어 만든 합성 행
+    #                      (사용자가 MTS 로 직접 판 경우). 우리가 낸 주문이
+    #                      아니므로 kis_order_id 가 없고 체결가가 추정일 수 있다.
+    # 화면이 "봇이 판 것"과 "사람이 판 것"을 구분하지 못하면, 추정 가격이
+    # 확정 체결가와 똑같은 얼굴로 표에 앉는다.
+    exit_kind: str | None = None
+    price_source: str | None = None      # "ccld" | "close" | "last_close"
     # limit-strategy BUY rows only: previous trading day's close and the ACTUAL
     # fill discount vs it (negative = bought below prev close). A gap-down open
     # fills deeper than the configured discount, and that shows up here.
@@ -1031,6 +1040,14 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
             except Exception:  # noqa: BLE001
                 return None
 
+        def _exit_info(o: Order) -> dict:
+            if not o.reasons_json:
+                return {}
+            try:
+                return (json.loads(o.reasons_json) or {}).get("exit") or {}
+            except Exception:  # noqa: BLE001
+                return {}
+
         def _discount(o: Order) -> float | None:
             pc = prev_closes.get((o.code, o.trade_date))
             if not pc or not o.price:
@@ -1060,6 +1077,8 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
             strategy=o.strategy or "open",
             order_kind=o.kind,
             basis=_basis(o),
+            exit_kind=_exit_info(o).get("kind"),
+            price_source=_exit_info(o).get("price_source"),
             prev_close=prev_closes.get((o.code, o.trade_date)),
             discount_pct=_discount(o),
         ) for o in rows]

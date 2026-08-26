@@ -55,6 +55,33 @@ const STATUS_TITLES: Record<string, string> = {
 };
 
 // What the 가격 column actually means, per order kind. Derived server-side from
+/**
+ * 매도의 성격 배지 — "봇이 판 것"과 "사람이 판 것"을 한 눈에 가른다.
+ *
+ * 이 구분이 없으면 잔고 대사로 되짚은 **추정 가격**이 확정 체결가와 똑같은
+ * 얼굴로 표에 앉는다. 사용자가 MTS 로 직접 판 건은 우리 주문번호가 없고,
+ * 모의계좌에서는 체결내역 TR 이 비어 있어 그날 종가로 추정한 값이다.
+ */
+const EXIT_KIND_BADGE: Record<string, { label: string; cls: string; title: string }> = {
+  manual_exit: {
+    label: "수동",
+    cls: "bg-amber-100 text-amber-800",
+    title: "주문 기록에 없던 매도 — 잔고 차이로 되짚어 원장에 채운 행입니다 (MTS 직접 매매 등). 체결가는 추정일 수 있습니다.",
+  },
+  ladder_reserve: {
+    label: "예약",
+    cls: "bg-violet-100 text-violet-800",
+    title: "09:25에 미리 건 익절 지정가 (평단 +10%). 한국 주식 주문은 당일 유효하므로 체결되지 않으면 장 마감에 소멸합니다.",
+  },
+};
+
+/** 가격 밑에 붙는 한 줄 — 추정 체결가면 그렇게 말한다. */
+function priceKindLabel(o: LiveOrderRow): string {
+  if (o.exit_kind === "manual_exit")
+    return o.price_source === "ccld" ? "실체결 평균가" : "종가 추정";
+  return KIND_LABELS[o.order_kind] ?? o.order_kind;
+}
+
 // status + ord_dvsn: a reconciled 시장가 order carries a price too, so `price`
 // alone cannot tell these apart.
 const KIND_LABELS: Record<string, string> = {
@@ -152,10 +179,20 @@ export default function OrdersTable({
                     </span>
                   </td>
                 )}
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${sideColor}`}>
                     {o.side === "BUY" ? "매수" : "매도"}
                   </span>
+                  {EXIT_KIND_BADGE[o.exit_kind ?? ""] && (
+                    <span
+                      className={`ml-1 px-1.5 py-0.5 rounded text-[11px] font-medium cursor-help ${
+                        EXIT_KIND_BADGE[o.exit_kind!].cls
+                      }`}
+                      title={EXIT_KIND_BADGE[o.exit_kind!].title}
+                    >
+                      {EXIT_KIND_BADGE[o.exit_kind!].label}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2">
                   <span className="text-gray-900">{o.name ?? o.code}</span>
@@ -177,7 +214,7 @@ export default function OrdersTable({
                         className="block text-[11px] text-gray-400 cursor-help"
                         title={KIND_TITLES[o.order_kind]}
                       >
-                        {KIND_LABELS[o.order_kind] ?? o.order_kind}
+                        {priceKindLabel(o)}
                       </span>
                       {o.discount_pct != null && (
                         // Blue-for-down (KR convention), deliberately NOT the

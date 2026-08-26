@@ -444,6 +444,16 @@ export interface LiveOrderRow {
   // order also carries one.
   order_kind: "market" | "limit" | "sim";
   basis: string | null;
+  /**
+   * 이 매도의 성격. `null` 이면 평범한 봇 주문이다.
+   *   "ladder_reserve" — 09:25 에 미리 건 익절 지정가
+   *   "manual_exit"    — 원장에 없던 매도를 잔고 차이로 되짚은 합성 행.
+   *                      사용자가 MTS 로 직접 판 경우다.
+   * 이 구분이 없으면 추정 가격이 확정 체결가와 똑같은 얼굴로 표에 앉는다.
+   */
+  exit_kind?: string | null;
+  /** "ccld"(실제 체결내역) | "close"·"last_close"(종가 추정) */
+  price_source?: string | null;
   // 지정가 entries only: prev close and the ACTUAL discount vs it.
   prev_close: number | null;
   discount_pct: number | null;

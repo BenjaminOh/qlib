@@ -550,8 +550,11 @@ def reconcile_balance_task(self, strategy: str = "open") -> dict:
     멱등이다 — 한 번 쓰면 차이가 0이 되므로 재시도가 안전하다.
     """
     from ..services.balance_reconcile import reconcile_by_balance
+    from ..services.notify import notify_balance_reconcile
     self.update_state(state="RUNNING")
-    return reconcile_by_balance(strategy=strategy)
+    result = reconcile_by_balance(strategy=strategy)
+    notify_balance_reconcile(result if isinstance(result, dict) else {})
+    return result
 
 
 @celery_app.task(
