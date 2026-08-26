@@ -642,8 +642,42 @@ class KISClient:
                                      pnl=pnl, pnl_pct=pnl_pct,
                                      sellable_qty=sellable))
         summary = (d.get("output2") or [{}])[0]
-        cash = float(summary.get("dnca_tot_amt") or 0)
+        # 쓸 수 있는 현금은 **D+2 정산금액**이다.
+        #
+        # KIS output2 에는 결제 시점이 다른 현금이 세 개 있다:
+        #   dnca_tot_amt       예수금총금액        D+0 — 미결제 매수대금이 아직 안 빠짐
+        #   nxdy_excc_amt      익일정산금액        D+1
+        #   prvs_rcdl_excc_amt 가수도정산금액      D+2 — 실제로 쓸 수 있는 돈
+        #
+        # 예전에는 D+0 을 썼다. 그러면 화면이 있지도 않은 돈을 현금으로 센다 —
+        # 2026-08-26 실측: D+0 2,602,518 vs D+2 971,429, **163만원 과대**.
+        # (docs/05-daily/INSIGHTS.md:29 의 "매수 당일 cash 가 안 줄어 보임"이
+        #  이 현상이고, 이번에 금액까지 확정됐다.)
+        #
+        # 결정적 근거는 KIS 자신의 총평가금액이 D+2 로 만들어진다는 것이다:
+        #   prvs_rcdl_excc_amt + scts_evlu_amt == tot_evlu_amt   (실측 일치)
+        #   dnca_tot_amt       + scts_evlu_amt != tot_evlu_amt
+        # 총평가는 D+2 로 쓰면서 현금만 D+0 을 붙이면 한 화면에서 결제 시점이
+        # 다른 두 숫자를 섞게 된다.
+        #
+        # 매수 예산도 이 값을 쓴다. 정상일에는 결과가 같다 —
+        # 예산은 min(cash, 주문가능현금) 이고 주문가능현금(966,571)이 D+2(971,429)와
+        # 거의 같기 때문이다. 달라지는 것은 그 가드가 꺼진 날뿐이고, 그때
+        # D+0 을 쓰면 없는 돈으로 주문해 미수가 난다.
+        #
+        # 필드가 없으면 D+0 으로 물러난다 — 모의계좌가 안 줄 수 있다.
+        cash = float(summary.get("prvs_rcdl_excc_amt")
+                     or summary.get("dnca_tot_amt") or 0)
         total = float(summary.get("tot_evlu_amt") or 0)
+        # 관측 — 세 현금과 당일 거래액을 남긴다. 새 KIS 호출은 없다(이미 받은 응답).
+        # gap 이 0 이 아니면 위 항등식 가정이 깨진 것이므로 즉시 보인다.
+        scts = float(summary.get("scts_evlu_amt") or 0)
+        log.info("balance: d0=%s d1=%s d2=%s scts=%s tot=%s "
+                 "thdt_buy=%s thdt_sll=%s gap=%s",
+                 summary.get("dnca_tot_amt"), summary.get("nxdy_excc_amt"),
+                 summary.get("prvs_rcdl_excc_amt"), summary.get("scts_evlu_amt"),
+                 summary.get("tot_evlu_amt"), summary.get("thdt_buy_amt"),
+                 summary.get("thdt_sll_amt"), round(total - scts - cash))
         return AccountSnapshot(cash=cash, total_eval=total, holdings=holdings)
 
     # ─── 매수가능금액 (주문 예산의 진실) ────────────────────────

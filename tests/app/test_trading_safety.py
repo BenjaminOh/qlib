@@ -312,6 +312,95 @@ def test_get_balance_parses_sellable_qty(monkeypatch):
     assert h.sellable_qty == 4, "매도가능수량이 보유수량보다 적은 상태를 잡아야 한다"
 
 
+# ─── 현금은 D+2 정산금액이다 (2026-08-26) ───────────────────────────
+#
+# 화면이 "현금 23.5%"를 보여주는데 실제 쓸 수 있는 돈은 8.8% 였다. 163만원을
+# 있지도 않은 현금으로 세고 있었다. 원인은 결제 시점이 다른 두 필드를 한 화면에서
+# 섞어 쓴 것 — 총평가(tot_evlu_amt)는 D+2 인데 현금만 D+0(dnca_tot_amt)이었다.
+
+
+def _balance_resp(output2: dict):
+    class Resp:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json():
+            return {
+                "output1": [{"pdno": "005930", "hldg_qty": "10",
+                             "pchs_avg_pric": "60000", "prpr": "61000",
+                             "evlu_amt": "610000", "evlu_pfls_amt": "10000",
+                             "evlu_pfls_rt": "1.6"}],
+                "output2": [output2],
+            }
+    return Resp
+
+
+def test_cash_uses_d2_settlement_not_d0_deposit(monkeypatch):
+    """D+0 예수금은 미결제 매수대금을 아직 포함한다 — 그걸 현금이라 부르면 안 된다.
+
+    실측(2026-08-26): d0 2,602,518 vs d2 971,429 → 163만원 과대.
+    """
+    c = _client(monkeypatch)
+    monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: _balance_resp({
+        "dnca_tot_amt": "2602518",        # D+0 — 매수대금이 아직 안 빠짐
+        "nxdy_excc_amt": "1160264",       # D+1
+        "prvs_rcdl_excc_amt": "971429",   # D+2 — 실제로 쓸 수 있는 돈
+        "scts_evlu_amt": "610000",
+        "tot_evlu_amt": "1581429",
+    })())
+
+    assert c.get_balance().cash == 971_429.0
+
+
+def test_cash_falls_back_to_d0_when_d2_missing(monkeypatch):
+    """모의계좌가 D+2 필드를 안 줄 수 있다. 그때는 예전 동작으로 물러난다."""
+    c = _client(monkeypatch)
+    monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: _balance_resp({
+        "dnca_tot_amt": "500000", "tot_evlu_amt": "1110000",
+    })())
+
+    assert c.get_balance().cash == 500_000.0
+
+
+def test_balance_identity_total_minus_holdings_equals_cash(monkeypatch):
+    """화면의 "현금 = 총평가 − 평가금액" 이 성립해야 한다.
+
+    KIS 의 총평가금액은 D+2 로 만들어진다 —
+      prvs_rcdl_excc_amt + scts_evlu_amt == tot_evlu_amt  (실측 일치)
+    D+0 을 쓰면 이 항등식이 깨지고, 깨진 크기가 곧 화면이 뻥튀기한 금액이다.
+    운영 스냅샷에서 이 gap 이 −375만까지 벌어졌었다.
+    """
+    c = _client(monkeypatch)
+    monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: _balance_resp({
+        "dnca_tot_amt": "2602518",
+        "prvs_rcdl_excc_amt": "971429",
+        "scts_evlu_amt": "610000",
+        "tot_evlu_amt": "1581429",        # = 971,429 + 610,000
+    })())
+
+    snap = c.get_balance()
+    holdings_eval = sum(h.eval_value for h in snap.holdings)
+    assert snap.total_eval - holdings_eval == snap.cash
+
+
+def test_cash_never_grows_toward_margin(monkeypatch):
+    """수정이 미수 방향으로 현금을 키우는 일은 없어야 한다.
+
+    D+2 가 D+0 보다 큰 경우(순매도 국면)에도 예산이 부풀지 않는지 고정한다 —
+    이 코드는 두 값 중 하나를 고를 뿐 더하지 않는다.
+    """
+    c = _client(monkeypatch)
+    monkeypatch.setattr(kc.requests, "get", lambda *a, **kw: _balance_resp({
+        "dnca_tot_amt": "100000", "prvs_rcdl_excc_amt": "900000",
+        "scts_evlu_amt": "610000", "tot_evlu_amt": "1510000",
+    })())
+
+    snap = c.get_balance()
+    assert snap.cash == 900_000.0          # D+2 를 고른다
+    assert snap.cash <= snap.total_eval    # 총평가를 넘지 않는다
+
+
 def test_orderable_cash_returns_empty_on_failure_not_zero(monkeypatch):
     """Callers treat {} as 'unknown' and keep their existing budget.
 
