@@ -74,8 +74,17 @@ def _seed_for(strategy: str) -> float:
 #   scale      : TP +7% sells HALF, remainder rides the −7% trail
 #   limit      : entries via −3% resting limit orders; TP +10% (예약 매도 모델)
 # Bracket strategies that trade a REAL account. Their exits place KIS orders
-# and their balance comes from the broker, not the order book.
-REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL,)
+# and their balance comes from the broker, not the order book. Which account
+# each one trades comes from ACCOUNT_STRATEGIES via _account_for() — never
+# hardcode it here, or one account's positions get sold through another's.
+#
+# open joined on 2026-08-26. Until then it sold ONLY on rank dropout, with no
+# take-profit, no stop and no trail — b31728ce flagged that "노출 100% · 방어 0"
+# as the #1 open item. Its exits do NOT run in the 16:25 bracket sweep
+# (BRACKET_STRATEGIES below still excludes it): that sweep fires after the
+# close, where a real order would sit until the next session. open's ladder is
+# a 09:25 resting limit and its trail is an intraday poll.
+REAL_BRACKET_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL)
 # CAFE_ACCOUNT_ID (the trading_accounts row supplying cafereal's order style)
 # now comes from db.models, next to ACCOUNT_STRATEGIES — it was a third spelling
 # of "cafe" alongside kis_client.ACCOUNT_CAFE and the seed literal. Re-exported
@@ -988,19 +997,16 @@ def sync_account(client: KISClient | None = None,
     _reset_qlib_caches()
     trade_date = trade_date or _last_trading_day()
     if strategy in REAL_BRACKET_STRATEGIES:
-        from .kis_client import ACCOUNT_CAFE, AccountNotConfigured, get_kis_client as _gc
+        from .kis_client import AccountNotConfigured, get_kis_client as _gc
         try:
-            snapshot = (client or _gc(ACCOUNT_CAFE)).get_balance()
+            snapshot = (client or _gc(_account_for(strategy))).get_balance()
         except (AccountNotConfigured, ValueError) as exc:
             log.info("sync_account: %s 건너뜀 — %s", strategy, exc)
             return {"status": "no_account", "strategy": strategy,
                     "trade_date": trade_date.isoformat()}
-    elif strategy != STRATEGY_OPEN:
+    else:
         with SessionLocal() as db:
             snapshot = _simulated_balance(db, strategy=strategy)
-    else:
-        client = client or get_kis_client()
-        snapshot = client.get_balance()
 
     with SessionLocal() as db:
         existing = (db.query(PositionSnapshot)
@@ -1322,6 +1328,20 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
     return AccountSnapshot(cash=cash, total_eval=total_eval, holdings=holdings)
 
 
+def _account_for(strategy: str) -> str:
+    """이 전략의 실주문이 나갈 계좌. 시뮬 전략이면 기본 계좌로 물러난다.
+
+    예전에는 `get_kis_client(ACCOUNT_CAFE)` 와 `get_policies(db, CAFE_ACCOUNT_ID)` 가
+    **카페 계좌에 하드코딩**돼 있었다. 실계좌 브래킷이 cafereal 하나뿐이라 그때는
+    맞았지만, open 이 합류하면 그대로 두면 **main 계좌 포지션을 카페 계좌로 팔려
+    든다.** 계좌↔전략 단일 진실원(ACCOUNT_STRATEGIES)에서 푼다.
+    """
+    for account, strategies in ACCOUNT_STRATEGIES.items():
+        if strategy in strategies:
+            return account
+    return DEFAULT_ACCOUNT_ID
+
+
 def _sell_bracket(db: Session, trade_date: date, code: str, qty: int,
                   price: float, client, *, strategy: str,
                   pnl: float | None = None, reasons: dict | None = None) -> None:
@@ -1341,19 +1361,20 @@ def _sell_bracket(db: Session, trade_date: date, code: str, qty: int,
         _persist_simulated_fill(db, trade_date, code, "SELL", qty, price,
                                 strategy=strategy, pnl=pnl, reasons=reasons)
         return
-    sell_pol = get_policies(db, CAFE_ACCOUNT_ID)[1]
+    account_id = _account_for(strategy)
+    sell_pol = get_policies(db, account_id)[1]
     try:
         sell_px = (order_price(client, code, sell_pol, trade_date)
                    if sell_pol.is_limit else None)
     except BasePriceUnavailable as exc:
-        log.warning("cafereal SELL %s — 기준가 없음, 시장가로: %s", code, exc)
+        log.warning("%s SELL %s — 기준가 없음, 시장가로: %s", strategy, code, exc)
         sell_px = None
     res = client.place_order(code, "SELL", qty, price=sell_px)
     _persist_order(db, trade_date, code, "SELL", qty, sell_px, res,
                    strategy=strategy, reasons=reasons)
     if not res.ok:
-        log.warning("cafereal SELL REJECTED code=%s qty=%d error=%s",
-                    code, qty, res.error)
+        log.warning("%s SELL REJECTED code=%s qty=%d error=%s",
+                    strategy, code, qty, res.error)
     time.sleep(KIS_THROTTLE_SECONDS)
 
 
@@ -1398,9 +1419,9 @@ def evaluate_bracket_exits(trade_date: date | None = None,
         # 시뮬 전략은 종전대로 장부에서 재구성한다.
         real_client = None
         if strategy in REAL_BRACKET_STRATEGIES:
-            from .kis_client import ACCOUNT_CAFE, AccountNotConfigured, get_kis_client
+            from .kis_client import AccountNotConfigured, get_kis_client
             try:
-                real_client = get_kis_client(ACCOUNT_CAFE)
+                real_client = get_kis_client(_account_for(strategy))
             except (AccountNotConfigured, ValueError) as exc:
                 log.info("bracket_exits: %s 건너뜀 — %s", strategy, exc)
                 return {"status": "no_account", "strategy": strategy,
