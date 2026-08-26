@@ -35,7 +35,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date
+from datetime import date as dt_date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -46,12 +46,40 @@ log = logging.getLogger("backtest_entry_modes")
 
 
 def parse_mode(mode: str) -> tuple[str, float | None]:
-    """'market' | 'limitN' (N = 할인 %)."""
+    """'market' | 'limitN' (N = 할인 %) | 'switchN' (레짐이면 limitN, 아니면 market)."""
     if mode == "market":
         return "market", None
     if mode.startswith("limit"):
         return "limit", float(mode[5:]) / 100.0
+    if mode.startswith("switch"):
+        return "switch", float(mode[6:]) / 100.0
     raise SystemExit(f"알 수 없는 모드: {mode}")
+
+
+def load_regime(path: str | None) -> dict[str, dict]:
+    """날짜 → {sp, nq, ks, kq}. 없으면 빈 dict."""
+    if not path:
+        return {}
+    import pandas as pd
+    df = pd.read_parquet(path)
+    return {r["date"]: {k: r[k] for k in ("sp", "nq", "ks", "kq") if k in r}
+            for _, r in df.iterrows()}
+
+
+def wants_limit(day, regime: dict, signal: str, threshold: float) -> bool:
+    """오늘 지정가를 쓸 것인가.
+
+    `signal="nq"|"sp"` 는 **전날 미국 종가**라 09:00 에 알 수 있다(예측).
+    `signal="kq"|"ks"` 는 그날 한국 실제 등락이라 **알 수 없다** — 오라클
+    상한선을 재는 용도로만 허용한다. 그 차이가 곧 예측 손실이다.
+    """
+    row = regime.get(day.isoformat())
+    if not row:
+        return False              # 정보가 없으면 기본값(시장가)을 유지한다
+    v = row.get(signal)
+    if v is None or v != v:       # NaN
+        return False
+    return float(v) < threshold
 
 
 def main() -> int:
@@ -62,8 +90,16 @@ def main() -> int:
     ap.add_argument("--mode", required=True, help="market | limit2 | limit3 | limit4 | limit5")
     ap.add_argument("--seed", type=float, default=10_000_000.0)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--regime", default=None, help="backtest_regime_data.py 산출 parquet")
+    ap.add_argument("--switch-signal", default="nq", choices=["nq", "sp", "kq", "ks"],
+                    help="kq/ks 는 그날 실제 등락 = 사후 오라클(상한선) 전용")
+    ap.add_argument("--switch-threshold", type=float, default=-0.01,
+                    help="이 값 미만이면 지정가. 예: -0.01 = 나스닥 −1%% 초과 하락")
     args = ap.parse_args()
     kind, disc = parse_mode(args.mode)
+    regime = load_regime(args.regime)
+    if kind == "switch" and not regime:
+        raise SystemExit("switch 모드에는 --regime 이 필요하다")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -93,6 +129,12 @@ def main() -> int:
         if not f.exists():
             skipped_days += 1
             continue
+        # switch 모드는 **날마다** 진입 방식을 고른다.
+        day_kind = kind
+        if kind == "switch":
+            day_kind = ("limit" if wants_limit(day, regime, args.switch_signal,
+                                               args.switch_threshold) else "market")
+
         sig = pd.read_parquet(f).sort_values("rank")
         ranks = dict(zip(sig["code"], sig["rank"]))
         target = list(sig[sig["rank"] <= topk]["code"])
@@ -129,7 +171,7 @@ def main() -> int:
             bar = bars.get(c)
             if not bar:
                 continue
-            ref = bar["open"] if kind == "market" else (_prev_close_before(c, day) or bar["open"])
+            ref = bar["open"] if day_kind == "market" else (_prev_close_before(c, day) or bar["open"])
             if ref > slot_budget:
                 continue
             planned.append(c)
@@ -138,7 +180,7 @@ def main() -> int:
 
         for code in planned:
             bar = bars[code]
-            if kind == "market":
+            if day_kind == "market":
                 fill_px, filled = bar["open"], True
             else:
                 prev_c = _prev_close_before(code, day)
@@ -178,8 +220,17 @@ def main() -> int:
     ret = eq["equity"].iloc[-1] / args.seed - 1
     mdd = float((eq["equity"] / eq["equity"].cummax() - 1).min())
 
+    limit_days = sum(1 for d in eq["date"]
+                     if kind == "limit"
+                     or (kind == "switch" and wants_limit(
+                         dt_date.fromisoformat(d), regime, args.switch_signal,
+                         args.switch_threshold)))
     summary = {
-        "mode": args.mode, "start": args.start, "end": args.end,
+        "mode": args.mode,
+        "switch": (f"{args.switch_signal}<{args.switch_threshold}"
+                   if kind == "switch" else None),
+        "limit_days": limit_days,
+        "start": args.start, "end": args.end,
         "days": len(eq), "skipped_days": skipped_days,
         "final_equity": round(float(eq["equity"].iloc[-1])),
         "return_pct": round(ret * 100, 2),
