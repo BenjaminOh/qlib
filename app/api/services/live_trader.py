@@ -33,7 +33,7 @@ from ..db import (
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
     STRATEGY_CAFECOOL, STRATEGY_CAFEREAL,
     STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID, CAFE_ACCOUNT_ID,
-    ACCOUNT_STRATEGIES,
+    ACCOUNT_STRATEGIES, EXIT_KIND_LADDER,
     BASE_OPEN, BASE_QUOTE, init_db,
 )
 from .account_policy import (
@@ -97,6 +97,18 @@ BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_CAFEREAL)
 
 EXIT_RULES: dict[str, dict] = {
+    # open (2026-08-26): 사다리 +10% 절반 → 잔여는 최고종가 −7% 트레일링.
+    # 여기 값은 EXIT_RULES 를 읽는 16:25 스윕이 아니라 `reserve_ladder_exits`
+    # (09:25 예약)와 `watch_trailing_exits`(장중 폴링)가 읽는다. open 은
+    # BRACKET_STRATEGIES 에 없다 — 장 마감 후 실주문을 낼 수 없기 때문이다.
+    #
+    # 왜 사다리를 한 칸(+10%)만 두는가: 금호에이치티(214330) 실측 봉으로
+    # 조합을 계산해 보면 사다리 비중이 클수록 결과가 나쁘다. 10/15/20 전량은
+    # 08-25 하루에 세 칸이 전부 체결돼(고가 8,550 > +20%선 7,793) 피라미드가
+    # 아니라 당일 전량 청산이 된다(+13.77%). 절반만 확정하고 나머지를
+    # 트레일에 태우면 +16.22%. 트레일 단독은 +22.44%지만 본전 회수가 없다.
+    STRATEGY_OPEN:  {"ladder": [0.10], "ladder_fraction": 0.5,
+                     "trail_rest": 0.07},
     STRATEGY_CLOSE: {"tp": 0.10},
     STRATEGY_FLOW:  {"tp": 0.10},
     STRATEGY_TRAIL: {"trail": 0.07},
@@ -1378,6 +1390,171 @@ def _sell_bracket(db: Session, trade_date: date, code: str, qty: int,
     time.sleep(KIS_THROTTLE_SECONDS)
 
 
+# 원장이 "실제로 체결됐다"고 말하는 상태. SUBMITTED 는 여기 없다 —
+# 주문을 냈다는 뜻이지 팔렸다는 뜻이 아니다.
+EXECUTED_STATUSES = ("FILLED", "PARTIAL", "SIMULATED")
+
+
+def _is_ladder_reservation(reasons_json: str | None) -> bool:
+    """이 주문이 사다리 예약(조건부 지정가)인가."""
+    try:
+        exit_info = (json.loads(reasons_json or "{}") or {}).get("exit") or {}
+    except (ValueError, TypeError):
+        return False
+    return exit_info.get("kind") == EXIT_KIND_LADDER
+
+
+def _episode_entry(db: Session, strategy: str, code: str) -> Order | None:
+    """이번 에피소드(보유가 0 → 양수가 된 시점)의 진입 주문.
+
+    `evaluate_bracket_exits` 는 "마지막 매도 다음의 첫 매수"로 에피소드를
+    가르는데, 그건 **매도가 항상 전량**이라는 전제 위에 서 있다. 사다리는
+    절반만 팔기 때문에 그 전제가 깨진다 — 오늘 절반을 판 종목이 "매도 뒤에
+    매수가 없다"로 읽혀 진입 자체를 잃어버린다.
+
+    그래서 수량을 되짚는다. 매수는 미체결(SUBMITTED)도 진입으로 친다 — open 의
+    09:00 시장가 매수는 09:20 정산 전까지 SUBMITTED 다. 매도는 **체결된 것만**
+    센다: 미체결 예약 매도를 보유 감소로 세면 포지션이 이미 닫힌 것처럼 보인다.
+    """
+    rows = (db.query(Order)
+              .filter(Order.strategy == strategy, Order.code == code)
+              .order_by(Order.trade_date.asc(), Order.id.asc())
+              .all())
+    cum, entry = 0, None
+    for o in rows:
+        side = (o.side or "").upper()
+        if side == "BUY":
+            if o.status in ("CANCELLED", "PENDING", "REJECTED"):
+                continue
+            if cum <= 0:
+                entry = o
+            cum += int(o.qty or 0)
+        elif side == "SELL":
+            if o.status not in EXECUTED_STATUSES:
+                continue
+            filled = sum(int(f.qty or 0) for f in (o.fills or [])) or int(o.qty or 0)
+            cum -= filled
+            if cum <= 0:
+                cum, entry = 0, None
+    return entry
+
+
+def reserve_ladder_exits(trade_date: date | None = None, *,
+                         strategy: str = STRATEGY_OPEN,
+                         client: KISClient | None = None) -> dict:
+    """09:25 — 보유 종목마다 익절 지정가를 미리 걸어둔다.
+
+    `place_order` 는 지정가(00)와 시장가(01)뿐이고 **역지정가(스톱)가 없다.**
+    그래서 "이 값 이상이면 판다"만 미리 걸 수 있다. 하락 쪽(트레일링)은
+    `watch_trailing_exits` 가 장중에 직접 지켜본다.
+
+    왜 매일 아침 다시 거는가: 한국 주식 주문은 **당일 유효**다. 어제 걸어둔
+    미체결 예약은 장 마감에 소멸했으므로 오늘 다시 걸어야 한다. 그래서
+    "이미 예약했는가" 판정은 **오늘 걸린 예약**을 보고, "이미 팔았는가"
+    판정은 이번 에피소드의 **체결된** 매도를 본다.
+
+    왜 09:25 인가: `reconcile_fills`(09:20)가 그날 매수의 실제 평단을 확정한
+    뒤여야 사다리 가격이 맞는다. 09:00 랭크 이탈 매도와도 겹치지 않는다 —
+    그 시점엔 아직 예약이 없으므로 전량 매도가 예약에 막히지 않는다.
+
+    수량은 `sellable_qty`(매도가능수량)로 깎는다. 미결제분까지 걸면 주문이
+    통째로 거부되고, 거부된 예약은 "익절선이 없다"와 같다.
+    """
+    init_db()
+    day = trade_date or date.today()
+    rule = EXIT_RULES.get(strategy, {})
+    ladder = rule.get("ladder")
+    if not ladder:
+        return {"status": "no_ladder", "strategy": strategy,
+                "trade_date": day.isoformat(), "reserved": []}
+    rung = float(ladder[0])
+    fraction = float(rule.get("ladder_fraction", 1.0))
+    account_id = _account_for(strategy)
+
+    from .kis_client import AccountNotConfigured
+    try:
+        client = client or get_kis_client(account_id)
+    except (AccountNotConfigured, ValueError) as exc:
+        log.info("ladder_reserve: %s 건너뜀 — %s", strategy, exc)
+        return {"status": "no_account", "strategy": strategy,
+                "trade_date": day.isoformat(), "reserved": []}
+
+    snapshot = client.get_balance()
+    reserved: list[dict] = []
+    skipped: list[dict] = []
+    with SessionLocal() as db:
+        for h in snapshot.holdings:
+            if h.qty <= 0 or h.avg_price <= 0:
+                continue
+            entry = _episode_entry(db, strategy, h.code)
+            if entry is None:
+                # 이 전략의 원장이 설명하지 못하는 보유 — 수동 매매·대체입고.
+                # 남의 포지션에 매도를 걸지 않는다.
+                skipped.append({"code": h.code, "why": "no_entry"})
+                continue
+            sold = (db.query(Order)
+                      .filter(Order.strategy == strategy,
+                              Order.code == h.code,
+                              Order.side == "SELL",
+                              Order.status.in_(EXECUTED_STATUSES),
+                              Order.trade_date >= entry.trade_date)
+                      .count())
+            if sold:
+                skipped.append({"code": h.code, "why": "rung_taken"})
+                continue
+            today_rows = (db.query(Order)
+                            .filter(Order.strategy == strategy,
+                                    Order.code == h.code,
+                                    Order.side == "SELL",
+                                    Order.trade_date == day,
+                                    Order.status.notin_(("REJECTED", "CANCELLED")))
+                            .all())
+            if any(_is_ladder_reservation(o.reasons_json) for o in today_rows):
+                skipped.append({"code": h.code, "why": "already_reserved"})
+                continue
+
+            px = round_to_tick(h.avg_price * (1.0 + rung))
+            qty = int(h.qty * fraction)
+            if h.sellable_qty is not None and h.sellable_qty < qty:
+                log.info("ladder_reserve %s: 매도가능 %s < 예약 %s — 깎아서 건다",
+                         h.code, h.sellable_qty, qty)
+                qty = int(h.sellable_qty)
+            if qty <= 0 or px <= 0:
+                skipped.append({"code": h.code, "why": "qty_or_price_zero"})
+                continue
+
+            reasons = {
+                "action": "sell",
+                "basis": (f"사다리 예약 +{rung * 100:.0f}% — 평단 "
+                          f"{round(h.avg_price):,} → {px:,}원 지정가로 "
+                          f"보유 {h.qty}주 중 {qty}주. 잔여는 트레일링이 지킨다."),
+                "summary": "", "metrics": {}, "top_features": [],
+                "exit": {"kind": EXIT_KIND_LADDER, "judged": "resting_limit",
+                         "rung": rung, "rung_px": px,
+                         "entry_avg": h.avg_price,
+                         "entry_date": entry.trade_date.isoformat(),
+                         "entry_order_id": entry.id,
+                         "position_qty": h.qty, "ladder": ladder},
+            }
+            res = client.place_order(h.code, "SELL", qty, price=float(px))
+            _persist_order(db, day, h.code, "SELL", qty, float(px), res,
+                           strategy=strategy, reasons=reasons)
+            if not res.ok:
+                log.warning("ladder_reserve REJECTED %s x%d @%s — %s",
+                            h.code, qty, px, res.error)
+            reserved.append({"code": h.code, "name": _stock_name(h.code),
+                             "qty": qty, "price": px, "held": h.qty,
+                             "avg": round(h.avg_price, 2), "ok": res.ok,
+                             "error": res.error})
+        db.commit()
+
+    log.info("ladder_reserve %s %s: 예약 %d건, 건너뜀 %d건",
+             strategy, day.isoformat(), len(reserved), len(skipped))
+    return {"status": "ok", "strategy": strategy, "account_id": account_id,
+            "trade_date": day.isoformat(), "rung": rung,
+            "reserved": reserved, "skipped": skipped}
+
+
 def evaluate_bracket_exits(trade_date: date | None = None,
                            strategy: str = STRATEGY_CLOSE) -> dict:
     """Sim exits driven by the per-strategy EXIT_RULES table:
@@ -1831,6 +2008,14 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
                             "left alone so its fills stay in the ledger; "
                             "cancel the remainder manually if it matters",
                             o.side, o.name or o.code, o.code)
+                continue
+            if _is_ladder_reservation(o.reasons_json):
+                # 사다리 예약은 "체결을 기다리는 주문"이 아니라 **익절선 그 자체**다.
+                # 컷오프의 취지는 미체결 지정가가 주문가능현금을 붙잡는 것을 푸는
+                # 것인데, 매도 예약은 현금을 잡지 않는다. 쓸어가면 그날의 익절선이
+                # 조용히 사라진다. 지금 main 계좌는 sell_cancel_hhmm 이 NULL 이라
+                # 여기까지 오지도 않지만, 화면에서 컷오프를 설정하는 순간 그렇게 된다.
+                log.info("cancel sweep: %s(%s) 사다리 예약 — 유지", o.name or o.code, o.code)
                 continue
             due.append(o)
 

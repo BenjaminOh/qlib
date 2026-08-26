@@ -90,6 +90,13 @@ ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
 # 빠지면 그 전략의 주문만 골라볼 방법이 없어진다. 오타가 아니라 구조였다.
 #
 # 순서 = 화면에 놓을 순서. 실주문을 먼저, 그다음 qlib 시뮬, 카페 계열, 급등.
+# 조건부 예약 주문의 표식 — 주문의 ``reasons_json`` 안 ``exit.kind`` 에 들어간다.
+# "이 가격에 닿으면 판다"이지 "팔았다"가 아니다. 세 곳이 이 구분을 필요로 한다:
+#   - cancel_unfilled_orders : 컷오프 스윕이 예약을 쓸어가면 익절선이 사라진다
+#   - holding_attribution    : 미체결 매도 예약은 보유수량을 줄이지 않는다
+#   - reserve_ladder_exits   : 오늘 이미 걸어둔 예약을 다시 걸지 않는다
+EXIT_KIND_LADDER = "ladder_reserve"
+
 ALL_STRATEGIES: tuple[str, ...] = (
     STRATEGY_OPEN, STRATEGY_CAFEREAL,                       # 실주문
     STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,

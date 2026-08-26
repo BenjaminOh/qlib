@@ -54,6 +54,13 @@ celery_app.conf.beat_schedule = {
         "task": "reconcile_fills",
         "schedule": crontab(hour=9, minute=20, day_of_week="mon-fri"),
     },
+    # open 익절 예약 — 보유 종목마다 평단 +10% 지정가로 절반을 미리 건다.
+    # 09:20 정산 뒤여야 그날 매수의 실제 평단이 확정돼 사다리 가격이 맞는다.
+    # 한국 주식 주문은 당일 유효라 매일 아침 다시 건다.
+    "ladder-reserve-open": {
+        "task": "ladder_reserve",
+        "schedule": crontab(hour=9, minute=25, day_of_week="mon-fri"),
+    },
     # Resting limit orders: cancel whatever is past its account cutoff. The
     # cutoff lives in trading_accounts (per account, per side), so this sweeps
     # instead of firing at one fixed time. Cheap on ticks with nothing due.

@@ -32,12 +32,16 @@ KIS 잔고는 "이 종목을 누가 왜 샀는가"를 모른다. 화면의 "현�
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from ..db import ACCOUNT_STRATEGIES, DEFAULT_ACCOUNT_ID, Fill, Order, SessionLocal
+from ..db import (
+    ACCOUNT_STRATEGIES, DEFAULT_ACCOUNT_ID, EXIT_KIND_LADDER,
+    Fill, Order, SessionLocal,
+)
 
 log = logging.getLogger(__name__)
 
@@ -229,6 +233,22 @@ def allocate(kis_qty: int, nets: Mapping[str, Net]) -> tuple[list[StrategyClaim]
     return claims, status
 
 
+def _pending_reservation(status: str | None, side: str | None,
+                         reasons_json: str | None) -> bool:
+    """아직 체결되지 않은 조건부 매도 예약인가.
+
+    ``EXIT_KIND_LADDER`` 표식은 `reserve_ladder_exits` 가 찍는다. 이 모듈이
+    live_trader 를 import 하면 순환이 되므로 표식 문자열은 db.models 에 있다.
+    """
+    if (side or "").upper() != "SELL" or status not in UNCONFIRMED_STATUSES:
+        return False
+    try:
+        exit_info = (json.loads(reasons_json or "{}") or {}).get("exit") or {}
+    except (ValueError, TypeError):
+        return False
+    return exit_info.get("kind") == EXIT_KIND_LADDER
+
+
 def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
                     ) -> dict[str, list[LedgerEvent]]:
     """주문 2회 쿼리로 종목별 이벤트를 모은다.
@@ -238,7 +258,7 @@ def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
     줄이는 순서가 된다.
     """
     rows = (db.query(Order.id, Order.code, Order.strategy, Order.side,
-                     Order.qty, Order.status)
+                     Order.qty, Order.status, Order.reasons_json)
               .filter(Order.strategy.in_(list(strategies)),
                       Order.code.in_(list(codes)))
               .all())
@@ -259,6 +279,14 @@ def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
 
     out: dict[str, list[LedgerEvent]] = defaultdict(list)
     for r in rows:
+        # 미체결 사다리 예약은 보유를 줄이지 않는다. 09:25 에 걸어둔
+        # "+10% 에 절반 판다"는 조건부 주문이지 매도가 아닌데, 미확정 매도로
+        # 세면 그 절반이 원장에서 빠져나가 **보유 종목 배지의 절반이
+        # "수동/미상"으로 뒤집힌다.** 체결되면 FILLED/PARTIAL 이 되고 그때부터
+        # 정상적으로 세어진다.
+        if (_pending_reservation(r.status, r.side, r.reasons_json)
+                and not fill_qty.get(r.id)):
+            continue
         out[r.code].append(LedgerEvent(
             strategy=r.strategy, side=r.side, qty=int(r.qty or 0),
             status=r.status, fill_qty=fill_qty.get(r.id),

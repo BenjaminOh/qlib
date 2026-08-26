@@ -476,6 +476,28 @@ def close_bracket_exits_task(self) -> dict:
 
 @celery_app.task(
     bind=True,
+    name="ladder_reserve",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=3,
+)
+@market_day_only
+def ladder_reserve_task(self, strategy: str = "open") -> dict:
+    """09:25 KST — 보유 종목의 익절 지정가를 미리 건다.
+
+    `reconcile_fills`(09:20) 뒤에 돈다: 그날 매수의 실제 평단이 확정돼야
+    사다리 가격이 맞는다. 멱등이다 — 오늘 이미 걸어둔 예약이 있으면
+    건너뛰므로 재시도가 중복 주문이 되지 않는다.
+    """
+    from ..services.live_trader import reserve_ladder_exits
+    self.update_state(state="RUNNING")
+    return reserve_ladder_exits(strategy=strategy)
+
+
+@celery_app.task(
+    bind=True,
     name="reconcile_fills",
     autoretry_for=(Exception,),
     retry_backoff=True,
