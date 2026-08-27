@@ -466,6 +466,53 @@ def _price_series(code: str) -> dict[str, tuple[float | None, float | None]]:
 # a different position than the badges do.
 _EXECUTED_STATUSES = CONFIRMED_STATUSES + UNCONFIRMED_STATUSES
 
+# KIS 주문구분. "00" 지정가 / "01" 시장가 (`Order.ord_dvsn`).
+ORD_DVSN_LIMIT = "00"
+
+
+def _moved_position_sql():
+    """`_moved_position` 과 **같은 규칙**의 SQLAlchemy 조건.
+
+    Fill 여부는 조인 없이 못 보므로 조금 보수적이다: 미체결 지정가 매도를
+    상태만으로 걸러낸다. `reconcile_*` 가 Fill 을 쓸 때 상태를 FILLED/PARTIAL 로
+    올리므로 "SUBMITTED 인데 Fill 이 있다" 는 조합은 실제로 생기지 않는다.
+    """
+    from sqlalchemy import and_, not_
+    return and_(
+        Order.status.in_(_EXECUTED_STATUSES),
+        not_(and_(Order.status == "SUBMITTED",
+                  Order.side == "SELL",
+                  Order.ord_dvsn == ORD_DVSN_LIMIT)),
+    )
+
+
+def _moved_position(status: str | None, side: str | None,
+                    ord_dvsn: str | None, has_fill: bool) -> bool:
+    """이 주문이 포지션을 **실제로** 움직였는가.
+
+    `SUBMITTED` 는 "접수"이지 "체결"이 아니다. 주문 종류가 그 둘을 가른다:
+
+      · **시장가(01)** — 접수 ≈ 체결. `open` 의 09:00 주문은 09:20 정산 전까지
+        SUBMITTED 인데, 그 20분 동안 화면에서 사라지면 퇴행이다. 거부되면
+        REJECTED 로 바뀌므로 자기 교정된다.
+      · **지정가(00)** — **접수 ≠ 체결.** 09:25 사다리 예약과 cafereal(15:28 −3%)이
+        여기다. Fill 이 붙기 전에는 포지션을 움직이지 않았다.
+
+    2026-08-28 에 이걸 안 가려서 사고가 났다: 어제 걸린 사다리 예약 9건 중 7건이
+    미체결인데 화면이 전부 **+10% 팔린 것**으로 세어 가짜 손익 약 293,000원을
+    보여줬고, `cum_qty` 도 97 → 49 로 틀어졌다(실제 보유 97주).
+
+    ⚠ `live_trader.EXECUTED_STATUSES`("FILLED","PARTIAL","SIMULATED")와 **같은 답**을
+    내야 한다. 원장 쪽(`reconcile_balance`)은 그걸 써서 정확했고 화면만 틀렸다 —
+    같은 DB 를 보는 두 화면이 다른 답을 내면 어느 쪽도 믿을 수 없게 된다.
+    """
+    if status not in _EXECUTED_STATUSES:
+        return False
+    if status == "SUBMITTED" and (side or "").upper() == "SELL" \
+            and ord_dvsn == ORD_DVSN_LIMIT and not has_fill:
+        return False
+    return True
+
 
 def _position_timeline(code: str, strategy: str,
                        kis_avg: float | None = None,
@@ -525,7 +572,10 @@ def _position_timeline(code: str, strategy: str,
                 trade_date=r.trade_date, strategy=r.strategy, side=r.side,
                 qty=r.qty, status=r.status, error=r.error, reasons=reasons,
             )
-            executed = r.status in _EXECUTED_STATUSES
+            # `fills[id]` 는 (pnl, qty) 튜플이라 그대로 bool 하면 (None, 0) 도
+            # True 가 된다 — **수량**으로 판정한다.
+            executed = _moved_position(r.status, r.side, r.ord_dvsn,
+                                       has_fill=bool((fills.get(r.id) or (None, 0))[1]))
             if executed:
                 px = r.price
                 item.price_est = px is None
@@ -692,8 +742,7 @@ def get_stock_curves(strategy: str = Query("open"),
     cutoff = date.today() - timedelta(days=days)
     with SessionLocal() as db:
         rows = (db.query(Order)
-                  .filter(Order.strategy == strategy,
-                          Order.status.in_(_EXECUTED_STATUSES))
+                  .filter(Order.strategy == strategy, _moved_position_sql())
                   .order_by(Order.code.asc(), Order.trade_date.asc(), Order.id.asc())
                   .all())
         by_code: dict[str, list] = {}
@@ -802,7 +851,10 @@ def _episodes(timeline: list[StockTradeRow]) -> list[EpisodeSpan]:
             continue
         if entry is None and t.cum_qty > 0:
             entry = t.trade_date
-        if t.side == "SELL" and t.status in _EXECUTED_STATUSES:
+        # 타임라인이 이미 미체결 지정가 매도를 걸러 `cum_qty` 를 None 으로 두므로
+        # 위 가드에서 빠진다. 여기서 상태만 다시 보면 정의가 갈라지니, 포지션을
+        # 실제로 움직인 행만 온다는 전제를 그대로 쓴다.
+        if t.side == "SELL" and t.cum_qty is not None:
             cur.append(t)
         if t.cum_qty == 0 and cur:
             out.append((entry, cur))
@@ -861,7 +913,7 @@ def get_recent_exits(days: int = Query(30, ge=1, le=180), strategy: str = Query(
         sold_codes = [r[0] for r in (db.query(Order.code)
                                        .filter(Order.strategy == strategy,
                                                Order.side == "SELL",
-                                               Order.status.in_(_EXECUTED_STATUSES),
+                                               _moved_position_sql(),
                                                Order.trade_date >= cutoff)
                                        .distinct())]
     out: list[ExitRow] = []
@@ -1001,7 +1053,8 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
                 .limit(limit)
                 .all())
     # Realized pnl per SELL order via the shared position timeline.
-    _executed = ("SUBMITTED", "FILLED", "PARTIAL", "SIMULATED")
+    # 미체결 지정가 매도는 손익 계산 대상이 아니다 — 타임라인이 이미 그렇게
+    # 판정하므로 후보 선정도 같은 규칙을 써야 헛돌지 않는다.
     realized_by_id: dict[int, StockTradeRow] = {}
 
     def _rz(order_id: int, field: str):
@@ -1026,7 +1079,9 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
         cost = t.avg_price_before * qty
         return t.realized_pnl / cost if cost else None
     for code, strat in {(o.code, o.strategy) for o in rows
-                        if o.side == "SELL" and o.status in _executed}:
+                        if o.side == "SELL"
+                        and _moved_position(o.status, o.side, o.ord_dvsn,
+                                            has_fill=bool(o.fills))}:
         try:
             for t in _position_timeline(code, strat, kis_now=_close_safe(code)):
                 if t.order_id is not None and t.realized_pnl is not None:

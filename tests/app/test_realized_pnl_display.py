@@ -383,3 +383,106 @@ def test_falls_back_to_bars_without_a_quote(api, session):
     rows = api._position_timeline("214330", "open", kis_now=1200.0)
     sell = [r for r in rows if r.side == "SELL"][0]
     assert sell.exec_price == 1200.0
+
+
+# ─── 미체결 지정가 매도는 "판 것"이 아니다 (2026-08-28) ──────────────
+#
+# 어제 걸린 사다리 예약 9건 중 7건이 미체결이었는데 화면이 전부 **+10% 팔린
+# 것**으로 세어 가짜 손익 약 293,000원을 보여줬다. `cum_qty` 도 97 → 49 로
+# 틀어졌다(실제 KIS 보유 97주).
+#
+# 원인은 "체결됨" 정의가 두 개였던 것: 원장 쪽(`live_trader.EXECUTED_STATUSES`)
+# 은 SUBMITTED 를 빼서 정확했고 화면 쪽은 포함해서 틀렸다. 같은 DB 를 보는 두
+# 화면이 다른 답을 내면 어느 쪽도 믿을 수 없다.
+
+
+def _limit_sell(session, *, code, day, qty, price, status="SUBMITTED", fill=None):
+    """지정가(00) 매도. 사다리 예약·cafereal 이 이 모양이다."""
+    from app.api.db import Fill, Order
+    o = Order(trade_date=day, strategy="open", code=code, name=code, side="SELL",
+              qty=qty, price=price, ord_dvsn="00", status=status, kis_order_id="S1")
+    session.add(o)
+    session.commit()
+    if fill:
+        session.add(Fill(order_id=o.id, strategy="open", qty=fill, price=price))
+        session.commit()
+    return o
+
+
+def test_unfilled_limit_sell_moves_nothing(api, session):
+    """일진하이솔루스 실제 케이스 — 보유 97주, 예약 48주 미체결."""
+    import datetime as dt
+
+    _trade(session, code="271940", day=dt.date(2026, 8, 21), side="BUY",
+           qty=97, price=10800.0)
+    _limit_sell(session, code="271940", day=dt.date(2026, 8, 27),
+                qty=48, price=11880.0)
+
+    rows = api._position_timeline("271940", "open", kis_now=10750.0)
+    sell = [r for r in rows if r.side == "SELL"][0]
+    assert sell.cum_qty is None, "포지션을 움직이지 않았다"
+    assert sell.realized_pnl is None, "팔지 않았는데 손익이 붙으면 안 된다"
+    buy = [r for r in rows if r.side == "BUY"][0]
+    assert buy.cum_qty == 97, "보유 수량이 예약에 깎이면 안 된다"
+
+
+def test_unfilled_market_sell_still_counts(api, session):
+    """09:00 시장가 매도는 09:20 정산 전에도 보여야 한다 — 퇴행 방지."""
+    import datetime as dt
+
+    _trade(session, code="002790", day=dt.date(2026, 8, 25), side="BUY",
+           qty=33, price=26450.0)
+    _trade(session, code="002790", day=dt.date(2026, 8, 27), side="SELL",
+           qty=33, price=26900.0, status="SUBMITTED")   # ord_dvsn="01"
+
+    rows = api._position_timeline("002790", "open", kis_now=26900.0)
+    sell = [r for r in rows if r.side == "SELL"][0]
+    assert sell.cum_qty == 0
+    assert sell.realized_pnl is not None
+
+
+def test_filled_limit_sell_counts(api, session):
+    """정산이 Fill 을 붙이면 그때부터 정상 계산된다."""
+    import datetime as dt
+
+    _trade(session, code="006400", day=dt.date(2026, 8, 24), side="BUY",
+           qty=2, price=489500.0)
+    _limit_sell(session, code="006400", day=dt.date(2026, 8, 27),
+                qty=1, price=538000.0, status="FILLED", fill=1)
+
+    rows = api._position_timeline("006400", "open", kis_now=569000.0)
+    sell = [r for r in rows if r.side == "SELL"][0]
+    assert sell.cum_qty == 1
+    assert sell.realized_pnl is not None and sell.realized_pnl > 0
+
+
+def test_full_size_limit_sell_does_not_fake_an_exit(api, session):
+    """★ cafereal 재발 방지 — 전량 지정가 매도가 에피소드를 거짓으로 닫으면
+    **팔지도 않은 종목이 청산 카드에 뜬다.**
+
+    사다리는 `qty//2` 라 cum_qty 가 0이 되지 않아 운 좋게 안 터졌을 뿐이다.
+    """
+    import datetime as dt
+
+    _trade(session, code="123456", day=dt.date(2026, 8, 25), side="BUY",
+           qty=50, price=1000.0)
+    _limit_sell(session, code="123456", day=dt.date(2026, 8, 27),
+                qty=50, price=1100.0)          # 전량, 미체결
+
+    rows = api._position_timeline("123456", "open", kis_now=1050.0)
+    assert api._episodes(rows) == [], "미체결로 에피소드가 닫히면 안 된다"
+
+
+def test_the_two_definitions_agree():
+    """원장과 화면이 같은 답을 내는지 — 정의가 갈라진 것이 이 사고의 원인이다."""
+    from app.api.routers import live as L
+    from app.api.services.live_trader import EXECUTED_STATUSES
+
+    for st in ("FILLED", "PARTIAL", "SIMULATED"):
+        assert st in EXECUTED_STATUSES
+        assert L._moved_position(st, "SELL", "00", has_fill=False) is True
+    # SUBMITTED 는 원장이 세지 않는다 — 화면도 지정가 매도에서는 세면 안 된다
+    assert "SUBMITTED" not in EXECUTED_STATUSES
+    assert L._moved_position("SUBMITTED", "SELL", "00", has_fill=False) is False
+    # 시장가 매도만 예외로 센다(09:00~09:20 과도기)
+    assert L._moved_position("SUBMITTED", "SELL", "01", has_fill=False) is True
