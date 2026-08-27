@@ -530,7 +530,16 @@ def _position_timeline(code: str, strategy: str,
                 px = r.price
                 item.price_est = px is None
                 if px is None:
-                    px = day_open or day_close
+                    # 시장가 주문은 정산 전까지 체결가가 없다. 그때 **결정 시점의
+                    # 시세**가 원장에 남아 있으면 그게 가장 가까운 추정치다 —
+                    # `watch_trailing_exits` 가 청산할 때 본 현재가를
+                    # `reasons.exit.quote` 에 적어둔다.
+                    #
+                    # 이게 없으면 그날 시가/종가로 물러나는데, 장중에는 오늘 봉이
+                    # 아직 없어 **어제 종가**가 잡힌다. 2026-08-27 214330 이
+                    # 그랬다: 실제 6,800 에 팔렸는데 어제 종가 7,250 으로 추정돼
+                    # 손익이 +101,270(실제 ~41,000)으로 2.5배 부풀었다.
+                    px = ((reasons or {}).get("exit") or {}).get("quote") or day_open or day_close
                 item.exec_price = px
                 if px is not None:
                     if r.side == "BUY":

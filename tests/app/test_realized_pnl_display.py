@@ -332,3 +332,54 @@ def test_exits_sum_equals_ledger_sum(api, session, monkeypatch):
     ledger = sum(f.pnl for f in session.query(Fill).all() if f.pnl is not None)
 
     assert sum(r.realized_pnl for r in rows) == pytest.approx(ledger, abs=0.01)
+
+
+# ─── 시장가 청산의 체결가 추정 — 결정 시점 시세를 쓴다 ────────────────
+#
+# 2026-08-27: 214330 트레일 청산(134주 시장가)이 화면에 **+101,270 (+11.6%*)**
+# 로 떴다. 실제 체결은 6,800 이라 약 41,000 이다. 시장가라 `Order.price` 가
+# 없고, 추정이 그날 봉으로 물러나는데 **장중에는 오늘 봉이 없어 어제 종가**
+# (7,250)가 잡혔다. 2.5배 부푼 숫자를 사용자가 보고 판단했다.
+#
+# `watch_trailing_exits` 는 청산할 때 본 현재가를 `reasons.exit.quote` 에
+# 남긴다. 그게 가장 가까운 추정치다.
+
+
+def test_market_sell_uses_the_decision_quote(api, session):
+    """미체결 시장가 매도는 **결정 시점 시세**로 추정한다."""
+    import datetime as dt
+    import json
+
+    _trade(session, code="214330", day=dt.date(2026, 8, 25), side="BUY",
+           qty=134, price=6494.0)
+    o = Order(trade_date=dt.date(2026, 8, 27), strategy="open", code="214330",
+              name="214330", side="SELL", qty=134, price=None, ord_dvsn="01",
+              status="SUBMITTED", kis_order_id=None,
+              reasons_json=json.dumps({"exit": {"kind": "trail_exit",
+                                                "quote": 6800.0}}))
+    session.add(o)
+    session.commit()
+
+    rows = api._position_timeline("214330", "open", kis_now=7250.0)
+    sell = [r for r in rows if r.side == "SELL"][0]
+    assert sell.exec_price == 6800.0, "어제 종가가 아니라 결정 시점 시세를 써야 한다"
+    assert sell.price_est is True                  # 여전히 추정이다 — 별표 유지
+    # (6800 − 6494) × 134 = 41,004 에서 양방향 비용을 뺀 값
+    assert 35_000 < sell.realized_pnl < 41_100
+
+
+def test_falls_back_to_bars_without_a_quote(api, session):
+    """`reasons.exit.quote` 가 없으면 기존 폴백(봉)이 그대로 동작한다."""
+    import datetime as dt
+
+    _trade(session, code="214330", day=dt.date(2026, 8, 25), side="BUY",
+           qty=10, price=1000.0)
+    session.add(Order(trade_date=dt.date(2026, 8, 27), strategy="open",
+                      code="214330", name="214330", side="SELL", qty=10,
+                      price=None, ord_dvsn="01", status="SUBMITTED",
+                      kis_order_id=None))
+    session.commit()
+
+    rows = api._position_timeline("214330", "open", kis_now=1200.0)
+    sell = [r for r in rows if r.side == "SELL"][0]
+    assert sell.exec_price == 1200.0
