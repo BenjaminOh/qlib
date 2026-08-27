@@ -415,3 +415,112 @@ def test_simulated_ledger_never_asks_a_broker_for_prices(live_api, monkeypatch):
     seen = _spy_timeline(live_api, monkeypatch)
     live_api.get_stock_trades("000720", strategy="cafecool", account=None)
     assert "price_calls" not in seen
+
+
+# ─── 불일치의 원인 구분 — 사다리 체결 대기 vs 설명되지 않는 매도 ──────
+#
+# 2026-08-27: 배포 직후 삼성SDI 에만 "⚠ 원장 불일치" 가 떴다. 원인은 우리가 낸
+# 09:25 사다리 예약이 체결됐는데 **모의계좌라 체결내역 TR 이 비어** 원장이 아직
+# SUBMITTED 로 알고 있는 것이었다. 동작은 옳았지만 화면이 "MTS 직접 매매 등"
+# 이라고 말해 "내가 안 팔았는데?" 로 읽혔다.
+#
+# 여기서 고정하는 것: **원인을 아는 불일치와 모르는 불일치를 섞지 않는다.**
+
+
+def _sqlite_session():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.api.db import Base
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)()
+
+
+def _ladder_sell(session, code, qty, *, status="SUBMITTED", day=None, fill=None):
+    """사다리 예약 매도 한 건. `EXIT_KIND_LADDER` 표식이 붙는다."""
+    import datetime as dt
+    import json
+
+    from app.api.db import EXIT_KIND_LADDER, Fill, Order
+    o = Order(trade_date=day or dt.date(2026, 8, 27), strategy=STRATEGY_OPEN,
+              code=code, side="SELL", qty=qty, price=538000.0, ord_dvsn="00",
+              status=status, kis_order_id="S1",
+              reasons_json=json.dumps({"exit": {"kind": EXIT_KIND_LADDER}}))
+    session.add(o)
+    session.commit()
+    if fill:
+        session.add(Fill(order_id=o.id, strategy=STRATEGY_OPEN, qty=fill, price=538000.0))
+        session.commit()
+    return o
+
+
+def _plain_buy(session, code, qty, price=489500.0):
+    import datetime as dt
+
+    from app.api.db import Fill, Order
+    o = Order(trade_date=dt.date(2026, 8, 24), strategy=STRATEGY_OPEN, code=code,
+              side="BUY", qty=qty, price=price, ord_dvsn="01", status="FILLED",
+              kis_order_id="B1")
+    session.add(o)
+    session.commit()
+    session.add(Fill(order_id=o.id, strategy=STRATEGY_OPEN, qty=qty, price=price))
+    session.commit()
+    return o
+
+
+def test_pending_ladder_qty_explains_the_whole_gap():
+    """삼성SDI 실제 상황 — 매수 2주, 사다리 1주가 체결됐는데 원장은 SUBMITTED."""
+    s = _sqlite_session()
+    _plain_buy(s, "006400", 2)
+    _ladder_sell(s, "006400", 1)                     # 체결됐지만 원장은 모른다
+
+    attr = ha.attribute_holdings({"006400": 1}, "main", db=s)["006400"]
+    assert (attr.ledger_total, attr.kis_qty) == (2, 1)
+    assert attr.status == ha.STATUS_MISMATCH          # 사실 기술은 그대로
+    assert attr.pending_ladder_qty == 1               # **원인을 안다**
+    # 부족분 1주를 예약 1주가 설명한다 → 화면은 "체결 대기" 로 낮춘다
+    assert attr.pending_ladder_qty >= attr.ledger_total - attr.kis_qty
+
+
+def test_partial_explanation_keeps_the_warning():
+    """예약 1주인데 3주가 비면 나머지 2주는 여전히 설명되지 않은 매도다.
+
+    이 경계를 놓치면 진짜 사고(수동 매도·대체출고)가 "정상 대기" 로 묻힌다.
+    """
+    s = _sqlite_session()
+    _plain_buy(s, "006400", 4)
+    _ladder_sell(s, "006400", 1)
+
+    attr = ha.attribute_holdings({"006400": 1}, "main", db=s)["006400"]
+    gap = attr.ledger_total - attr.kis_qty
+    assert (gap, attr.pending_ladder_qty) == (3, 1)
+    assert attr.pending_ladder_qty < gap              # → 경고 유지
+
+
+def test_filled_ladder_clears_both_the_gap_and_the_flag():
+    """정산(16:00)이 예약을 FILLED 로 올리면 불일치도 표식도 사라진다."""
+    s = _sqlite_session()
+    _plain_buy(s, "006400", 2)
+    _ladder_sell(s, "006400", 1, status="FILLED", fill=1)
+
+    attr = ha.attribute_holdings({"006400": 1}, "main", db=s)["006400"]
+    assert attr.pending_ladder_qty == 0
+    assert attr.status == ha.STATUS_CONFIRMED
+    assert _by_strategy(attr.claims) == {STRATEGY_OPEN: 1}
+
+
+def test_non_ladder_pending_sell_is_not_counted():
+    """트레일 시장가 매도는 사다리가 아니다 — 원인을 안다고 말하면 안 된다."""
+    import datetime as dt
+
+    from app.api.db import Order
+    s = _sqlite_session()
+    _plain_buy(s, "214330", 134)
+    s.add(Order(trade_date=dt.date(2026, 8, 27), strategy=STRATEGY_OPEN,
+                code="214330", side="SELL", qty=134, price=None, ord_dvsn="01",
+                status="SUBMITTED", kis_order_id="T1"))
+    s.commit()
+
+    attr = ha.attribute_holdings({"214330": 134}, "main", db=s)["214330"]
+    assert attr.pending_ladder_qty == 0

@@ -334,6 +334,13 @@ export interface LiveHolding {
   strategies?: HoldingStrategy[];
   /** "confirmed" | "inferred" | "mismatch" | "unknown" */
   attribution?: string;
+  /**
+   * 불일치의 **원인**. `attribution` 은 어긋났다는 사실만 말한다.
+   *   "ladder_pending" — 우리가 낸 사다리 예약이 체결됐는데 원장이 아직 모른다.
+   *                      16:00 잔고 대사가 채운다. 정상 과도기다.
+   *   null/undefined  — 설명되지 않는 차이. 경고를 유지한다.
+   */
+  attribution_reason?: string | null;
 }
 
 export interface HaltStatus {

@@ -25,7 +25,7 @@ from ..db import (
 )
 from ..services.balance_cache import get_balance_for_read
 from ..services.holding_attribution import (
-    CONFIRMED_STATUSES, STATUS_UNKNOWN, UNCONFIRMED_STATUSES,
+    CONFIRMED_STATUSES, STATUS_MISMATCH, STATUS_UNKNOWN, UNCONFIRMED_STATUSES,
     attribute_holdings, primary_strategy,
 )
 from ..services.kis_client import get_kis_client, set_trading_halt, trading_halted
@@ -65,6 +65,13 @@ class LiveHolding(BaseModel):
     # "confirmed" | "inferred" | "mismatch" | "unknown". Anything but
     # "confirmed" means the badge is an estimate and must be shown as one.
     attribution: str = STATUS_UNKNOWN
+    # 불일치의 **원인**. `mismatch` 는 "원장이 잔고와 어긋난다"는 사실만 말하고
+    # 왜 그런지는 말하지 않는다. 화면이 원인을 모르면 우리가 낸 사다리 예약의
+    # 체결을 "누가 몰래 팔았다"와 같은 경고로 표시하게 된다.
+    #   "ladder_pending" — 미체결 사다리 예약이 그 차이를 설명한다.
+    #                      16:00 잔고 대사가 원장에 반영하면 사라진다. 정상이다.
+    #   None            — 설명되지 않는 차이. 경고를 유지한다.
+    attribution_reason: str | None = None
 
 
 class LiveBalanceResponse(BaseModel):
@@ -342,6 +349,19 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
         except Exception as exc:  # noqa: BLE001
             log.warning("balance: 전략 귀속 실패 — 배지 없이 응답: %s", exc)
 
+    def _reason(attr) -> str | None:
+        """불일치가 미체결 사다리 예약으로 **전부** 설명되는가.
+
+        부등호가 핵심이다. 예약이 1주인데 3주가 비면 나머지 2주는 여전히
+        설명되지 않은 매도이므로 경고를 낮추면 안 된다.
+        """
+        if attr is None or attr.status != STATUS_MISMATCH:
+            return None
+        gap = attr.ledger_total - attr.kis_qty
+        if gap > 0 and attr.pending_ladder_qty >= gap:
+            return "ladder_pending"
+        return None
+
     def _holding(h) -> LiveHolding:
         attr = attributed.get(h.code)
         return LiveHolding(
@@ -358,6 +378,7 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
                                         confirmed=c.confirmed)
                         for c in attr.claims] if attr else [],
             attribution=attr.status if attr else STATUS_UNKNOWN,
+            attribution_reason=_reason(attr),
         )
 
     return LiveBalanceResponse(

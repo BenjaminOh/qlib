@@ -169,6 +169,18 @@ function ledgerStrategy(h: LiveHolding, account: string): string {
 function AttributionFlag({ h }: { h: LiveHolding }) {
   const note = attributionNote(h);
   if (!note) return null;
+  // 사다리 예약 체결 대기는 **정상 과도기**다. 경고색을 쓰면 사용자가
+  // "내가 안 팔았는데?" 로 읽는다 — 판 것은 우리 봇이고, 원장이 아직 모를 뿐이다.
+  if (h.attribution_reason === "ladder_pending") {
+    return (
+      <span
+        className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium align-middle bg-gray-100 text-gray-600"
+        title={note}
+      >
+        체결 대기
+      </span>
+    );
+  }
   const bad = h.attribution === "mismatch";
   return (
     <span
@@ -188,6 +200,10 @@ function attributionNote(h: LiveHolding): string | undefined {
     return undefined;
   const ledger = (h.strategies ?? []).reduce((a, l) => a + l.ledger_qty, 0);
   const nums = `원장 ${ledger.toLocaleString()}주 / 실제 ${h.qty.toLocaleString()}주`;
+  if (h.attribution_reason === "ladder_pending") {
+    const gap = ledger - h.qty;
+    return `${nums} — 사다리 익절 ${gap.toLocaleString()}주가 체결됐습니다. 16:00 잔고 대사에서 원장에 반영됩니다.`;
+  }
   return h.attribution === "mismatch"
     ? `${nums} — 주문 기록에 없는 매도가 있습니다 (MTS 직접 매매 등). 16:00 잔고 대사가 원장을 채웁니다.`
     : `${nums} — 일부 수량은 추정입니다`;

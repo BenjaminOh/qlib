@@ -112,6 +112,13 @@ class CodeAttribution:
     claims: tuple[StrategyClaim, ...]
     status: str
     ledger_total: int
+    # 귀속에서 **제외한** 미체결 사다리 예약 수량.
+    #
+    # 이 값이 있으면 불일치의 원인을 안다는 뜻이다: 우리가 낸 예약이 체결됐는데
+    # 모의계좌라 원장이 아직 모르는 것이지, 누가 몰래 판 것이 아니다. 화면이
+    # 그 둘을 같은 경고로 말하면 "내가 안 팔았는데?" 가 된다.
+    # 16:00 `reconcile_balance` 가 잔고 차이를 이 예약에 배분하면 0 이 된다.
+    pending_ladder_qty: int = 0
 
 
 def replay_net_qty(events: Sequence[LedgerEvent]) -> Net:
@@ -250,7 +257,7 @@ def _pending_reservation(status: str | None, side: str | None,
 
 
 def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
-                    ) -> dict[str, list[LedgerEvent]]:
+                    ) -> tuple[dict[str, list[LedgerEvent]], dict[str, int]]:
     """주문 2회 쿼리로 종목별 이벤트를 모은다.
 
     ``orders.strategy`` 에는 인덱스가 있고 ``orders.code`` 에는 없다
@@ -263,7 +270,7 @@ def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
                       Order.code.in_(list(codes)))
               .all())
     if not rows:
-        return {}
+        return {}, {}
 
     from sqlalchemy import func
 
@@ -278,6 +285,7 @@ def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
             fill_qty[oid] = int(total or 0)
 
     out: dict[str, list[LedgerEvent]] = defaultdict(list)
+    pending: dict[str, int] = defaultdict(int)
     for r in rows:
         # 미체결 사다리 예약은 보유를 줄이지 않는다. 09:25 에 걸어둔
         # "+10% 에 절반 판다"는 조건부 주문이지 매도가 아닌데, 미확정 매도로
@@ -286,12 +294,13 @@ def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
         # 정상적으로 세어진다.
         if (_pending_reservation(r.status, r.side, r.reasons_json)
                 and not fill_qty.get(r.id)):
+            pending[r.code] += int(r.qty or 0)
             continue
         out[r.code].append(LedgerEvent(
             strategy=r.strategy, side=r.side, qty=int(r.qty or 0),
             status=r.status, fill_qty=fill_qty.get(r.id),
         ))
-    return out
+    return out, dict(pending)
 
 
 def attribute_holdings(kis_qty: Mapping[str, int], account: str,
@@ -319,10 +328,10 @@ def attribute_holdings(kis_qty: Mapping[str, int], account: str,
 
     try:
         if db is not None:
-            events = _events_by_code(db, list(kis_qty), strategies)
+            events, pending = _events_by_code(db, list(kis_qty), strategies)
         else:
             with SessionLocal() as session:
-                events = _events_by_code(session, list(kis_qty), strategies)
+                events, pending = _events_by_code(session, list(kis_qty), strategies)
     except Exception as exc:  # noqa: BLE001
         log.warning("holding attribution: 원장 조회 실패 — 배지 없이 진행: %s", exc)
         return {}
@@ -338,5 +347,6 @@ def attribute_holdings(kis_qty: Mapping[str, int], account: str,
         out[code] = CodeAttribution(
             code=code, kis_qty=qty, claims=tuple(claims), status=status,
             ledger_total=sum(n.total for n in nets.values()),
+            pending_ladder_qty=int(pending.get(code, 0)),
         )
     return out
