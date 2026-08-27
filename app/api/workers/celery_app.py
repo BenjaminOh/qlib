@@ -54,24 +54,14 @@ celery_app.conf.beat_schedule = {
         "task": "reconcile_fills",
         "schedule": crontab(hour=9, minute=20, day_of_week="mon-fri"),
     },
-    # open 익절 예약 — 보유 종목마다 평단 +10% 지정가로 절반을 미리 건다.
-    # 09:20 정산 뒤여야 그날 매수의 실제 평단이 확정돼 사다리 가격이 맞는다.
-    # 한국 주식 주문은 당일 유효라 매일 아침 다시 건다.
-    "ladder-reserve-open": {
-        "task": "ladder_reserve",
-        "schedule": crontab(hour=9, minute=25, day_of_week="mon-fri"),
-    },
-    # 잔여분 트레일링 — 역지정가(스톱) 주문이 없으므로 직접 지켜본다.
-    # 트레일선은 전일까지의 최고 종가로 계산되어 장중 내내 상수다.
-    # 실제로 도는 창은 09:30~15:25 — 태스크 안에서 자른다(TRAIL_WATCH_FROM).
-    # 아침 배치와 같은 appkey 게이트를 두고 경합하면 주문이 밀린다.
-    "trail-watch-open": {
-        "task": "trail_watch",
-        "schedule": crontab(minute="*/5", hour="9-15", day_of_week="mon-fri"),
-    },
+    # 2026-08-27: `ladder-reserve-open`(09:25)·`trail-watch-open`(*/5) 두 항목을
+    # **제거했다.** 도입 하루 만의 철회다 — 644일 백테스트에서 사다리+트레일이
+    # 랭크 이탈 대비 수익을 122%p 깎았다(상세: live_trader.OPEN_EXIT_RULES_ARCHIVED).
+    # 되살리려면 그 상수를 EXIT_RULES 에 되돌리고 여기 두 항목도 함께 켜야 한다.
+    # 둘 중 하나만 켜면 규칙은 있는데 아무도 실행하지 않는 상태가 된다.
     # 잔고 차이로 원장을 맞춘다. 09:20 reconcile-fills 와 다른 일이다 —
-    # 그쪽은 아침 주문의 체결가를 확정하고, 이쪽은 원장이 모르는 매도(09:25
-    # 사다리 예약의 체결, 사용자의 MTS 직접 매도)를 찾아낸다.
+    # 그쪽은 아침 주문의 체결가를 확정하고, 이쪽은 원장이 모르는 매도(사용자의
+    # MTS 직접 매도, 미체결로 남은 지정가의 체결)를 찾아낸다.
     # 15:45 kr_data 갱신(그날 종가) 뒤, 16:25 브래킷 스윕 앞.
     "reconcile-balance": {
         "task": "reconcile_balance",

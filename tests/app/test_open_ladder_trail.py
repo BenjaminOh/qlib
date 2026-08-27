@@ -184,6 +184,11 @@ class RecordingKIS:
 
 @pytest.fixture
 def env(session, monkeypatch):
+    # 2026-08-27 철회로 `EXIT_RULES` 에서 open 규칙이 빠졌다. 함수와 태스크는
+    # 남아 있으므로(다시 켤 수 있어야 한다) **기능 테스트는 규칙을 주입해서**
+    # 계속 검증한다. 꺼져 있다는 사실 자체는 아래 `test_open_exits_are_disabled*`
+    # 가 따로 고정한다 — 둘을 섞으면 재활성화 시 안전망이 사라진다.
+    monkeypatch.setitem(lt.EXIT_RULES, STRATEGY_OPEN, lt.OPEN_EXIT_RULES_ARCHIVED)
     monkeypatch.setattr(lt, "init_db", lambda: None)
     monkeypatch.setattr(lt, "SessionLocal", lambda: _NoCloseSession(session))
     monkeypatch.setattr(lt, "_stock_name", lambda c: "금호에이치티")
@@ -576,3 +581,53 @@ def test_all_three_tasks_degrade_the_same_way(env, bars):
         kis.quote = {}
         statuses.add(fn(DAY, client=kis)["status"])
     assert statuses == {"balance_unavailable"}
+
+
+# ─── 철회 상태를 고정한다 (2026-08-27) ──────────────────────────────
+#
+# 644일 백테스트에서 사다리+트레일이 랭크 이탈 대비 수익을 **122%p** 깎았다
+# (+45.3% vs +167.8%). 동일가중 유니버스(+90.0%)에도 진다. 원인은 조기하차다 —
+# ladder 406건 평균 +10.36%, trail 901건 평균 +3.62% 로 **이익 나는 종목을
+# 1,307건 잘랐다.**
+#
+# MDD(−27.8%)와 하락장(2024 −10.5%)은 이 규칙이 가장 나았지만, 상승장 수익
+# 122%p 가 대가라 사용자가 수익을 택했다.
+
+
+def test_open_exits_are_disabled_by_default():
+    """`EXIT_RULES` 에 open 이 없어야 한다 — 이게 철회의 본체다.
+
+    되돌려 넣는 순간 `reserve_ladder_exits`·`watch_trailing_exits` 가 되살아난다.
+    """
+    assert STRATEGY_OPEN not in lt.EXIT_RULES
+    assert lt.OPEN_EXIT_RULES_ARCHIVED == {"ladder": [0.10], "ladder_fraction": 0.5,
+                                           "trail_rest": 0.07}
+
+
+def test_open_exit_tasks_are_not_scheduled():
+    """beat 에서 두 항목이 빠져야 한다.
+
+    규칙만 지우고 beat 를 남기면 매일 no-op 태스크가 돌고, beat 만 지우고 규칙을
+    남기면 다음 사람이 "왜 안 돌지" 를 디버깅하게 된다. **둘은 같이 움직인다.**
+    """
+    from app.api.workers.celery_app import celery_app
+    b = celery_app.conf.beat_schedule
+    assert "ladder-reserve-open" not in b
+    assert "trail-watch-open" not in b
+    # 잔고 대사는 남는다 — 사용자의 MTS 직접 매도를 봉합하는 별개 기능이다
+    assert "reconcile-balance" in b
+
+
+def test_disabled_rule_makes_the_functions_inert(env, monkeypatch):
+    """규칙이 없으면 함수가 **주문을 내지 않고** 물러난다.
+
+    `env` 가 규칙을 주입하므로 여기서 다시 빼서 기본 상태를 재현한다.
+    """
+    monkeypatch.delitem(lt.EXIT_RULES, STRATEGY_OPEN, raising=False)
+    _buy(env)
+    kis = RecordingKIS([_holding()])
+    kis.quote = {"price": 1.0}          # 트레일이 켜져 있었다면 즉시 청산될 값
+
+    assert lt.reserve_ladder_exits(DAY, client=kis)["status"] == "no_ladder"
+    assert lt.watch_trailing_exits(DAY, client=kis)["status"] == "no_trail"
+    assert not any(c[0] in ("order", "cancel") for c in kis.calls)

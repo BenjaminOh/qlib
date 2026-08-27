@@ -67,6 +67,27 @@ def parse_mode(mode: str) -> tuple[str, float | None]:
     raise SystemExit(f"알 수 없는 모드: {mode}")
 
 
+def exit_line(code, entry_day, day, avg, *, peak_close, prev_low,
+              sl_cap, low_window, low_buffer, trail):
+    """(청산선, 근거). 운영 `live_trader._trail_line` 과 **같은 max 구조**.
+
+    구조적 손절(전 저점 −1%, 캡 −10%)이 바닥을 깔고, 주가가 오르면 트레일이
+    그 위로 올라선다. 최고 종가가 평단 아래면 트레일선이 손절 아래로 내려가므로
+    손절이 이긴다 — 그래서 max 다.
+
+    `trail=None` 이면 트레일 없이 구조적 손절만 (rank_stop 모드).
+    """
+    cap = avg * (1.0 - sl_cap)
+    pl = prev_low(code, entry_day, low_window)
+    low = pl * (1.0 - low_buffer) if pl else None
+    line, kind = ((low, "prev_low") if (low and cap < low < avg) else (cap, "cap"))
+    if trail:
+        peak = peak_close(code, entry_day, day)
+        if peak and peak * (1.0 - trail) > line:
+            line, kind = peak * (1.0 - trail), "trail"
+    return line, kind
+
+
 def valid_bar(b: dict | None) -> dict | None:
     """NaN·비양수 봉을 걸러낸다.
 
@@ -118,6 +139,11 @@ def main() -> int:
     ap.add_argument("--mode", required=True, help="market | limit2 | limit3 | limit4 | limit5")
     ap.add_argument("--seed", type=float, default=10_000_000.0)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--exit", default="rank",
+                    choices=["rank", "ladder_trail", "trail_only", "rank_stop"],
+                    help="청산 규칙. rank=랭크 이탈만(구체제) / "
+                         "ladder_trail=현행 운영 / trail_only=트레일만 / "
+                         "rank_stop=랭크+손절")
     ap.add_argument("--regime", default=None, help="backtest_regime_data.py 산출 parquet")
     ap.add_argument("--switch-signal", default="nq", choices=["nq", "sp", "kq", "ks"],
                     help="kq/ks 는 그날 실제 등락 = 사후 오라클(상한선) 전용")
@@ -136,10 +162,22 @@ def main() -> int:
 
     from qlib.data import D
     from app.api.services.kis_client import round_to_tick
+    from app.api.config import settings
     from app.api.services.live_trader import (
-        LIVE_CONFIG, _buy_count, _day_ohlc, _prev_close_before, _prev_trading_day,
-        trade_cost,
+        LIVE_CONFIG, OPEN_EXIT_RULES_ARCHIVED, _buy_count, _day_ohlc, _peak_close,
+        _prev_close_before, _prev_low, _prev_trading_day, trade_cost,
     )
+
+    # 2026-08-27 철회 후 EXIT_RULES 에서 빠졌다. 보관 상수를 읽어 **같은
+    # 파라미터로** 비교를 계속할 수 있게 한다 — 다시 켤지 판단하려면 필요하다.
+    rule = OPEN_EXIT_RULES_ARCHIVED
+    ladder_pct = float(rule["ladder"][0])     # +10%
+    ladder_frac = float(rule.get("ladder_fraction", 0.5))
+    trail_pct = float(rule["trail_rest"])     # −7%
+    use_ladder = args.exit == "ladder_trail"
+    use_trail = args.exit in ("ladder_trail", "trail_only")
+    use_stop = args.exit in ("ladder_trail", "trail_only", "rank_stop")
+    use_rank = args.exit in ("rank", "rank_stop")
 
     topk = LIVE_CONFIG["strategy_kwargs"]["topk"]
     n_drop = LIVE_CONFIG["strategy_kwargs"]["n_drop"]
@@ -150,6 +188,9 @@ def main() -> int:
     pos: dict[str, dict] = {}          # code -> {"qty": int, "cost": float}
     rows, trades = [], []
     last_px: dict[str, float] = {}     # 정지 종목 평가용 마지막 유효 종가
+    entry_day: dict[str, object] = {}  # 종목 → 진입일 (트레일·손절 기준)
+    rung_done: set = set()             # 이번 에피소드에서 사다리를 이미 판 종목
+    exit_kinds: list = []              # 청산 사유 집계
     skipped_days = 0
 
     for day in days:
@@ -181,9 +222,9 @@ def main() -> int:
                 return b["close"]
             return last_px.get(code, pos[code]["cost"] / max(pos[code]["qty"], 1))
 
-        # ── 1) 매도 — 랭크 이탈. 오늘 순위가 나쁜 것부터(_rank_sorted_sells 와 동일 규칙)
+        # ── 1) 매도 — 랭크 이탈. 오늘 순위가 나쁜 것부터(_rank_sorted_sells 와 동일)
         held = set(pos)
-        dropped = held - set(target)
+        dropped = (held - set(target)) if use_rank else set()
         # 30위권 밖은 SIGNAL_STORE_TOP_N+1 로 취급 (_today_rank 와 같다)
         worst = max(sig["rank"].max() + 1, 31)
         to_sell = sorted(dropped, key=lambda c: (-ranks.get(c, worst), c))[:n_drop]
@@ -194,9 +235,11 @@ def main() -> int:
             px, qty = bar["open"], pos[code]["qty"]
             fee = trade_cost("SELL", qty, px)
             cash += qty * px - fee
+            avg = pos[code]["cost"] / max(qty, 1)
+            exit_kinds.append(("rank", (px / avg - 1.0)))
             trades.append({"date": day.isoformat(), "side": "SELL", "code": code,
-                           "qty": qty, "px": px, "filled": True})
-            pos.pop(code)
+                           "qty": qty, "px": px, "filled": True, "kind": "rank"})
+            pos.pop(code); entry_day.pop(code, None); rung_done.discard(code)
 
         # ── 2) 매수
         equity = cash + sum(pos[c]["qty"] * mark(c) for c in pos)
@@ -251,8 +294,73 @@ def main() -> int:
                 continue
             cash -= qty * fill_px + fee
             pos[code] = {"qty": qty, "cost": qty * fill_px}
+            entry_day[code] = day
+            rung_done.discard(code)
             trades.append({"date": day.isoformat(), "side": "BUY", "code": code,
                            "qty": qty, "px": fill_px, "filled": True})
+
+        # ── 3) 규칙 청산 — **매수 뒤에 온다.** 운영 순서가 그렇다:
+        #   09:00 랭크 매도 + 매수 → 09:25 사다리 예약 → 09:30~ 트레일 폴링
+        # 앞에 두면 트레일로 판 종목을 **같은 날 다시 사게 된다** — 운영에서는
+        # 불가능한 회전이고, 그 인위적 회전이 사다리·트레일 모드만 깎는다.
+        #
+        # 운영 순서를 따른다: 09:25 사다리 예약이 먼저 걸리고, 09:30~ 폴링이
+        # 트레일을 본다. 그래서 같은 날 둘 다 조건을 만족하면 **사다리가 먼저**다.
+        for code in list(pos):
+            bar = bars.get(code)
+            if not bar or code not in entry_day:
+                continue
+            same_day = entry_day[code] >= day
+            avg = pos[code]["cost"] / max(pos[code]["qty"], 1)
+
+            # 사다리 — **매도** 지정가라 `고가 >= 지정가` 다. 진입 쪽 규칙
+            # (`저가 <= 지정가`)을 그대로 베끼면 부호가 뒤집힌다.
+            if use_ladder and code not in rung_done:
+                rung = float(round_to_tick(avg * (1.0 + ladder_pct)))
+                if bar["high"] >= rung:
+                    q = int(pos[code]["qty"] * ladder_frac)
+                    if q > 0:
+                        px = bar["open"] if bar["open"] > rung else rung
+                        fee = trade_cost("SELL", q, px)
+                        cash += q * px - fee
+                        pos[code]["cost"] -= pos[code]["cost"] * q / pos[code]["qty"]
+                        pos[code]["qty"] -= q
+                        rung_done.add(code)
+                        exit_kinds.append(("ladder", (px / avg - 1.0)))
+                        trades.append({"date": day.isoformat(), "side": "SELL",
+                                       "code": code, "qty": q, "px": px,
+                                       "filled": True, "kind": "ladder"})
+                        if pos[code]["qty"] <= 0:
+                            pos.pop(code); entry_day.pop(code, None)
+                            rung_done.discard(code)
+                            continue
+
+            # 트레일·손절 — 저가가 선을 깨면 전량. 갭하락이면 시가 체결.
+            # 트레일·손절은 **진입 당일 건너뛴다** — 운영 `watch_trailing_exits`
+            # 의 `entry.trade_date >= day` 가드와 같다(기준이 될 종가가 없다).
+            # 사다리는 그 가드가 없다: 09:25 예약은 그날 매수분에도 걸린다.
+            if (use_trail or use_stop) and code in pos and not same_day:
+                # ⚠ 변수명에 주의 — 바깥의 `kind` 는 **진입 모드**다.
+                # 여기서 `kind` 로 받으면 그걸 덮어써서 다음 날 매수가 엉뚱한
+                # 분기로 빠진다(실제로 한 번 그랬다).
+                line, line_kind = exit_line(
+                    code, entry_day[code], day, avg,
+                    peak_close=_peak_close, prev_low=_prev_low,
+                    sl_cap=settings.live_close_bracket_sl,
+                    low_window=settings.live_close_bracket_low_window,
+                    low_buffer=settings.live_close_bracket_low_buffer,
+                    trail=trail_pct if use_trail else None)
+                if line and bar["low"] <= line:
+                    px = bar["open"] if bar["open"] < line else line
+                    q = pos[code]["qty"]
+                    fee = trade_cost("SELL", q, px)
+                    cash += q * px - fee
+                    exit_kinds.append((line_kind, (px / avg - 1.0)))
+                    trades.append({"date": day.isoformat(), "side": "SELL",
+                                   "code": code, "qty": q, "px": px,
+                                   "filled": True, "kind": line_kind})
+                    pos.pop(code); entry_day.pop(code, None)
+                    rung_done.discard(code)
 
         eq = cash + sum(pos[c]["qty"] * mark(c) for c in pos)
         rows.append({"date": day.isoformat(), "cash": cash, "equity": eq, "n_pos": len(pos)})
@@ -274,8 +382,17 @@ def main() -> int:
                      or (kind == "switch" and wants_limit(
                          dt_date.fromisoformat(d), regime, args.switch_signal,
                          args.switch_threshold)))
+    from collections import Counter
+    kinds = Counter(k for k, _ in exit_kinds)
+    by_kind = {}
+    for k in kinds:
+        rets = [r for kk, r in exit_kinds if kk == k]
+        by_kind[k] = {"n": len(rets), "avg_ret_pct": round(sum(rets) / len(rets) * 100, 2)}
+
     summary = {
         "mode": args.mode,
+        "exit": args.exit,
+        "exit_kinds": by_kind,
         "switch": (f"{args.switch_signal}<{args.switch_threshold}"
                    if kind == "switch" else None),
         "limit_days": limit_days,
