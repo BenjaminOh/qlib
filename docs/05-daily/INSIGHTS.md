@@ -6,6 +6,33 @@
 
 ## 1. 시스템 운영 지식 (검증됨)
 
+- **[2026-08-27] ★★ WAF 가 GitHub 웹훅을 6일간 막았다 — 19커밋 미배포 사고.**
+  8/21 12:46 빌드 #103 이후 6일간 빌드가 없었다. 푸시는 전부 성공했고 웹훅도 도착했지만
+  **ModSecurity 가 403 으로 거부**하고 있었다:
+  ```
+  ModSecurity: Access denied with code 403 (phase 2)
+  TX:BLOCKING_INBOUND_ANOMALY_SCORE (Value: 25) >= 10
+  [id "949110"] [ver "OWASP_CRS/4.22.0"]  client: 140.82.115.120 (GitHub-Hookshot)
+  ```
+  **판정법** — 로그를 뒤지기 전에 GitHub 쪽 배달 기록이 1초 만에 답한다:
+  ```bash
+  gh api repos/<owner>/<repo>/hooks --jq '.[] | {url: .config.url, last_response}'
+  ```
+  **qlib 저장소만 걸렸다** (apnhi·aphennet 은 200 OK). CRS 이상점수는 페이로드 내용에
+  좌우되므로 저장소마다 다르다 → **공용 `nginx-waf-blue` 를 손대지 않는다.**
+  대신 `Jenkinsfile` 에 `triggers { pollSCM('H/5 * * * *') }` 백업을 뒀다. UI 설정이
+  아니라 Jenkinsfile 에 두는 이유는 버전 관리·리뷰 가능·잡 설정 드리프트 없음이다.
+  ⚠ **파이프라인 triggers 는 빌드가 한 번 돌아야 등록된다** — 추가 후 첫 빌드는 수동.
+  ⚠ **기존 복구 절차("빈 커밋 재푸시")는 이 원인에 안 통한다.** 다시 403 이 된다.
+  Jenkins 는 익명 빌드 403 · `notifyCommit` 401 · authToken 미설정 · SSH CLI 꺼짐이라
+  **자격증명 없이는 트리거할 수 없다** — 사람이 UI 에서 Build Now 를 눌러야 한다.
+
+  **대가**: 이 기간 실계좌가 구버전으로 돌아 사다리·트레일이 없었고, 금호에이치티가
+  +12.6% → +2.4% 로 밀렸다(≈86,000원). 현금 D+2 수정·화면 손익 net·청산 에피소드
+  단위도 전부 미반영 상태였다. **"푸시 완료"를 "배포 완료"로 보고한 것이 직접 원인이다.**
+  → `~/.claude/commands/deploy.md` §7 에 3단 확인 절차를 넣었다. 핵심은 3번:
+  **실행 중인 컨테이너에서 새 코드의 특징 문자열을 직접 grep** 하는 것. 1·2번만으로는
+  캐시된 이미지·다른 브랜치·다른 슬롯에 속을 수 있다.
 - **[2026-07-29] 배포는 push→Jenkins 전용.** 수동 deploy.sh 금지(사용자 지시). 웹훅이 간헐 유실됨
   (**누적 6회**, 최근 8/4 16:50) — push 후 5~8분 내 Jenkins 빌드 생성 확인, 미반응이면 빈 커밋
   재푸시(승인된 복구 절차). Poll SCM 백업 트리거는 사용자 미적용 상태.

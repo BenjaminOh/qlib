@@ -19,6 +19,20 @@ def makeRemote(identityFile) {
 pipeline {
     agent any
 
+    // 2026-08-27: WAF 가 GitHub 웹훅을 6일간 막아 19커밋이 배포되지 않았다.
+    // ModSecurity(OWASP CRS 4.22.0) 규칙 949110 — 이상점수 25 >= 10 으로 403.
+    // qlib 저장소만 걸렸고 apnhi·aphennet 은 200 이라, 공용 WAF 를 손대는 대신
+    // **폴링 백업**을 둔다. 웹훅이 살아 있으면 웹훅이 먼저 잡고, 죽으면 폴링이
+    // 최대 5분 늦게 잡는다. UI 설정이 아니라 여기 두는 이유: 버전 관리되고
+    // 리뷰되며, Jenkins 잡 설정 드리프트가 생기지 않는다.
+    //
+    // ⚠ 파이프라인 triggers 는 **빌드가 한 번 돌아야 등록된다.** 이 블록을
+    // 추가한 뒤 첫 빌드는 수동(Build Now)으로 띄워야 하고, 그 뒤로는 폴링이
+    // 스스로 이어간다.
+    triggers {
+        pollSCM('H/5 * * * *')
+    }
+
     options {
         // 2026-08-19: builds 91 and 92 overlapped and both ran deploy.sh
         // against the same `qlib-blue` compose project. 91 finished, 92 stalled
