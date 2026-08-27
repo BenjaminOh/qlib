@@ -88,6 +88,38 @@ def exit_line(code, entry_day, day, avg, *, peak_close, prev_low,
     return line, kind
 
 
+def regime_series(regime: dict, key: str, ma: int):
+    """(지수수준, 이동평균) — 날짜별 dict.
+
+    지수 **종가 수준을 직접** 쓴다 (`kq_lvl`/`ks_lvl`). 첫 버전은 등락률을
+    `(1+r).cumprod()` 로 복원했는데, 날짜가 빠지고 휴장일 0% 가 끼면서 MA
+    상/하 판정이 실제 지수와 ~20% 어긋났다 — 복원은 다시 쓰지 않는다.
+    """
+    import pandas as pd
+    if not regime:
+        return {}, {}
+    ser = pd.Series({d: v.get(f"{key}_lvl") for d, v in regime.items()}).dropna().sort_index()
+    lvl = ser
+    mav = lvl.rolling(ma).mean()
+    # ★ 하루 민다. D일 **09:00** 에 매매를 결정하는데, D일 지수 종가는 그때
+    # 존재하지 않는다. 밀지 않으면 미래를 보고 방어를 켜는 백테스트가 된다.
+    # (첫 실행에서 이걸 빼먹었더니 cash20 이 기준선을 +22.9%p 앞섰다.)
+    return lvl.shift(1).to_dict(), mav.shift(1).to_dict()
+
+
+def risk_on(day, lvl: dict, mav: dict) -> bool:
+    """오늘 시장이 이동평균 위인가. **판정할 수 없으면 True**(현행 유지).
+
+    초기 N일은 이동평균이 없다. 그때 방어를 켜면 "데이터가 없어서 안 샀다" 가
+    되는데, 그건 전략이 아니라 사고다.
+    """
+    k = day.isoformat()
+    a, b = lvl.get(k), mav.get(k)
+    if a is None or b is None or b != b:
+        return True
+    return float(a) >= float(b)
+
+
 def valid_bar(b: dict | None) -> dict | None:
     """NaN·비양수 봉을 걸러낸다.
 
@@ -106,12 +138,20 @@ def valid_bar(b: dict | None) -> dict | None:
 
 
 def load_regime(path: str | None) -> dict[str, dict]:
-    """날짜 → {sp, nq, ks, kq}. 없으면 빈 dict."""
+    """날짜 → {sp, nq, ks, kq, kq_lvl, ks_lvl}. 없으면 빈 dict.
+
+    구스키마(등락률만, 월요일 누락) 파일이 들어오면 **즉시 거부**한다 —
+    그 파일로 낸 결과가 한 번 무효가 됐다(2026-08-28, 월요일 127일 누락).
+    """
     if not path:
         return {}
     import pandas as pd
     df = pd.read_parquet(path)
-    return {r["date"]: {k: r[k] for k in ("sp", "nq", "ks", "kq") if k in r}
+    if "kq_lvl" not in df.columns:
+        raise SystemExit(f"--regime {path}: 구스키마(수준 열 없음). "
+                         "backtest_regime_data.py 를 다시 돌려 재생성할 것")
+    keys = ("sp", "nq", "ks", "kq", "kq_lvl", "ks_lvl")
+    return {r["date"]: {k: r[k] for k in keys if k in r}
             for _, r in df.iterrows()}
 
 
@@ -144,6 +184,12 @@ def main() -> int:
                     help="청산 규칙. rank=랭크 이탈만(구체제) / "
                          "ladder_trail=현행 운영 / trail_only=트레일만 / "
                          "rank_stop=랭크+손절")
+    ap.add_argument("--regime-filter", default="none",
+                    choices=["none", "nobuy", "halfk", "cash"],
+                    help="지수가 이동평균 아래일 때: none=현행 / nobuy=신규매수중단 / "
+                         "halfk=topk 절반 / cash=전량청산")
+    ap.add_argument("--regime-ma", type=int, default=60)
+    ap.add_argument("--regime-index", default="kq", choices=["kq", "ks"])
     ap.add_argument("--regime", default=None, help="backtest_regime_data.py 산출 parquet")
     ap.add_argument("--switch-signal", default="nq", choices=["nq", "sp", "kq", "ks"],
                     help="kq/ks 는 그날 실제 등락 = 사후 오라클(상한선) 전용")
@@ -154,6 +200,9 @@ def main() -> int:
     regime = load_regime(args.regime)
     if kind == "switch" and not regime:
         raise SystemExit("switch 모드에는 --regime 이 필요하다")
+    if args.regime_filter != "none" and not regime:
+        raise SystemExit("--regime-filter 에는 --regime 이 필요하다")
+    lvl, mav = regime_series(regime, args.regime_index, args.regime_ma)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -184,6 +233,21 @@ def main() -> int:
     sig_dir = Path(args.signals)
 
     days = [pd.Timestamp(c).date() for c in D.calendar(start_time=args.start, end_time=args.end)]
+
+    # ── 레짐 커버리지 게이트 — 경고가 아니라 중단이다.
+    # `risk_on()`/`wants_limit()` 은 데이터가 없는 날 조용히 기본값(방어 꺼짐/
+    # 시장가)으로 넘어간다. 첫 버전은 그 폴백 때문에 **월요일 127일 전부**
+    # 방어가 꺼진 채 완주했고 결과가 통째로 무효가 됐다(2026-08-28).
+    if regime:
+        miss = [d for d in days if d.isoformat() not in regime]
+        rate = len(miss) / max(len(days), 1)
+        if rate > 0.02:
+            raise SystemExit(
+                f"레짐 커버리지 부족: 백테스트 {len(days)}일 중 {len(miss)}일"
+                f"({rate:.1%})에 레짐 데이터가 없다 (허용 2%). "
+                f"예: {[d.isoformat() for d in miss[:5]]} — "
+                "backtest_regime_data.py 를 다시 돌릴 것")
+
     cash = args.seed
     pos: dict[str, dict] = {}          # code -> {"qty": int, "cost": float}
     rows, trades = [], []
@@ -191,6 +255,7 @@ def main() -> int:
     entry_day: dict[str, object] = {}  # 종목 → 진입일 (트레일·손절 기준)
     rung_done: set = set()             # 이번 에피소드에서 사다리를 이미 판 종목
     exit_kinds: list = []              # 청산 사유 집계
+    risk_off_days = 0                  # 레짐 방어가 켜진 날 수
     skipped_days = 0
 
     for day in days:
@@ -222,12 +287,34 @@ def main() -> int:
                 return b["close"]
             return last_px.get(code, pos[code]["cost"] / max(pos[code]["qty"], 1))
 
+        # ── 0) 포트폴리오 레짐 — 시장 전체가 이동평균 아래면 노출을 줄인다.
+        #
+        # 종목별 손절과 **작동 방식이 다르다**: 개별 종목의 상승을 자르지 않고
+        # 신규 노출만 줄인다(cash 모드는 예외 — 그래서 대조군으로 넣었다).
+        on = risk_on(day, lvl, mav) if args.regime_filter != "none" else True
+        if not on:
+            risk_off_days += 1
+        topk_eff = topk
+        if not on and args.regime_filter == "halfk":
+            topk_eff = max(topk // 2, 1)
+
         # ── 1) 매도 — 랭크 이탈. 오늘 순위가 나쁜 것부터(_rank_sorted_sells 와 동일)
         held = set(pos)
         dropped = (held - set(target)) if use_rank else set()
         # 30위권 밖은 SIGNAL_STORE_TOP_N+1 로 취급 (_today_rank 와 같다)
         worst = max(sig["rank"].max() + 1, 31)
-        to_sell = sorted(dropped, key=lambda c: (-ranks.get(c, worst), c))[:n_drop]
+        if not on and args.regime_filter == "cash":
+            dropped = set(held)                    # 전량 청산
+        elif not on and args.regime_filter == "halfk" and len(held) > topk_eff:
+            # 초과분만 순위 나쁜 순으로 정리한다
+            over = sorted(held, key=lambda c: (-ranks.get(c, worst), c))
+            dropped = dropped | set(over[:len(held) - topk_eff])
+        # 평시에는 하루 n_drop 개만 판다. 레짐 청산(cash/halfk)은 그 상한을
+        # 적용하지 않는다 — "노출을 줄인다" 가 목적인데 이틀에 걸쳐 줄이면
+        # 그 사이 낙폭을 그대로 맞는다.
+        cap_sells = (args.regime_filter in ("cash", "halfk")) and not on
+        ordered = sorted(dropped, key=lambda c: (-ranks.get(c, worst), c))
+        to_sell = ordered if cap_sells else ordered[:n_drop]
         for code in to_sell:
             bar = bars.get(code)
             if not bar:
@@ -243,8 +330,11 @@ def main() -> int:
 
         # ── 2) 매수
         equity = cash + sum(pos[c]["qty"] * mark(c) for c in pos)
-        slot_budget = equity / max(topk, 1)
-        n_buy = _buy_count(held=len(pos), selling=0, topk=topk, n_drop=n_drop, simulated=False)
+        slot_budget = equity / max(topk_eff, 1)
+        n_buy = _buy_count(held=len(pos), selling=0, topk=topk_eff,
+                           n_drop=n_drop, simulated=False)
+        if not on and args.regime_filter in ("nobuy", "halfk", "cash"):
+            n_buy = 0                              # 신규 노출 중단
         cands = [c for c in target if c not in pos]
         # _select_affordable_buys 와 같은 규칙: 1주 값이 슬롯 예산을 넘으면 건너뛴다
         planned = []
@@ -392,6 +482,9 @@ def main() -> int:
     summary = {
         "mode": args.mode,
         "exit": args.exit,
+        "regime_filter": args.regime_filter,
+        "regime_ma": args.regime_ma if args.regime_filter != "none" else None,
+        "risk_off_days": risk_off_days,
         "exit_kinds": by_kind,
         "switch": (f"{args.switch_signal}<{args.switch_threshold}"
                    if kind == "switch" else None),
