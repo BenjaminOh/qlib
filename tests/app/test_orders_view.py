@@ -124,6 +124,8 @@ def _get_orders(monkeypatch, session, prev_closes: dict, **params):
             return session
 
         def __exit__(self_inner, *a):
+            # 운영과 같은 수명: with 종료 시 detach (2026-08-28 /orders 500 회귀 방지)
+            session.expunge_all()
             return False
 
     monkeypatch.setattr(live_router, "SessionLocal", lambda: _Ctx())

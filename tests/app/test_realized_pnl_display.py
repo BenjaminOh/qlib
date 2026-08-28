@@ -54,6 +54,11 @@ def api(monkeypatch, session):
             return session
 
         def __exit__(self, *a):
+            # 운영 SessionLocal 은 with 종료 시 세션을 닫아 객체가 detach 된다.
+            # 여기서 expunge 하지 않으면 지연 로딩(o.fills 등)이 테스트에서만
+            # 성공해, 운영의 DetachedInstanceError(2026-08-28 /orders 500)를
+            # 잡지 못한다. 세션 자체는 다음 with 에서 재사용하므로 닫지 않는다.
+            session.expunge_all()
             return False
 
     monkeypatch.setattr(live_router, "SessionLocal", lambda: _Ctx())

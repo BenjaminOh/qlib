@@ -1052,6 +1052,14 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
                 .order_by(desc(Order.submitted_at))
                 .limit(limit)
                 .all())
+        # ⚠ `o.fills` 는 지연 로딩이라 **세션 안에서** 읽어야 한다. 처음에 이
+        # 집합을 with 블록 밖에서 만들었더니 운영에서 DetachedInstanceError 로
+        # /orders 전체가 500 이 났다(2026-08-28) — 테스트는 세션 수명이 달라
+        # 잡지 못했다.
+        sell_moved = {(o.code, o.strategy) for o in rows
+                      if o.side == "SELL"
+                      and _moved_position(o.status, o.side, o.ord_dvsn,
+                                          has_fill=bool(o.fills))}
     # Realized pnl per SELL order via the shared position timeline.
     # 미체결 지정가 매도는 손익 계산 대상이 아니다 — 타임라인이 이미 그렇게
     # 판정하므로 후보 선정도 같은 규칙을 써야 헛돌지 않는다.
@@ -1078,10 +1086,7 @@ def get_orders(limit: int = Query(100, ge=1, le=500),
         qty = t.filled_qty or t.qty
         cost = t.avg_price_before * qty
         return t.realized_pnl / cost if cost else None
-    for code, strat in {(o.code, o.strategy) for o in rows
-                        if o.side == "SELL"
-                        and _moved_position(o.status, o.side, o.ord_dvsn,
-                                            has_fill=bool(o.fills))}:
+    for code, strat in sell_moved:
         try:
             for t in _position_timeline(code, strat, kis_now=_close_safe(code)):
                 if t.order_id is not None and t.realized_pnl is not None:

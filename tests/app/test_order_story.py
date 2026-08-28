@@ -68,6 +68,8 @@ def _story(monkeypatch, session, order_id, *, exit_rule=None, day_ohlc=None,
             return session
 
         def __exit__(self_inner, *a):
+            # 운영과 같은 수명: with 종료 시 detach (2026-08-28 /orders 500 회귀 방지)
+            session.expunge_all()
             return False
 
     monkeypatch.setattr(live_router, "SessionLocal", lambda: _Ctx())
