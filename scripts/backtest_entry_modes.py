@@ -120,6 +120,39 @@ def risk_on(day, lvl: dict, mav: dict) -> bool:
     return float(a) >= float(b)
 
 
+def make_risk_on(signal: str, threshold, regime: dict, lvl: dict, mav: dict):
+    """게이트 신호 → (day → risk-on 여부) 함수.
+
+    `ma` 외의 신호는 전부 **직전 미국 세션** 값이다(레짐 데이터가 asof 로
+    부착해 둠) — 한국 09:00 에 이미 아는 정보라 추가 시프트가 필요 없다.
+    데이터가 없는 날은 True(현행 유지) — 커버리지 게이트가 침묵 누락을 막는다.
+
+    | signal      | risk-off 조건                       |
+    |-------------|-------------------------------------|
+    | ma          | 지수 전일 종가 < 전일 MA (기존)     |
+    | nq          | 나스닥 등락 < threshold (예 −0.01)  |
+    | vix         | VIX 수준 > threshold (예 25)        |
+    | vix_spike   | VIX 일간 상승률 > threshold (예 0.07)|
+    """
+    if signal == "ma":
+        return lambda day: risk_on(day, lvl, mav)
+
+    col, off_if_greater = {
+        "nq": ("nq", False),           # 하락(작을수록) → off
+        "vix": ("vix_lvl", True),      # 높을수록 → off
+        "vix_spike": ("vix", True),    # 급등(클수록) → off
+    }[signal]
+
+    def f(day) -> bool:
+        row = regime.get(day.isoformat())
+        v = row.get(col) if row else None
+        if v is None or v != v:        # 없음/NaN → 현행 유지
+            return True
+        return float(v) <= threshold if off_if_greater else float(v) >= threshold
+
+    return f
+
+
 def valid_bar(b: dict | None) -> dict | None:
     """NaN·비양수 봉을 걸러낸다.
 
@@ -150,7 +183,8 @@ def load_regime(path: str | None) -> dict[str, dict]:
     if "kq_lvl" not in df.columns:
         raise SystemExit(f"--regime {path}: 구스키마(수준 열 없음). "
                          "backtest_regime_data.py 를 다시 돌려 재생성할 것")
-    keys = ("sp", "nq", "ks", "kq", "kq_lvl", "ks_lvl")
+    keys = ("sp", "nq", "ks", "kq", "kq_lvl", "ks_lvl",
+            "vix_lvl", "vxn_lvl", "vix", "vxn")
     return {r["date"]: {k: r[k] for k in keys if k in r}
             for _, r in df.iterrows()}
 
@@ -189,6 +223,13 @@ def main() -> int:
                     help="지수가 이동평균 아래일 때: none=현행 / nobuy=신규매수중단 / "
                          "halfk=topk 절반 / cash=전량청산")
     ap.add_argument("--regime-ma", type=int, default=60)
+    ap.add_argument("--regime-signal", default="ma",
+                    choices=["ma", "nq", "vix", "vix_spike"],
+                    help="게이트 신호. ma=지수 vs 이동평균(기존) / nq=직전 미국 세션 "
+                         "나스닥 등락 / vix=VIX 수준 / vix_spike=VIX 일간 상승률")
+    ap.add_argument("--regime-threshold", type=float, default=None,
+                    help="ma 외 신호의 경계값. nq: −0.01 이면 나스닥 −1%% 미만일 때 "
+                         "off / vix: 25 면 VIX>25 일 때 off / vix_spike: 0.07")
     ap.add_argument("--regime-index", default="kq", choices=["kq", "ks"])
     ap.add_argument("--regime", default=None, help="backtest_regime_data.py 산출 parquet")
     ap.add_argument("--switch-signal", default="nq", choices=["nq", "sp", "kq", "ks"],
@@ -202,7 +243,11 @@ def main() -> int:
         raise SystemExit("switch 모드에는 --regime 이 필요하다")
     if args.regime_filter != "none" and not regime:
         raise SystemExit("--regime-filter 에는 --regime 이 필요하다")
+    if args.regime_signal != "ma" and args.regime_threshold is None:
+        raise SystemExit(f"--regime-signal {args.regime_signal} 에는 "
+                         "--regime-threshold 가 필요하다")
     lvl, mav = regime_series(regime, args.regime_index, args.regime_ma)
+    is_on = make_risk_on(args.regime_signal, args.regime_threshold, regime, lvl, mav)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -291,7 +336,7 @@ def main() -> int:
         #
         # 종목별 손절과 **작동 방식이 다르다**: 개별 종목의 상승을 자르지 않고
         # 신규 노출만 줄인다(cash 모드는 예외 — 그래서 대조군으로 넣었다).
-        on = risk_on(day, lvl, mav) if args.regime_filter != "none" else True
+        on = is_on(day) if args.regime_filter != "none" else True
         if not on:
             risk_off_days += 1
         topk_eff = topk
@@ -483,7 +528,12 @@ def main() -> int:
         "mode": args.mode,
         "exit": args.exit,
         "regime_filter": args.regime_filter,
-        "regime_ma": args.regime_ma if args.regime_filter != "none" else None,
+        "regime_signal": args.regime_signal if args.regime_filter != "none" else None,
+        "regime_threshold": (args.regime_threshold
+                             if args.regime_filter != "none" else None),
+        "regime_ma": (args.regime_ma
+                      if args.regime_filter != "none" and args.regime_signal == "ma"
+                      else None),
         "risk_off_days": risk_off_days,
         "exit_kinds": by_kind,
         "switch": (f"{args.switch_signal}<{args.switch_threshold}"

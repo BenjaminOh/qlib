@@ -24,6 +24,8 @@
 | kq_lvl, ks_lvl | 코스닥/코스피 **그날 종가 수준** | ❌ 사후 — 소비부가 shift(1) |
 | kq, ks | 그날 등락률 | ❌ 사후 오라클 전용 |
 | nq, sp | **직전 미국 세션** 등락률 (asof) | ✅ 미국 t일 종가는 한국 t+1 새벽 확정 |
+| vix_lvl, vxn_lvl | 공포지수 수준 (^VIX S&P / ^VXN 나스닥, asof) | ✅ 위와 동일 |
+| vix, vxn | 공포지수 일간 등락률 (asof) | ✅ 위와 동일 |
 | us_lag | 미국 관측이 며칠 전 것인지 | 검증용 |
 """
 
@@ -42,7 +44,7 @@ DEFAULT_CALENDAR = "/root/.qlib/qlib_data/kr_data/calendars/day.txt"
 def build(start: str, end: str) -> pd.DataFrame:
     import yfinance as yf
 
-    t = yf.download(["^GSPC", "^IXIC", "^KS11", "^KQ11"],
+    t = yf.download(["^GSPC", "^IXIC", "^KS11", "^KQ11", "^VIX", "^VXN"],
                     start=start, end=end,
                     progress=False, auto_adjust=True)["Close"]
 
@@ -55,10 +57,14 @@ def build(start: str, end: str) -> pd.DataFrame:
 
     # ── 미국: 한국 D일 09:00 에 아는 최신 종가 = D **이전** 마지막 미국 세션.
     #    asof(backward, exact 제외) 가 그 정의 그대로다. 월요일이면 금요일 종가.
-    us = t[["^GSPC", "^IXIC"]].dropna(how="all").copy()
-    us.columns = ["sp_lvl", "nq_lvl"]
-    us["sp"] = us["sp_lvl"].pct_change()
-    us["nq"] = us["nq_lvl"].pct_change()
+    us = t[["^GSPC", "^IXIC", "^VIX", "^VXN"]].dropna(how="all").copy()
+    us.columns = ["sp_lvl", "nq_lvl", "vix_lvl", "vxn_lvl"]
+    # 공포지수만 그날 결측이면(상장지수와 달리 드물게 빔) 직전 값으로 잇는다 —
+    # asof 부착 뒤 NaN 이 남으면 게이트가 조용히 꺼지는 폴백을 타기 때문이다.
+    # pct_change 보다 먼저 이어야 등락률도 정의된다.
+    us[["vix_lvl", "vxn_lvl"]] = us[["vix_lvl", "vxn_lvl"]].ffill()
+    for c in ("sp", "nq", "vix", "vxn"):
+        us[c] = us[f"{c}_lvl"].pct_change(fill_method=None)
     us = us.reset_index().rename(columns={us.index.name or "Date": "Date"})
     us = us.rename(columns={"Date": "us_date"})
 
@@ -66,8 +72,14 @@ def build(start: str, end: str) -> pd.DataFrame:
                        left_on="Date", right_on="us_date",
                        direction="backward", allow_exact_matches=False)
     df["us_lag"] = (df["Date"] - df["us_date"]).dt.days
+    # 구간 맨 앞은 직전 미국 세션이 다운로드 범위 밖이라 asof 가 빈다 — 그 선행
+    # 행들만 잘라낸다. (안 자르면 첫날의 NaN 이 `NaN < 1` = False 로 지연 검사를
+    # 조용히 통과한다 — nq 첫날이 실제로 그렇게 빠져나갔었다.)
+    first_ok = df["us_date"].notna().idxmax()
+    df = df.loc[first_ok:].copy()
     df["date"] = df["Date"].dt.strftime("%Y-%m-%d")
-    return df[["date", "kq_lvl", "ks_lvl", "kq", "ks", "nq", "sp", "us_lag"]]
+    return df[["date", "kq_lvl", "ks_lvl", "kq", "ks", "nq", "sp",
+               "vix_lvl", "vxn_lvl", "vix", "vxn", "us_lag"]]
 
 
 def validate(df: pd.DataFrame, calendar: str | None) -> list[str]:
@@ -92,7 +104,19 @@ def validate(df: pd.DataFrame, calendar: str | None) -> list[str]:
     if (df["kq_lvl"] <= 0).any() or df["kq_lvl"].isna().any():
         errs.append("수준값: kq_lvl 에 0/음수/NaN 존재")
 
+    # 2b) 공포지수 — 게이트 신호로 쓰이므로 결측·이상치가 있으면 안 된다.
+    for c in ("vix_lvl", "vxn_lvl"):
+        if c in df.columns:
+            if df[c].isna().any() or (df[c] <= 0).any():
+                errs.append(f"공포지수: {c} 에 NaN/비양수 존재")
+            elif not (5.0 <= df[c].min() and df[c].max() <= 150.0):
+                errs.append(f"공포지수: {c} 범위 이상 ({df[c].min():.1f}~{df[c].max():.1f}, "
+                            "기대 5~150)")
+
     # 3) 미국 asof 지연 — 조인 방향이 틀리면 지연이 음수거나 커진다.
+    # NaN 은 <,> 비교가 전부 False 라 먼저 명시적으로 잡는다.
+    if df["us_lag"].isna().any():
+        errs.append(f"us_lag NaN {int(df['us_lag'].isna().sum())}건 — asof 미부착 행 존재")
     if (df["us_lag"] < 1).any():
         errs.append("us_lag<1: 당일/미래 미국 종가가 붙었다 (룩어헤드)")
     if (df["us_lag"] > 5).any():
