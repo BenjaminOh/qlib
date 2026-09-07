@@ -42,6 +42,6 @@ Telegram 봇(`notify.py`) + `task_failure` 훅 + 논리적 실패 알림(no_sign
 
 ## 운영 규칙 (2026-07 확립)
 
-- **push = Jenkins 자동배포** (수동 deploy.sh 금지, 커밋 모아 1회 push, 거래 크론 창 08:50-09:40/15:10-16:30 KST 회피)
+- **push = Jenkins 자동배포** (수동 deploy.sh 금지, 커밋 모아 1회 push, 거래 크론 창 08:50-09:40/14:30-16:35 KST 회피)
 - KIS 모의계좌는 만료·재발급됨 — 재발급 시 `KIS_APP_KEY/SECRET/ACCOUNT_NO`(env 3파일) + `live_seed_cash_open`(가상자금 일치) 갱신
 - kr_data 대규모 갭은 증분 백필 금지 → 전체 재수집·rebuild 디렉터리 빌드·검증·스왑

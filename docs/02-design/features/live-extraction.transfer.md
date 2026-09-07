@@ -95,7 +95,7 @@ app/api/core/      qlib_manager kr_universes kr_stock_names.json
 app/api/           main.py config.py auth/
 app/frontend/src/  app/live/** app/login lib/ components/ middleware.ts
 scripts/           kr_data_fetch.py dump_bin.py       ← kr_data_refresh 가 런타임 호출
-tests/app/         전부 (현재 333 passed)
+tests/app/         전부 (현재 333 passed (2026-09-07 현재 412))
 infra/             nginx cron firewall   (경로·포트 수정 필요, §6)
                    Dockerfile.prod app/frontend/Dockerfile
                    docker-compose.prod.yml deploy.sh Jenkinsfile .env.prod.example
@@ -310,7 +310,7 @@ app/ 줄 수              17,963 (api 11,254 + frontend 6,696)
 3. 병행 운영 기간에 KIS appkey 를 몇 개 쓸지(구 리포 정지 후 재사용 vs 신규 발급).
 4. 구 리포의 운명 — 연구 전용으로 동결할지, `app/` 을 통째로 지울지.
 5. Postgres 전환을 이 기회에 할지(`.env.prod.example:37` 에 "실매매 승격 시" 로 예고돼 있음).
-6. **사용자별 appkey 축** — 2026-08-26 에 `trail_watch`(장중 5분 폴링)가 들어오면서
+6. **사용자별 appkey 축** — 2026-08-26 에 `trail_watch`(장중 5분 폴링 — ⚠ 2026-09-07 삭제됨, 이 논거의 전제는 사라졌다)가 들어오면서
    호출 예산이 처음으로 사용자 수에 비례하게 됐다. KIS 게이트는 **계좌가 아니라 appkey
    단위**다(모의 ~1req/s, 실전 ~20req/s). 1인 20종목이면 한 스윕에 약 24초 — 5분 주기에
    여유롭다. 하지만 **한 appkey 로 여러 사용자를 처리하는 구조는 성립하지 않는다**

@@ -132,7 +132,7 @@ def refresh_kr_data_task(self) -> dict:
 },
 ```
 
-15:35 `live_signal` 보다 **이전이 아니라 이후** 에 배치한 이유: 오늘 종가 데이터가 안정화될 시간 + 15:40 sync 가 끝난 다음. 다음 거래일 15:35 `live_signal` 이 fresh data 로 모델 fit.
+15:45 체인 `live_signal`(구 15:35 슬롯은 폐기) 보다 **이전이 아니라 이후** 에 배치한 이유: 오늘 종가 데이터가 안정화될 시간 + 15:40 sync 가 끝난 다음. 다음 거래일 15:45 체인 `live_signal`(구 15:35 슬롯은 폐기) 이 fresh data 로 모델 fit.
 
 ### Health 엔드포인트 (Phase C, optional)
 
@@ -222,7 +222,7 @@ r.set("kr_data_refresh:status", json.dumps({...}), ex=86400 * 7)  # 7일 TTL
 - **Unit**: `_run_dump_update` 가 비어있는 CSV 디렉터리에 대해 graceful 처리 (no-op + success), 1일 새 데이터에 대해 calendar 1줄 append
 - **Integration**: 로컬에 더미 `kr_data` 만들고 task 1회 실행 → calendar/instruments/features 가 한 날짜만큼 늘었는지
 - **Prod smoke**: 첫 firing 다음날 (15:46) 에 `ssh rocky-monitor container_log qlib_worker_blue | grep refresh_kr_data` → `succeeded` 1건 + redis `kr_data_refresh:status.status == "ok"`
-- **End-to-end**: 다음다음날 15:35 `live_signal` 의 `as_of` 가 진짜 다음 거래일 (e.g., today+1 영업일) 인지
+- **End-to-end**: 다음다음날 15:45 체인 `live_signal`(구 15:35 슬롯은 폐기) 의 `as_of` 가 진짜 다음 거래일 (e.g., today+1 영업일) 인지
 
 ## Open Questions
 

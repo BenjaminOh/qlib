@@ -10,7 +10,7 @@
 | 라우팅 | `nginx-proxy → nginx-waf-blue` (rocky-monitor 기존 패턴 재사용) |
 | 포트 | Blue web `25022` / api `25023`, Green web `25024` / api `25025` (newsro 25011-12, mail-news 25021 직후 sequential) |
 | Registry | (사용 안 함 — 호스트에서 직접 build) |
-| KIS | 미발급 → mock 모드로 시작 |
+| KIS | **[2026-09-07 현재] KIS paper(모의) 로 실주문 운영 중.** (구) 미발급 → mock 모드로 시작 |
 
 권한 분담:
 - **사용자(직접)**: DNS · certbot · WAF conf 추가 · Jenkins job 등록 · `docker compose up`
@@ -124,7 +124,7 @@ $EDITOR /home/qlib/.env
 
 `.env`에서 채울 부분:
 - KIS 키는 **미발급 상태이므로 placeholder 그대로** (`PASTE_PAPER_APPKEY_HERE` 등). 자동으로 mock 모드로 동작.
-- `REDIS_URL` — rocky-monitor에 공유 redis 없는 듯 → docker-compose가 새 redis 띄우려면 compose에 redis 서비스 추가 또는 기존 redis 컨테이너 재사용 결정 필요. 일단 다음 옵션 중 하나:
+- ~~`REDIS_URL`~~ **[2026-09-07 해결됨]** `docker-compose.prod.yml` 에 `qlib_redis` 서비스가 있다. (구) rocky-monitor에 공유 redis 없는 듯 → docker-compose가 새 redis 띄우려면 compose에 redis 서비스 추가 또는 기존 redis 컨테이너 재사용 결정 필요. 일단 다음 옵션 중 하나:
   ```
   REDIS_URL=redis://localhost:6379/2          # 호스트의 redis (있으면)
   REDIS_URL=redis://qlib-redis:6379/0         # qlib 전용 redis 컨테이너 (compose 추가 필요)
@@ -268,11 +268,17 @@ docker compose -p qlib-blue -f docker-compose.prod.yml --env-file .env.blue \
   restart api worker scheduler
 ```
 
-브라우저로 `/live` 새로고침 → 배지가 `mock` → `paper` 로 바뀌면 성공. 다음 평일 15:35 KST에 첫 자동 시그널이 생성되고 09:00 KST에 자동 발주.
+브라우저로 `/live` 새로고침 → 배지가 `mock` → `paper` 로 바뀌면 성공. 다음 평일 15:45 KST 데이터 갱신 체인(실패 시 16:20 폴백)에서 첫 자동 시그널이 생성되고 09:00 KST에 자동 발주.
 
 ---
 
-## 11. 알려진 미해결 / 다음 작업
+## 11.
+
+> ⚠️ **[2026-09-07] 아래 "미해결" 표는 상당수가 이미 해결됐다** — Jenkins credential 은
+> `deploy-key` 로 통일(`Jenkinsfile`), `disableConcurrentBuilds()`·`timeout(120min)`·
+> `pollSCM('H/5 * * * *')` 도입, redis 서비스 추가. deploy.sh 시각 가드는 여전히
+> 미도입이고 운영 룰(푸시 금지창)로 대체 중이다.
+ 알려진 미해결 / 다음 작업
 
 | 이슈 | 영향 | 해결 |
 |---|---|---|

@@ -40,7 +40,7 @@ params: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD=<6자리>`
 
 ```
 T일 15:45  refresh_kr_data
-     15:50  live_signal            → as_of=T+1 top-30 저장
+     15:45  live_signal (refresh 체인) → as_of=T+1 top-30 저장  ※ 독립 슬롯은 16:20 폴백
      (chain) fetch_market_flow     → 그 30개 코드 적재 (KIS는 당일 행을 장 종료 후 공개)
      18:10  fetch_market_flow      → beat 폴백 (idempotent)
 T+1  15:22  live_orders_flow       → **T일까지의** 수급으로 재랭킹 → T+1 종가 진입
@@ -93,7 +93,7 @@ final      = (1-blend)·model_rank_pct + blend·flow_rank_pct   # 낮을수록 �
 ## 3. 실행 경로
 
 - `STRATEGY_FLOW = "flow"` (strategy 컬럼 `String(8)`에 그대로 적재 — 마이그레이션 없음)
-- `BRACKET_STRATEGIES = (close, flow)` — 랭크 이탈 매도 없음, ±5% 브래킷만
+- `BRACKET_STRATEGIES = (close, flow) — ⚠ 현재는 10개(trail·scale·limit·cafe·surge·cafeopen·cafecool·cafereal 추가)` — 랭크 이탈 매도 없음, ±5% 브래킷만
 - `submit_daily_orders(strategy="flow")`: `rank <= SIGNAL_STORE_TOP_N`(30)으로 후보를 넓게
   읽고 → `_apply_flow_overlay` → top-K 슬라이스 → **기존 시뮬 경로 그대로**
 - `evaluate_bracket_exits(strategy=...)`로 일반화, `close_bracket_exits_task`가 두 전략 순회

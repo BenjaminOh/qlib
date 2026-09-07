@@ -1,3 +1,8 @@
+> ⚠️ **[2026-09-07 상태] Phase B·C 는 미구현이다.** `Scenario` 테이블·`Signal.profile`·
+> `services/scenario_config.py`·`live_scenarios_*` beat·`GET /live/scenarios`·
+> `app/live/scenarios/page.tsx` 모두 존재하지 않는다. 실제로는 **전략 11개를 하드코딩된
+> beat 슬롯으로 병렬 운영**하는 다른 길로 갔다. 이 문서는 "가지 않은 설계"로 읽을 것.
+
 # Design: scenario-matrix — 모델 학습 안정화 + N-시나리오 프레임워크
 
 | 항목 | 값 |
@@ -28,9 +33,9 @@ early_stopping_rounds=200`이 전일 안정 (fit ~11초, num_boost_round 1000 �
 
 ### A-1. `LIVE_CONFIG.model_kwargs` 변경 — `app/api/services/live_trader.py`
 ```python
-"model_kwargs": {"learning_rate": 0.005, "early_stopping_rounds": 200},
+"model_kwargs": {"learning_rate": 0.005, "early_stopping_rounds": 0  # ⚠ 2026-08-05 변경: 조기종료 완전 제거},
 ```
-(num_boost_round 기본 1000 유지 — 실측 최대 216에서 수렴)
+(num_boost_round **150 고정** (⚠ 2026-08-05 변경 — 기본 1000 + 조기종료는 검증 신호가 소음 수준이라 트리 1개짜리 모델이 나오는 신호 붕괴를 일으켰다. `live_trader.LIVE_CONFIG` 가 진실) — 실측 최대 216에서 수렴)
 
 ### A-2. 퇴화 감지 가드 — `generate_daily_signal`
 - 픽 저장 직전: `top10 고유 점수 < 5` 이면 `log.warning("degenerate signal ...")` +

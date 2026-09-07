@@ -45,6 +45,10 @@ qlib CLI 로 다른 시장을 다루고 싶다면 (웹 UI 외):
 
 ---
 
+> ⚠️ **이 저장소는 백테스트 플랫폼이 아니라 한국 주식 자동매매 봇이다.**
+> 실제 운영의 중심은 `/live/**` 라이브 대시보드이고, 아래 표는 백테스트 화면만 담고 있다.
+> 전체 라우트·개념은 `CLAUDE.md` 와 `docs/00-운영-매매-방식-해설.md` 참조.
+
 ## 웹 UI 주요 화면 (`http://localhost:5002`)
 
 | 경로 | 기능 |
@@ -94,7 +98,7 @@ REST API (FastAPI, `/api/v1` prefix) — Swagger 는 <http://localhost:5001/docs
 | `./start-local.sh jupyter` | Jupyter 기동 (포트 자동 탐색, 기본 8888) |
 | `./start-local.sh run <yaml>` | `qrun <yaml>` CLI 실행 |
 | `./start-local.sh test [args]` | `pytest tests/ -m "not slow"` (qlib 자체 테스트) |
-| `./start-local.sh test-web` | **웹 스택 E2E 스모크 테스트** (API + 백테스트 회귀 8건, ~12초) |
+| `./start-local.sh test-web` | **웹 스택 E2E 스모크 테스트** (API + 백테스트 회귀 10건, ~12초) |
 | `./start-local.sh` (인자 없음) | 일회성 인터랙티브 bash (종료 시 컨테이너 삭제) |
 
 ### E2E 스모크 테스트 — `./start-local.sh test-web`
@@ -182,5 +186,5 @@ docker volume rm qlib_qlib_data qlib_mlruns     # 데이터/MLflow 리셋
 | [`docs/WEB_USAGE.md`](docs/WEB_USAGE.md) | 웹 UI 화면·REST API 스펙·문제 해결 상세 |
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | Docker 셋업 + `workspace/` 학습 파이프라인 Step 1~7 |
 | [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md) | qlib 활용 장문 매뉴얼 |
-| [`CLAUDE.md`](CLAUDE.md) | Claude Code 작업 시 지침·빌드·린트·테스트 |
+| [`CLAUDE.md`](CLAUDE.md) | **이 저장소가 무엇인지**(자동매매 봇) + 코드 지도 + 작업 지침 |
 | [`README.md`](README.md) | Microsoft qlib 원본 README |

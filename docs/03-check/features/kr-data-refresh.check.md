@@ -25,7 +25,7 @@ kr-data-refresh 기능 자체(데이터 신선도 유지)의 **원래 목적은 
 | 항목 | 근거 |
 |------|------|
 | 인프라 무중단 | `qlib_api_green`(healthy)/`qlib_worker_green`/`qlib_scheduler_green`/`qlib_redis`(healthy) 2개월째 Up. redis도 정상 — 배포문서가 우려했던 external-redis 블로커는 해소됨 |
-| 크론(beat) 정상 | 스케줄러 로그상 2026-07-02~07-22 매 거래일 전체 태스크(09:00 `live_orders` → 09:30 `live_sync` → 15:20 `live_orders_close` → 15:35 `live_signal` → 15:40 `live_sync`/`live_sync_close` → 15:45 `refresh_kr_data`)가 정시 발화. 주말(7/11·12·18·19) 자동 제외 |
+| 크론(beat) 정상 | 스케줄러 로그상 2026-07-02~07-22 매 거래일 전체 태스크(09:00 `live_orders` → 09:30 `live_sync` → 15:20 `live_orders_close` → 15:45 체인 `live_signal`(구 15:35 슬롯은 폐기) → 15:40 `live_sync`/`live_sync_close` → 15:45 `refresh_kr_data`)가 정시 발화. 주말(7/11·12·18·19) 자동 제외 |
 | KIS 모의투자 실계정 운영 | mock이 아니라 paper. `openapivts.koreainvestment.com:29443`, 계좌 `CANO=50160169` — paper 자격증명 이미 투입됨 |
 | kr_data 신선도 | `refresh_kr_data → {'status': 'skipped', 'reason': 'up_to_date', 'last_date': '2026-07-21'}` — 데이터 스토어 최신 유지(기능 목적 달성) |
 

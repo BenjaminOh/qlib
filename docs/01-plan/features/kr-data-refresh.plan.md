@@ -21,7 +21,7 @@
 ## Goals
 
 1. **즉시 (catch-up)**: 운영 `kr_data` 를 오늘 (또는 가장 최근 거래일) 까지 증분 갱신. 모델 입력이 5/19 종가 기준이 되도록.
-2. **항상 (automation)**: 매 거래일 장 마감 직후 (15:45 ~ 16:00 KST) `kr_data` 가 자동 갱신되도록 Celery beat 에 cron 추가. 다음 firing (15:35 `live_signal`) 은 그 다음날부터 fresh data 사용.
+2. **항상 (automation)**: 매 거래일 장 마감 직후 (15:45 ~ 16:00 KST) `kr_data` 가 자동 갱신되도록 Celery beat 에 cron 추가. 다음 firing (15:45 체인 `live_signal`(구 15:35 슬롯은 폐기)) 은 그 다음날부터 fresh data 사용.
 3. **관찰 가능성**: 갱신 실패 시 즉시 감지할 수 있어야 함 (worker log + DB 또는 simple healthcheck endpoint).
 
 ## Non-goals
@@ -117,7 +117,7 @@
 
 - Phase A: 운영 컨테이너에서 `cat /root/.qlib/qlib_data/kr_data/calendars/day.txt | tail -3` → 마지막 날짜가 오늘 (또는 직전 거래일) 인지.
 - Phase B: 다음날 15:46 ~ 15:50 사이에 `ssh rocky-monitor container_log qlib_worker_green | grep refresh_kr_data` 에 `succeeded` 로그 있는지. day.txt 가 갱신됐는지.
-- Phase B end-to-end: 다음다음날 15:35 `live_signal` 의 `as_of` 가 진짜 다음 거래일 (e.g., 2026-05-21) 로 찍히는지.
+- Phase B end-to-end: 다음다음날 15:45 체인 `live_signal`(구 15:35 슬롯은 폐기) 의 `as_of` 가 진짜 다음 거래일 (e.g., 2026-05-21) 로 찍히는지.
 - Phase C: `curl https://qlib.tmanager.kr/api/v1/health` 응답에 `kr_data_last_date` 필드.
 
 ## Next step
