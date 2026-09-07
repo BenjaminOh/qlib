@@ -336,7 +336,7 @@ export interface LiveHolding {
   attribution?: string;
   /**
    * 불일치의 **원인**. `attribution` 은 어긋났다는 사실만 말한다.
-   *   "ladder_pending" — 우리가 낸 사다리 예약이 체결됐는데 원장이 아직 모른다.
+   *   "ladder_pending" — (구) 사다리 예약이 체결됐는데 ※ 2026-09-07 제거, 과거 원장 전용 — 원장이 아직 모른다.
    *                      16:00 잔고 대사가 채운다. 정상 과도기다.
    *   null/undefined  — 설명되지 않는 차이. 경고를 유지한다.
    */
@@ -453,7 +453,7 @@ export interface LiveOrderRow {
   basis: string | null;
   /**
    * 이 매도의 성격. `null` 이면 평범한 봇 주문이다.
-   *   "ladder_reserve" — 09:25 에 미리 건 익절 지정가
+   *   "ladder_reserve" — (구) 09:25 사다리 예약. 2026-09-07 제거 — 과거 원장 전용
    *   "manual_exit"    — 원장에 없던 매도를 잔고 차이로 되짚은 합성 행.
    *                      사용자가 MTS 로 직접 판 경우다.
    * 이 구분이 없으면 추정 가격이 확정 체결가와 똑같은 얼굴로 표에 앉는다.

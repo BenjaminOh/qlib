@@ -100,7 +100,7 @@ export default function LiveDashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">📊 모의투자 라이브</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">📊 라이브 (KIS 모의)</h1>
           {b && (
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${modeColor}`}>
               {b.mode === "real" ? "실전" : b.mode === "paper" ? "모의투자" : "MOCK (KIS 미연결)"}
@@ -198,9 +198,15 @@ export default function LiveDashboardPage() {
                   익절 +10% (예약 매도 모델)</p>
                 <p>• <strong>surge</strong> — 급등 전야 프로파일(추세+눌림+거래량) 상위 2종목 매수, 청산은 close와 동일 브래킷</p>
                 <p>• <strong>cafe</strong> — 종목 선정부터 다름: 카페 추천자 역설계 스크리너가
-                  15:05 전 시장을 스캔(급등 눌림·신고가 돌파·재진입·낙폭 반등 4패턴), 상위 1~2종목을
+                  15:05 전 시장을 스캔(급등 눌림(B)·신고가 돌파(A)·저항대 돌파(R)·재진입(C)·낙폭 반등(D) 5패턴), 상위 1~2종목을
                   15:28 종가 매수. 손절은 패턴별 <strong>구조적 손절선</strong>(캡 −15%), 익절 +10%</p>
-                <p>판정은 매일 15:48(당일 시세 반영 직후) 시가·고가·저가 기준 — 갭으로 뚫린 날은
+                <p>• <strong>cafeopen</strong> / <strong>cafecool</strong> — cafe 의 쌍둥이.
+                  <strong>변수 하나만</strong> 다릅니다: cafeopen 은 진입 시점(익일 시가 −3% 지정가,
+                  10:00 판정), cafecool 은 진입 필터(20일 상승률 50% 이상 제외). 청산은 cafe 와 동일</p>
+                <p>• <strong className="text-red-700">cafereal</strong> — cafe 와 같은 후보를
+                  <strong>카페 계좌에 실주문</strong>으로 냅니다(시뮬 아님). 시뮬 체결 가정이
+                  현실에서도 성립하는지를 잽니다</p>
+                <p>판정은 매일 15:45 데이터 갱신 직후 체인(실패 시 16:25 폴백) 시가·고가·저가 기준 — 갭으로 뚫린 날은
                   시가 체결, 익절·손절 동시 터치 시 손절 우선 가정. 범례 클릭으로 곡선별 표시/숨김.</p>
               </div>
             </details>

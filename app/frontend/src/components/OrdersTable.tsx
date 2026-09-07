@@ -71,7 +71,7 @@ const EXIT_KIND_BADGE: Record<string, { label: string; cls: string; title: strin
   ladder_reserve: {
     label: "예약",
     cls: "bg-violet-100 text-violet-800",
-    title: "09:25에 미리 건 익절 지정가 (평단 +10%). 한국 주식 주문은 당일 유효하므로 체결되지 않으면 장 마감에 소멸합니다.",
+    title: "(구) 09:25 사다리 예약 — 평단 +10% 익절 지정가. 2026-08-27 철회·09-07 제거돼 새로 생기지 않습니다. 한국 주식 주문은 당일 유효하므로 체결되지 않으면 장 마감에 소멸합니다.",
   },
 };
 

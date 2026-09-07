@@ -203,7 +203,7 @@ export default function AccountPolicyForm({ account }: { account: AccountPolicyR
       {confirming ? (
         <div className="flex flex-wrap items-center gap-2 rounded bg-amber-50 border border-amber-200 p-3">
           <span className="text-sm text-amber-900">
-            다음 09:00 주문부터 이 방식으로 나갑니다. 해당 계좌의 성과 연속성은 여기서
+            다음 주문부터 이 방식으로 나갑니다 (기본 계좌 09:00 · 카페 계좌 15:28). 해당 계좌의 성과 연속성은 여기서
             끊깁니다 — 저장할까요?
           </span>
           <button

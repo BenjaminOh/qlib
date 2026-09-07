@@ -202,7 +202,7 @@ function attributionNote(h: LiveHolding): string | undefined {
   const nums = `원장 ${ledger.toLocaleString()}주 / 실제 ${h.qty.toLocaleString()}주`;
   if (h.attribution_reason === "ladder_pending") {
     const gap = ledger - h.qty;
-    return `${nums} — 사다리 익절 ${gap.toLocaleString()}주가 체결됐습니다. 16:00 잔고 대사에서 원장에 반영됩니다.`;
+    return `${nums} — (구) 사다리 예약 ${gap.toLocaleString()}주가 체결됐습니다. 16:00 잔고 대사에서 원장에 반영됩니다. ※ 사다리는 2026-09-07 제거돼 새로 발생하지 않습니다 — 과거 원장 표시입니다.`;
   }
   return h.attribution === "mismatch"
     ? `${nums} — 주문 기록에 없는 매도가 있습니다 (MTS 직접 매매 등). 16:00 잔고 대사가 원장을 채웁니다.`

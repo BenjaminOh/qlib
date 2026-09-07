@@ -26,7 +26,7 @@ export default function CafeCandidates() {
     <section className="bg-stone-50 rounded-lg border border-stone-200 p-4">
       <div className="flex items-baseline justify-between mb-2">
         <h2 className="text-lg font-semibold text-stone-800">☕ 카페 모사 스크리너 (시뮬)</h2>
-        <span className="text-xs text-stone-500">매일 15:05 스캔 → 상위 2종목 15:28 시뮬 매수</span>
+        <span className="text-xs text-stone-500">매일 15:05 스캔 → 상위 2종목을 15:28에 cafe·cafecool(시뮬)과 cafereal(실주문)이 함께 매수. 아래 '매수' 열은 cafe(시뮬) 기준입니다</span>
       </div>
       {isLoading ? (
         <p className="text-xs text-stone-400 py-3">Loading...</p>

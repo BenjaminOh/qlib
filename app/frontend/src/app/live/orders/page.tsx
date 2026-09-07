@@ -38,11 +38,15 @@ export default function LiveOrdersPage() {
     refetchInterval: 30_000,
   });
 
-  // Picking a strategy auto-switches the ledger so the list is never
-  // empty-by-mismatch (open lives in 실거래, the rest are sim-only).
+  // 전략을 고르면 원장 뷰도 함께 바꿔 "필터 불일치로 빈 목록"이 되지 않게 한다.
+  // ⚠ 2026-09-07 수정: 예전엔 open 만 실거래로 보고 나머지를 전부 sim 으로
+  // 보냈는데, cafereal 은 카페 계좌에 **실주문**을 내므로 sim 뷰(SIMULATED
+  // 상태 필터)로는 **항상 0건**이었다. 실주문 전략은 백엔드
+  // `ACCOUNT_STRATEGIES`(open, cafereal)와 같은 집합이어야 한다.
+  const REAL_ORDER_STRATEGIES = ["open", "cafereal"];
   const pickStrategy = (key: string) => {
     setStrategy(key);
-    if (key === "open") setView("real");
+    if (REAL_ORDER_STRATEGIES.includes(key)) setView("real");
     else if (key) setView("sim");
     else setView("all");
   };

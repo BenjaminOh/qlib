@@ -35,7 +35,7 @@ export default function LivePositionsPage() {
       </div>
 
       <p className="text-sm text-gray-500">
-        매 거래일 종가 후(15:40 KST) 기록된 잔고 스냅샷입니다. 일별 종목 회전과 평가손익 변화를
+        매 거래일 종가 후(15:40~15:48 KST, 전략별로 분산) 기록된 잔고 스냅샷입니다. 일별 종목 회전과 평가손익 변화를
         확인할 수 있습니다.
       </p>
 

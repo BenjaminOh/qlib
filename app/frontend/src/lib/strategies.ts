@@ -39,7 +39,7 @@ export const STRATEGY_COLORS: Record<string, string> = {
   close: "#6366f1",  // indigo — DB-only simulated portfolio
   flow: "#f59e0b",   // amber — close execution, 수급 재랭킹 픽
   trail: "#0ea5e9",  // sky — trailing −7% exits
-  scale: "#a855f7",  // purple — +7% half take, remainder trails
+  scale: "#a855f7",  // purple — 사다리 익절 10/15/20% + 래칫 플로어 5%p
   limit: "#ef4444",  // red — −3% resting-limit entries (사장님 방식)
   cafe: "#78716c",   // stone — recommender-mimic screener
   surge: "#db2777",  // pink — surge-eve profile picks
@@ -53,7 +53,7 @@ export const STRATEGY_COLORS: Record<string, string> = {
  * "어떤 규칙으로 사고 파는가"는 여기서 답한다.
  */
 export const STRATEGY_LABELS: Record<string, string> = {
-  open: "qlib 모델 · 09:00 시가 실주문 · 사다리 +10% 절반 + 잔여 트레일 −7% (기본 계좌)",
+  open: "qlib 모델 · 09:00 시가 실주문 · 순위 이탈 매도만 — 익절·손절·트레일 없음 (기본 계좌)",
   close: "qlib 모델 · 종가 매수 · 익절 +10%/전저점 손절 (시뮬)",
   flow: "qlib 모델 · 수급 재랭킹 · 브래킷 (시뮬)",
   trail: "qlib 모델 · 트레일링 −7% (시뮬)",

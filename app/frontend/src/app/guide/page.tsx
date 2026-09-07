@@ -1,7 +1,7 @@
 /**
  * /guide — 운영 중인 시스템 전체를 한 페이지로 정리한 최종 가이드.
  *
- * 라이브 자동매매(실계좌) · 8개 시뮬 곡선 · 카페 역설계 · 급등 전야 · 회고
+ * 라이브 자동매매(실주문 2계좌) · 9개 시뮬 곡선 · 카페 역설계 · 급등 전야 · 회고
  * 루프 · 운영 원칙까지, 대시보드가 보여주는 모든 것의 "왜"를 설명한다.
  * 정적 문서 — API 호출 없음. (구 /guide/strategy는 이 페이지로 리다이렉트)
  */
@@ -42,9 +42,11 @@ export default function GuidePage() {
       <header className="border-b border-gray-200 pb-6">
         <h1 className="text-3xl md:text-4xl font-bold text-gray-900">📖 시스템 가이드 — 운영 전략 최종 정리</h1>
         <p className="mt-3 text-gray-600">
-          이 시스템은 <strong>KIS 모의계좌 3개월 테스트</strong>로 9개 전략을 병렬 검증한 뒤,
-          승자를 <strong>토스증권 실전 자동매매</strong>로 전환하는 실험입니다. 실계좌 1개(open)와
-          시뮬 8개가 같은 시장에서 매일 경쟁하고, 모든 판단 근거·체결·회고가 기록됩니다.
+          이 시스템은 <strong>KIS 모의계좌 3개월 테스트</strong>로 <strong>11개 전략</strong>을 병렬
+          검증한 뒤, 승자를 <strong>토스증권 실전 자동매매</strong>로 전환하는 실험입니다.
+          <strong className="text-red-700">실주문이 나가는 전략은 2개</strong>(기본 계좌의 open,
+          카페 계좌의 cafereal — cafereal 은 계좌 미설정 시 비활성)이고 나머지 9개는 장부에만
+          기록되는 시뮬입니다. 같은 시장에서 매일 경쟁하고, 모든 판단 근거·체결·회고가 기록됩니다.
         </p>
       </header>
 
@@ -62,16 +64,26 @@ export default function GuidePage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10, <strong>빈 슬롯을 채움 · 하루 최대 4</strong>). 같은 시각 cafeopen 쌍둥이가 어제 cafe 픽에 −3% 지정가 예약. 시장가/지정가는 <a href="/live/accounts" className="text-blue-600 underline">계좌 주문 설정</a>을 따름</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">09:05</td><td className="px-3 py-1.5">전 거래일 cafereal 주문 체결 재확인</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:20</td><td className="px-3 py-1.5">체결가 대사 — 실체결가·실현손익 확정 저장</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:30</td><td className="px-3 py-1.5">실계좌 잔고 동기화</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">14:30 / 15:00</td><td className="px-3 py-1.5">🔭 <strong>정찰 스캔</strong> — 카페 규칙 후보 미리보기 (매매 없음, 조기 진입 연구)</td><td className="px-3 py-1.5">🔭 후보 5</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:05</td><td className="px-3 py-1.5">☕ <strong>카페 정규 스크린</strong> — 패턴 후보 확정 + 풀 전체 전야 피처 저장</td><td className="px-3 py-1.5">☕ 후보·손절</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:12</td><td className="px-3 py-1.5">⚡ <strong>급등 전야 TOP10</strong> 선정 (풀 스냅샷 채점 — KIS 추가 호출 0)</td><td className="px-3 py-1.5">⚡ TOP10</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:20~26</td><td className="px-3 py-1.5">close·flow·trail·scale 시뮬 매수 (신호 픽, 실시간가)</td><td className="px-3 py-1.5">—</td></tr>
-              <tr><td className="px-3 py-1.5 font-mono">15:28 / 15:29</td><td className="px-3 py-1.5">cafe · <strong>cafecool</strong> / surge 시뮬 매수 (각자 후보 상위 2, 실시간가). cafecool 은 같은 후보에서 20일 상승률 50% 이상만 제외</td><td className="px-3 py-1.5">—</td></tr>
-              <tr><td className="px-3 py-1.5 font-mono">15:40~47</td><td className="px-3 py-1.5">전략별 계좌 동기화 · 일일 손익 확정</td><td className="px-3 py-1.5">—</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:28 / 15:29</td><td className="px-3 py-1.5">cafe · <strong>cafecool</strong> 시뮬 매수 + <strong className="text-red-700">cafereal 실주문</strong>(카페 계좌, 현재가 −3% 지정가 · 15:30 미체결 취소) / 15:29 surge 시뮬. 각자 후보 상위 2, 실시간가. cafecool 은 같은 후보에서 20일 상승률 50% 이상만 제외</td><td className="px-3 py-1.5">—</td></tr>
+              <tr className="bg-red-50/50">
+                <td className="px-3 py-2 whitespace-nowrap">{CURVE("#dc2626")}<strong>cafereal</strong> <span className="text-red-700 font-semibold">(실주문)</span></td>
+                <td className="px-3 py-2">cafe 와 <strong>같은 후보</strong></td>
+                <td className="px-3 py-2">15:28 <strong>카페 계좌 실주문</strong> — 현재가 −3% 지정가, 15:30 미체결 취소</td>
+                <td className="px-3 py-2">cafe 와 동일(익절 +10% / 구조적 손절 캡 −15%) — 단 <strong className="text-red-700">청산도 실주문</strong></td>
+                <td className="px-3 py-2">시뮬 체결 가정이 현실에서도 성립하는가 — cafe 와의 격차가 곧 &ldquo;가정의 값&rdquo;. <span className="text-gray-500">계좌 자격증명 미설정 시 비활성</span></td>
+              </tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:35</td><td className="px-3 py-1.5">당일 cafereal 체결 대사 (스냅샷보다 먼저)</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:40~48</td><td className="px-3 py-1.5">전략별 계좌 동기화 · 일일 손익 확정</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:45</td><td className="px-3 py-1.5">주가 데이터 갱신 → <strong>모델 재학습·다음 거래일 신호 생성</strong></td><td className="px-3 py-1.5">📌 추천 TOP10</td></tr>
-              <tr><td className="px-3 py-1.5 font-mono">15:48</td><td className="px-3 py-1.5"><strong>브래킷 청산 판정</strong>(전 시뮬, 당일 봉 기준) + limit 예약 체결 판정</td><td className="px-3 py-1.5">📤 청산 (발생 시)</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:45 체인</td><td className="px-3 py-1.5"><strong>브래킷 청산 판정</strong>(당일 봉 기준) + limit 예약 체결 판정. <strong className="text-red-700">cafereal 은 시뮬이 아니라 실계좌 KIS 매도</strong>가 나갑니다 — 장 마감 후라 주문은 다음 세션까지 대기. 데이터 갱신 성공 직후 체인으로 돌고, 실패하면 16:25 폴백</td><td className="px-3 py-1.5">📤 청산 (발생 시)</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">16:00</td><td className="px-3 py-1.5"><strong>잔고 대사</strong> — KIS 잔고와 원장 차이 봉합. <strong>MTS 로 직접 판 물량이 원장에 들어오는 시점</strong>(하루 5종목 상한)</td><td className="px-3 py-1.5">🧾 대사 결과</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">16:20 / 16:25</td><td className="px-3 py-1.5">신호·판정 폴백 재실행 (멱등)</td><td className="px-3 py-1.5">—</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">18:10</td><td className="px-3 py-1.5">기관·외국인 수급 데이터 적재 (flow 전략용)</td><td className="px-3 py-1.5">—</td></tr>
             </tbody>
@@ -81,9 +93,10 @@ export default function GuidePage() {
 
       {/* 2. 전략 매트릭스 */}
       <section id="strategies" className="not-prose">
-        <h2 className="text-2xl font-bold text-gray-900 mb-1">🎯 10전략 매트릭스 — 무엇을 검증하는가</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">🎯 11전략 매트릭스 — 무엇을 검증하는가</h2>
         <p className="text-sm text-gray-600 mb-3">
-          모든 전략의 시드는 1,000만 원. 곡선 간 격차가 곧 실험의 답입니다.
+          시뮬 전략의 시드는 1,000만 원(<strong>cafereal 은 실계좌라 실제 예수금</strong>이
+          출발점이고, 시드 값은 곡선 기준선 표기에만 씁니다). 곡선 간 격차가 곧 실험의 답입니다.
           <strong className="text-amber-700"> 공정 비교 구간은 2026-08-06 이후</strong>
           (그 이전 시뮬은 전일 종가 체결 편향으로 무효 — 8/6 클린 리셋).
         </p>
@@ -103,7 +116,7 @@ export default function GuidePage() {
                 <td className="px-3 py-2 whitespace-nowrap">{CURVE("#10b981")}<strong>open</strong> (실계좌)</td>
                 <td className="px-3 py-2">qlib 신호 top-10</td>
                 <td className="px-3 py-2">09:00, 계좌 설정 방식 — 기본 시장가. <strong className="text-amber-700">빈 슬롯을 채웁니다(하루 최대 4)</strong></td>
-                <td className="px-3 py-2">top-30 이탈 시 매도 (n_drop=2)</td>
+                <td className="px-3 py-2"><strong>top-10 이탈</strong> 시 매도 — 하루 최대 2종목(n_drop=2), 오늘 순위가 나쁜 순. 익절·손절·트레일 없음. <span className="text-gray-500">(top-30 은 &ldquo;금일 28위&rdquo; 같은 매도 사유 표기용 저장 범위일 뿐입니다)</span></td>
                 <td className="px-3 py-2">기준선 — 모델 그대로의 성적</td>
               </tr>
               <tr>
@@ -124,7 +137,7 @@ export default function GuidePage() {
                 <td className="px-3 py-2 whitespace-nowrap">{CURVE("#0ea5e9")}<strong>trail</strong></td>
                 <td className="px-3 py-2">qlib 신호</td>
                 <td className="px-3 py-2">15:24 실시간가</td>
-                <td className="px-3 py-2">익절 없음 — 최고 종가 −7% 트레일링</td>
+                <td className="px-3 py-2">익절 없음 — 최고 종가 −7% 트레일링 <strong>+ 구조적 손절(전 저점, 캡 −10%)은 항상 켜짐</strong></td>
                 <td className="px-3 py-2">&ldquo;일찍 팔지 않기&rdquo;의 가치 (조기하차 가설 해답 후보)</td>
               </tr>
               <tr>
@@ -178,7 +191,9 @@ export default function GuidePage() {
       <section id="signal" className="not-prose bg-emerald-50/50 border border-emerald-200 rounded-lg p-5">
         <h2 className="text-2xl font-bold text-emerald-900 mb-2">🤖 qlib 신호 — 모델이 종목을 고르는 법</h2>
         <ul className="list-disc pl-6 text-sm text-gray-700 space-y-1.5">
-          <li><strong>유니버스</strong>: 코스피200 + 코스닥150 (~185종목 실채점) · 3년 학습 데이터</li>
+          <li><strong>유니버스</strong>: <strong>코스피200 단독</strong>(~185종목 실채점) · 3년 학습 데이터.
+            코스닥150 은 kr_data 저장소에는 있지만 <strong>모델 채점 대상이 아닙니다</strong> —
+            카페 표본 종목이 자주 &ldquo;유니버스 밖&rdquo;인 이유입니다</li>
           <li><strong>모델</strong>: Alpha158 피처 → LightGBM, <strong>고정 150라운드 학습</strong> —
             조기종료 방식은 검증 신호가 소음 수준이라 운에 따라 트리 1개짜리 모델이 나오는 결함
             (점수 동점 사태의 원인)이 있어 2026-08-05 진단 후 제거</li>
@@ -327,8 +342,10 @@ export default function GuidePage() {
             매수가 n_drop(2)에 묶여 <strong>매도 2 / 매수 2가 매일 반복</strong>됐습니다. 순증이 0이라 보유가
             4종목에 고착되고 <strong>투입률이 20~41%</strong>로 50%를 넘은 적이 없었습니다. 이제 빈 슬롯을
             채우되 하루 4건으로 제한합니다(한 번에 6종목을 사면 전부 같은 날 진입가를 공유하므로).
-            <strong className="text-red-700"> 노출이 최대 2.5배로 커지는데 실계좌에는 손절·익절·트레일링이
-            하나도 없습니다</strong> — 유일한 출구가 순위 이탈 매도입니다. 손절 도입이 다음 과제입니다</li>
+            <strong className="text-red-700"> 노출이 최대 2.5배로 커지는데 open 계좌에는 손절·익절·트레일링이
+            하나도 없습니다</strong> — 유일한 출구가 순위 이탈 매도입니다.
+            (다른 실주문 전략 <strong>cafereal</strong> 은 익절 +10% / 구조적 손절 캡 −15% 로 방어가 있습니다.)
+            644일 백테스트가 &ldquo;자를수록 나쁘다&rdquo;를 지지해 open 의 손절은 <strong>도입하지 않은 상태를 유지</strong>합니다</li>
           <li><strong>카페 데이터 리셋 (2026-08-20)</strong>: cafe 계열 주문·체결·스냅샷·후보 104행을
             전량 삭제했습니다. 기존 곡선이 <strong>체결 불가능한 진입</strong> 위에 서 있어(위 감사 참조)
             그대로 두면 cafecool 비교의 대조군이 오염됩니다. cafe·cafeopen·cafecool 세 곡선이
@@ -361,7 +378,8 @@ export default function GuidePage() {
               <tr><td className="px-3 py-1.5 font-mono">15:05</td><td className="px-3 py-1.5">☕ 정규 스크린</td><td className="px-3 py-1.5">확정 후보 + 실효 손절가 + 매수 예고</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:12</td><td className="px-3 py-1.5">⚡ 급등 TOP10</td><td className="px-3 py-1.5">전야 프로파일 점수순 10종목</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">~15:50</td><td className="px-3 py-1.5">📌 추천 TOP10</td><td className="px-3 py-1.5">qlib 내일 픽 — 종목·종가·상위%</td></tr>
-              <tr><td className="px-3 py-1.5 font-mono">15:48</td><td className="px-3 py-1.5">📤 시뮬 청산</td><td className="px-3 py-1.5">익절/손절 발생 시 — 종류·수량·손익·손절 기준</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:45 체인 / 16:25</td><td className="px-3 py-1.5">📤 청산</td><td className="px-3 py-1.5">익절/손절 발생 시 — 종류·수량·손익·손절 기준. <strong className="text-red-700">cafereal 은 실주문</strong></td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">16:00</td><td className="px-3 py-1.5">🧾 잔고 대사</td><td className="px-3 py-1.5">KIS 잔고와 원장 차이 봉합 결과 (수동 매도 반영)</td></tr>
             </tbody>
           </table>
         </div>
