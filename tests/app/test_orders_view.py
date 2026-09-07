@@ -3,7 +3,7 @@
 Background (2026-08-12): `_persist_order` set `ord_dvsn = "01" if price is None
 else "00"`, so every *simulated* fill — no KIS round-trip at all — was recorded
 as a 지정가 order. Worse, `price` cannot stand in for the order type either:
-`sync_fills` pins the reconciled average fill price onto real market orders, so
+`reconcile_fills` pins the reconciled average fill price onto real market orders, so
 a filled 시장가 order also carries a price. Both are covered below.
 """
 
@@ -68,7 +68,7 @@ def test_real_market_order_before_reconciliation():
 
 
 def test_reconciled_market_order_is_still_market():
-    """Regression guard: sync_fills pins an average fill price onto a 시장가
+    """Regression guard: reconcile_fills pins an average fill price onto a 시장가
     order (live_trader.py:608). Keying off `price` would call this 지정가."""
     o = _order(price=71_200.0, ord_dvsn="01", status="FILLED")
     assert o.kind == "market"

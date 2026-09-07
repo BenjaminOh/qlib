@@ -244,7 +244,8 @@ def _pending_reservation(status: str | None, side: str | None,
                          reasons_json: str | None) -> bool:
     """아직 체결되지 않은 조건부 매도 예약인가.
 
-    ``EXIT_KIND_LADDER`` 표식은 `reserve_ladder_exits` 가 찍는다. 이 모듈이
+    ``EXIT_KIND_LADDER`` 표식은 (구) 사다리 예약이 찍었다(2026-09-07 제거).
+    2026-08-27 자 과거 주문에만 남아 있다. 이 모듈이
     live_trader 를 import 하면 순환이 되므로 표식 문자열은 db.models 에 있다.
     """
     if (side or "").upper() != "SELL" or status not in UNCONFIRMED_STATUSES:
@@ -287,7 +288,7 @@ def _events_by_code(db, codes: Sequence[str], strategies: Sequence[str]
     out: dict[str, list[LedgerEvent]] = defaultdict(list)
     pending: dict[str, int] = defaultdict(int)
     for r in rows:
-        # 미체결 사다리 예약은 보유를 줄이지 않는다. 09:25 에 걸어둔
+        # 미체결 (구) 사다리 예약은 보유를 줄이지 않는다. 09:25 에 걸어뒀던
         # "+10% 에 절반 판다"는 조건부 주문이지 매도가 아닌데, 미확정 매도로
         # 세면 그 절반이 원장에서 빠져나가 **보유 종목 배지의 절반이
         # "수동/미상"으로 뒤집힌다.** 체결되면 FILLED/PARTIAL 이 되고 그때부터

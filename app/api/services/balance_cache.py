@@ -114,7 +114,7 @@ def _decode(raw: str) -> tuple[AccountSnapshot, datetime]:
 
 
 def _from_db(account: str = ACCOUNT_MAIN) -> tuple[AccountSnapshot, datetime] | None:
-    """Last stored PositionSnapshot for the open strategy.
+    """Last stored PositionSnapshot for the account's primary strategy (main→open, cafe→cafereal).
 
     ``live_sync`` writes one at 09:30 and 15:40, so this is the final backstop
     when both redis tiers are empty (fresh container during a KIS outage).
@@ -229,7 +229,7 @@ def get_balance_for_read(account: str = ACCOUNT_MAIN
 def invalidate(account: str = ACCOUNT_MAIN) -> None:
     """Drop the fresh window so the next read re-fetches.
 
-    Called after an order round-trip, where the 5s window would otherwise show
+    ⚠ 호출자가 없다(2026-09-07 실측) — 주문 왕복 뒤 캐시를 비우려던 것인데 배선되지 않았다. 유지 판단 전까지 남겨 둔다. 원래 의도: called after an order round-trip, where the 5s window would otherwise show
     pre-trade holdings.
     """
     r = _redis()

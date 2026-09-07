@@ -68,7 +68,7 @@ class LiveHolding(BaseModel):
     # 불일치의 **원인**. `mismatch` 는 "원장이 잔고와 어긋난다"는 사실만 말하고
     # 왜 그런지는 말하지 않는다. 화면이 원인을 모르면 우리가 낸 사다리 예약의
     # 체결을 "누가 몰래 팔았다"와 같은 경고로 표시하게 된다.
-    #   "ladder_pending" — 미체결 사다리 예약이 그 차이를 설명한다.
+    #   "ladder_pending"  # (구) 사다리 — 생산자 없음, 과거 원장 전용 — 미체결 사다리 예약이 그 차이를 설명한다.
     #                      16:00 잔고 대사가 원장에 반영하면 사라진다. 정상이다.
     #   None            — 설명되지 않는 차이. 경고를 유지한다.
     attribution_reason: str | None = None
@@ -136,12 +136,12 @@ class LiveOrderRow(BaseModel):
     realized_cost: float | None = None   # 수수료 + 세금
     pnl_basis: str | None = None         # "net" | "gross"
     # True order kind — 'market' | 'limit' | 'sim'. NOT inferable from `price`:
-    # sync_fills pins the reconciled average fill onto market orders.
+    # reconcile_fills pins the reconciled average fill onto market orders.
     order_kind: str = "market"
     # reasons_json["basis"] — the decision basis captured at order time.
     basis: str | None = None
     # reasons_json["exit"]["kind"] — 이 매도가 어떤 성격인가.
-    #   "ladder_reserve" = 09:25 에 미리 건 익절 지정가 (체결 전에는 예약)
+    #   "ladder_reserve" = (구) 09:25 사다리 예약 — 2026-09-07 제거, 과거 원장 전용 (체결 전에는 예약)
     #   "manual_exit"    = 원장에 없던 매도를 잔고 차이로 되짚어 만든 합성 행
     #                      (사용자가 MTS 로 직접 판 경우). 우리가 낸 주문이
     #                      아니므로 kis_order_id 가 없고 체결가가 추정일 수 있다.
@@ -318,6 +318,8 @@ def update_account(account_id: str, req: AccountPolicyUpdate):
 
 
 @router.get("/balance", response_model=LiveBalanceResponse)
+# ⚠ 계좌 목록이 하드코딩이다. `ACCOUNT_STRATEGIES` 에 계좌를 추가하면 여기도 고쳐야
+# 한다 — 정합성은 `tests/app/test_catalog_consistency.py` 가 지킨다.
 def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
     """Current KIS balance + holdings, through the read-path cache.
 
@@ -582,7 +584,7 @@ def _position_timeline(code: str, strategy: str,
                 if px is None:
                     # 시장가 주문은 정산 전까지 체결가가 없다. 그때 **결정 시점의
                     # 시세**가 원장에 남아 있으면 그게 가장 가까운 추정치다 —
-                    # `watch_trailing_exits` 가 청산할 때 본 현재가를
+                    # (구) 트레일 청산이 청산 시점 현재가를
                     # `reasons.exit.quote` 에 적어둔다.
                     #
                     # 이게 없으면 그날 시가/종가로 물러나는데, 장중에는 오늘 봉이

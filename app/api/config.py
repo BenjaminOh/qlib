@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # what ended up in starting/ending_equity rows — set the env override.
     live_seed_cash_open: float = 10_000_000.0
     # Daily cap on NEW buys for the real account. TopkDropout only swaps n_drop
-    # per day, which left the account stuck at 4 of 10 slots (투입률 40%). Buys
+    # per day, which left the account stuck at 4 of 10 slots (투입률 20~41%(실측)). Buys
     # now fill empty slots up to this number — 4 ramps 4→8→10 over two sessions
     # instead of taking every position on a single day's print. Set to topk to
     # fill immediately, or to n_drop (2) to restore the old behaviour.

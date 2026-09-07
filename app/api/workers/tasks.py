@@ -159,7 +159,7 @@ def live_sync_close_task(self) -> dict:
 @celery_app.task(bind=True, name="live_orders_trail")
 @market_day_only
 def live_orders_trail_task(self) -> dict:
-    """15:20 KST — trail strategy: same close-priced buys as `close`; exits are
+    """15:24 KST — trail strategy: same close-priced buys as `close`; exits are
     a −7% trailing stop (no fixed TP) via the shared bracket loop."""
     from ..services.live_trader import submit_daily_orders
     self.update_state(state="RUNNING")
@@ -177,7 +177,7 @@ def live_sync_trail_task(self) -> dict:
 @celery_app.task(bind=True, name="live_orders_scale")
 @market_day_only
 def live_orders_scale_task(self) -> dict:
-    """15:20 KST — scale strategy: close-priced buys; +7% sells half, the
+    """15:26 KST — scale strategy: close-priced buys; +7% sells half, the
     remainder rides the −7% trail (shared bracket loop)."""
     from ..services.live_trader import submit_daily_orders
     self.update_state(state="RUNNING")
@@ -195,7 +195,7 @@ def live_sync_scale_task(self) -> dict:
 @celery_app.task(bind=True, name="live_orders_flow")
 @market_day_only
 def live_orders_flow_task(self) -> dict:
-    """15:20 KST — flow strategy: same close-priced simulation as `close`, but
+    """15:22 KST — flow strategy: same close-priced simulation as `close`, but
     the picks are the top-30 signal re-ranked by 기관/외국인 net buying."""
     from ..services.live_trader import submit_daily_orders
     self.update_state(state="RUNNING")
@@ -447,7 +447,7 @@ def live_sync_cafeopen_task(self) -> dict:
 def close_bracket_exits_task(self) -> dict:
     """Chained after refresh_kr_data (+ 16:25 fallback beat) — exit-rule matrix
     for every sim strategy (close/flow: TP+prev-low, trail: −7% trailing,
-    scale: +7% half then trail, limit: TP+prev-low).
+    scale: ladder [+10/15/20%] + ratcheting floor, limit: TP+prev-low).
 
     Must run AFTER the day's bars land: the touch test reads that day's
     $open/$high/$low. Idempotent (sold positions leave the reconstructed
@@ -474,56 +474,17 @@ def close_bracket_exits_task(self) -> dict:
     return results
 
 
-@celery_app.task(
-    bind=True,
-    name="ladder_reserve",
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=300,
-    retry_jitter=True,
-    max_retries=3,
-)
-@market_day_only
-def ladder_reserve_task(self, strategy: str = "open") -> dict:
-    """09:25 KST — 보유 종목의 익절 지정가를 미리 건다.
-
-    `reconcile_fills`(09:20) 뒤에 돈다: 그날 매수의 실제 평단이 확정돼야
-    사다리 가격이 맞는다. 멱등이다 — 오늘 이미 걸어둔 예약이 있으면
-    건너뛰므로 재시도가 중복 주문이 되지 않는다.
-    """
-    from ..services.live_trader import reserve_ladder_exits
-    self.update_state(state="RUNNING")
-    return reserve_ladder_exits(strategy=strategy)
-
-
-# 폴링이 도는 창. 아침 배치(09:00 주문 · 09:20 정산 · 09:25 예약)와 겹치면
-# **같은 appkey 게이트를 두고 주문과 경합한다** — INSIGHTS 에 기록된 사고가
-# 정확히 그것이다(대시보드 폴링과 경합해 매도가 거부됨). 주문을 늦추느니
-# 30분 늦게 지켜보는 쪽이 낫다. 뒤끝은 장 마감(15:30) 직전에 끊는다 —
-# 그 뒤로는 시세가 움직이지 않아 폴링이 무의미하다.
-TRAIL_WATCH_FROM = (9, 30)
-TRAIL_WATCH_UNTIL = (15, 25)
-
-
-@celery_app.task(bind=True, name="trail_watch")
-@market_day_only
-def trail_watch_task(self, strategy: str = "open") -> dict:
-    """장중 5분마다 — 트레일선을 깨면 잔여를 전량 청산한다.
-
-    KIS 에 역지정가(스톱) 주문이 없어서 폴링 말고는 방법이 없다. 자동
-    재시도를 붙이지 **않는다**: 이 태스크는 실주문을 내고 5분 뒤 다음 틱이
-    똑같은 판정을 다시 하므로, 재시도는 중복 청산 위험만 늘린다.
-
-    창 판정을 beat crontab 이 아니라 여기서 하는 이유: 이유가 코드 옆에
-    있어야 누가 스케줄을 손볼 때 왜 09:00 이 아닌지 보인다.
-    """
-    from ..services.live_trader import watch_trailing_exits
-    now = datetime.now()
-    if not (TRAIL_WATCH_FROM <= (now.hour, now.minute) <= TRAIL_WATCH_UNTIL):
-        return {"status": "outside_window", "at": now.strftime("%H:%M")}
-    self.update_state(state="RUNNING")
-    return watch_trailing_exits(strategy=strategy)
-
+# ── 사다리 예약(09:25)·트레일 폴링(5분) 태스크 — 2026-09-07 제거 ──────────
+#
+# 2026-08-27 에 beat 등록을 지워 잠재웠고, 2026-09-07 에 함수까지 지웠다.
+# 잠재우기만 해서는 안 되는 이유가 있었다: `ladder_reserve` 를 손으로
+# `strategy="scale"` 로 호출하면 `_account_for` 가 **기본 계좌(= open 실계좌)로
+# 폴백**하고 `ladder_fraction` 이 없어 보유 **전량**에 +10% 지정가가 나갔다.
+# 자동 경로는 없었지만 문이 열려 있었다.
+#
+# open 의 청산은 09:00 `live_orders` 의 랭크 이탈 매도 하나뿐이다.
+# 되살리려면 `scripts/backtest_entry_modes.py` 의 OPEN_EXIT_RULES_ARCHIVED 로
+# 백테스트를 먼저 돌린다(INSIGHTS §2 게이트 ⑤: 백테스트 → 모의 → 실계좌).
 
 @celery_app.task(
     bind=True,

@@ -1,6 +1,6 @@
 """ORM models for live trading.
 
-The five tables form a daily loop:
+The tables form a daily loop (13개 테이블, 시각은 celery_app.py 가 진실):
   Signal (15:35) → Order (09:00) → Fill (09:00~) → PositionSnapshot (15:35)
                                                   → DailyPnL (15:35)
 """
@@ -16,7 +16,7 @@ from sqlalchemy.orm import relationship
 from .session import Base
 
 
-# Three parallel virtual portfolios share the live DB:
+# Eleven parallel portfolios share the live DB (2 place real orders, 9 are paper):
 #   - 'open'  → KIS-real orders fired at 09:00 (existing behavior)
 #   - 'close' → simulated fills at 15:20 call-auction close, DB-only
 #   - 'flow'  → same execution as 'close', but the picks are re-ranked by
@@ -94,7 +94,7 @@ ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
 # "이 가격에 닿으면 판다"이지 "팔았다"가 아니다. 세 곳이 이 구분을 필요로 한다:
 #   - cancel_unfilled_orders : 컷오프 스윕이 예약을 쓸어가면 익절선이 사라진다
 #   - holding_attribution    : 미체결 매도 예약은 보유수량을 줄이지 않는다
-#   - reserve_ladder_exits   : 오늘 이미 걸어둔 예약을 다시 걸지 않는다
+#   - (구) 사다리 예약       : 2026-09-07 제거. 과거 예약 주문 해석에만 쓰인다
 EXIT_KIND_LADDER = "ladder_reserve"
 
 # 원장에 없던 매도를 잔고 차이로 되짚어 만든 **합성** 청산 행의 표식.
@@ -200,7 +200,7 @@ class CafeCandidate(Base):
     trade_date = Column(Date, nullable=False, index=True)
     code = Column(String(8), nullable=False, index=True)
     name = Column(String(64), nullable=True)
-    pattern = Column(String(2), nullable=False)  # B/A/C/D (priority order)
+    pattern = Column(String(2), nullable=False)  # B/A/R/C/D (priority order)
     rank = Column(Integer, nullable=False)       # selection order within the day
     close = Column(Float, nullable=True)         # price at screening time
     stop_px = Column(Float, nullable=False)
@@ -239,7 +239,7 @@ class CafeScout(Base):
 
 
 class MarketPoolSnapshot(Base):
-    """Daily close-time feature snapshot of the whole 15:05 ranking pool.
+    """15:05 스캔 시점 스냅샷 — ⚠ `close` 는 **종가가 아니라 스캔 시점 장중가**다 of the whole 15:05 ranking pool.
 
     Surge-eve research Track 2 (2026-08-07): every scanned code — matched or
     not, incl. out-of-universe small caps — gets its eve features stored so
@@ -405,7 +405,7 @@ class Order(Base):
     def kind(self) -> str:
         """True order kind: 'market' | 'limit' | 'sim'.
 
-        NOT derivable from `price`: sync_fills pins the reconciled average fill
+        NOT derivable from `price`: reconcile_fills pins the reconciled average fill
         price onto market orders, so a non-null price does not imply 지정가.
         `status` wins over `ord_dvsn` because rows written before 2026-08-12
         carry a bogus ord_dvsn='00' — _persist_order derived it from "a price

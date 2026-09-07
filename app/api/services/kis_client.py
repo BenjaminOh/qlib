@@ -577,6 +577,7 @@ class KISClient:
     def get_balance(self) -> AccountSnapshot:
         if self.is_mock:
             return AccountSnapshot(
+                # mock 잔고 — live_seed_cash_* 와 같은 개념이나 설정 밖에 있다.
                 cash=10_000_000.0,
                 total_eval=10_000_000.0,
                 holdings=[],
@@ -1354,6 +1355,7 @@ def get_kis_client(account: str = ACCOUNT_MAIN) -> KISClient:
     return c
 
 
+# 테스트 전용 — 프로덕션 호출자 없음 (2026-09-07 실측).
 def cafe_account_configured() -> bool:
     """True if the cafe account can be built — cheap check for schedulers."""
     try:

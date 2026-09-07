@@ -13,7 +13,7 @@ KIS 를 한 번도 부르지 않는다. `reconcile_fills` 도 방향이 DB → K
 당일 실현손익 어디에도 나타나지 않고, **전량을 팔면 KIS 잔고에서도 사라져 전 화면에서
 흔적 없이 증발한다.**
 
-**2) 09:25 사다리 예약이 체결된 경우.** `reconcile_fills` 는 09:20 에 돌고 예약은 09:25 에
+**2) (구) 09:25 사다리 예약이 체결된 경우.** — 2026-09-07 제거. 2026-08-27 자 주문에만 해당한다. `reconcile_fills` 는 09:20 에 돌고 예약은 09:25 에
 걸린다 — 정산기가 이미 지나간 뒤다. 게다가 Pass 2 는 `o.price is None` 인 주문만 보는데
 사다리는 지정가라 대상 밖이고, 다음 날 정산기는 `trade_date == today` 라 어제 예약을 안
 본다. **체결돼도 정산하는 곳이 아무 데도 없다.**
@@ -25,7 +25,7 @@ KIS 를 한 번도 부르지 않는다. `reconcile_fills` 도 방향이 DB → K
 "사용자가 팔았다"로 오인해 가짜 행을 쓴다.**
 
 수동 **매수**(gap < 0)는 기록하지 않는다. 합성 BUY 를 쓰면 그 종목이 `open` 포지션이 되어
-**사다리·트레일이 사용자가 직접 산 종목을 팔러 간다.** 지금처럼 `manual` 배지로만 남긴다.
+**청산 규칙이 사용자가 직접 산 종목을 팔러 간다.** 지금처럼 `manual` 배지로만 남긴다.
 """
 
 from __future__ import annotations
@@ -166,6 +166,8 @@ def _write_fill(db: Session, o: Order, qty: int, price: float,
                 price=price, fee=fee, pnl=pnl, strategy=strategy))
 
 
+# ⚠ 사다리 예약 표식의 생산자가 2026-09-07 에 사라져, 실질적으로 2026-08-27 자
+# 유물 주문만 대상이 된다. 새 대상은 생기지 않는다.
 def _expire_stale_reservations(db: Session, day: date, *, strategy: str) -> int:
     """어제 이전의 미체결 사다리 예약을 닫는다.
 
@@ -315,7 +317,7 @@ def reconcile_by_balance(trade_date: date | None = None, *,
             }
             # kis_order_id=None 이 합성 행의 표식이다 — 우리가 낸 주문은 반드시
             # 주문번호를 갖는다. 상태는 새로 만들지 않고 FILLED 를 쓴다: 그래야
-            # _EXECUTED_STATUSES·CONFIRMED_STATUSES·_episodes·view=real 필터가
+            # EXECUTED_STATUSES·CONFIRMED_STATUSES·_episodes·view=real 필터가
             # 전부 손대지 않고도 올바르게 동작한다.
             o = _persist_order(db, day, g.code, "SELL", remaining, float(px),
                                OrderResult(ok=True, order_id=None, code=g.code,

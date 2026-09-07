@@ -35,7 +35,7 @@ if _DB_URL.startswith("sqlite"):
         """WAL + a busy timeout so concurrent writers queue instead of erroring.
 
         Production runs SQLite with `--concurrency=2` and several beat slots
-        now fire together (15:20 close+flow orders, 15:40 three syncs). Under
+        now fire together (15:20/15:22 close·flow orders (일부러 분 단위로 뗐다), 15:40 three syncs). Under
         the default rollback journal a second writer fails instantly with
         "database is locked"; WAL lets readers run during a write and
         busy_timeout makes a competing writer wait 5s instead of dying.
@@ -88,14 +88,14 @@ def init_db() -> None:
 
 
 def _seed_default_account() -> None:
-    """Insert the 'main' account row if absent, with MARKET on both sides.
+    """Insert the 'main' (MARKET both sides) and 'cafe' (LIMIT −3% buy / MARKET sell) rows if absent.
 
     Idempotent, and it never touches an existing row: the seed must not be a
     back door that silently rewrites a policy an operator chose. A fresh table
     therefore reproduces exactly the pre-existing behaviour (market buy, market
     sell) rather than switching the live account to limit orders on deploy.
     """
-    from .models import (BASE_QUOTE, DEFAULT_ACCOUNT_ID, ORD_TYPE_LIMIT,
+    from .models import (BASE_QUOTE, CAFE_ACCOUNT_ID, DEFAULT_ACCOUNT_ID, ORD_TYPE_LIMIT,
                          ORD_TYPE_MARKET, TradingAccount)
 
     with SessionLocal() as db:
@@ -113,13 +113,14 @@ def _seed_default_account() -> None:
         # ⚠ 카페 픽은 대개 상한가라 −3% 지정가로는 거의 체결되지 않는다. 그것
         # 자체가 측정값이지만(체결률), 체결을 보고 싶으면 화면에서 시장가로 바꿀 것.
         # 안전한 쪽을 기본으로 두는 이유: 잘못 켜져도 돈이 나가지 않는다.
-        if db.get(TradingAccount, "cafe") is None:
+        if db.get(TradingAccount, CAFE_ACCOUNT_ID) is None:
             db.add(TradingAccount(
-                account_id="cafe",
+                account_id=CAFE_ACCOUNT_ID,
                 label="카페 실매매 계좌",
                 buy_ord_type=ORD_TYPE_LIMIT,
                 buy_base=BASE_QUOTE,
-                buy_offset_pct=0.03,   # 분수. 매수는 base×(1−offset) = −3%
+                # −3%. live_limit_discount·live_cafeopen_discount 와 같은 값이다.
+                buy_offset_pct=settings.live_cafeopen_discount,
                 buy_cancel_hhmm="15:30",
                 sell_ord_type=ORD_TYPE_MARKET,
             ))

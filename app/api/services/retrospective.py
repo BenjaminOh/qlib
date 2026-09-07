@@ -15,6 +15,7 @@ import logging
 from datetime import date
 
 from ..db import SessionLocal, Order, Signal, SurgePick, init_db
+from .live_trader import EXECUTED_STATUSES
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def build_episodes(strategy: str = "open") -> list[dict]:
     with SessionLocal() as db:
         rows = (db.query(Order)
                   .filter(Order.strategy == strategy,
-                          Order.status.in_(("FILLED", "PARTIAL", "SIMULATED")),
+                          Order.status.in_(EXECUTED_STATUSES),
                           Order.price.isnot(None))
                   .order_by(Order.code, Order.submitted_at)
                   .all())

@@ -2,7 +2,7 @@
 
 Reverse-engineered from 4 samples (docs/06-research/): the recommender buys
 theme leaders at the close on a technical-event day and places a STRUCTURAL
-stop. Four patterns, in his observed priority order:
+stop. Five patterns, in his observed priority order:
 
   B  급등 타이트 눌림  (TXR형)   : big up day, then a tight ≤6% pullback day
   A  신고가 돌파       (위닉스형) : 30d new high on ≥2× volume
@@ -309,7 +309,7 @@ def run_surge_screen(trade_date: date | None = None) -> dict:
             if sc is not None:
                 scored.append((sc, s))
         scored.sort(key=lambda x: -x[0])
-        picks = scored[:10]
+        picks = scored[:10]  # TOP10 고정. live_surge_slots(=10)와 우연히 같은 값일 뿐 다른 축이다
         for i, (sc, s) in enumerate(picks, start=1):
             exists = (db.query(SurgePick)
                         .filter(SurgePick.trade_date == day, SurgePick.code == s.code)
@@ -471,7 +471,7 @@ def submit_cafereal_orders(trade_date: date | None = None) -> dict:
 
 
 def submit_cafecool_orders(trade_date: date | None = None) -> dict:
-    """15:28 — cafe 와 같은 후보에서 ret20 상한을 넘는 종목만 뺀 쌍둥이.
+    """15:28 — cafe 와 같은 후보에서 ret20 상한을 넘거나 ret20 을 읽을 수 없는 종목을 뺀 쌍둥이.
 
     후보 스캔을 다시 돌리지 않고 `cafe_candidates` 를 그대로 읽는다. 같은 행을
     공유하므로 두 곡선의 차이는 **오직 ret20 상한**이며, 스캔 비용도 KIS 호출도

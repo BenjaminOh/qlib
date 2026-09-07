@@ -56,7 +56,9 @@ celery_app.conf.beat_schedule = {
     },
     # 2026-08-27: `ladder-reserve-open`(09:25)·`trail-watch-open`(*/5) 두 항목을
     # **제거했다.** 도입 하루 만의 철회다 — 644일 백테스트에서 사다리+트레일이
-    # 랭크 이탈 대비 수익을 122%p 깎았다(상세: live_trader.OPEN_EXIT_RULES_ARCHIVED).
+    # 랭크 이탈 대비 수익을 122%p 깎았다.
+    # (2026-09-07: 실행 코드까지 제거. 파라미터·근거는
+    #  scripts/backtest_entry_modes.py 의 OPEN_EXIT_RULES_ARCHIVED 참조)
     # 되살리려면 그 상수를 EXIT_RULES 에 되돌리고 여기 두 항목도 함께 켜야 한다.
     # 둘 중 하나만 켜면 규칙은 있는데 아무도 실행하지 않는 상태가 된다.
     # 잔고 차이로 원장을 맞춘다. 09:20 reconcile-fills 와 다른 일이다 —

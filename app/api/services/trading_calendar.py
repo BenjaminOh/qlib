@@ -14,7 +14,7 @@ Why this exists — 2026-08-17 (광복절 대체공휴일):
     on a holiday with the previous session's price and `halted=False`
     (verified: 005930 → 274,500), so at 15:20 they would have written SIMULATED
     fills, a PositionSnapshot and a DailyPnL row for a day the market never
-    opened — a phantom trading day in all eight curves.
+    opened — a phantom trading day in all eleven curves.
 
 KIS's own docs ask for **at most one call per day** ("당사 원장서비스와 연관되어
 있어 … 가급적 1일 1회 호출"), so results are cached in redis and a fetch covers
