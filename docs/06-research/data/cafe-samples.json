@@ -1,0 +1,39 @@
+{
+  "_comment": "카페 추천 표본 대장. score_cafe_samples.py 의 입력. 새 표본은 여기 한 줄 추가하면 재채점된다.",
+  "_fields": {
+    "no": "표본 번호 (우리 수신 순번 — 추천자 픽 순번이 아님)",
+    "recv_date": "수령일 (YYYY-MM-DD)",
+    "recv_time": "수령 시각 (HH:MM, 미상이면 null)",
+    "code": "6자리 종목코드",
+    "name": "종목명",
+    "ref_price": "문서에 기입된 추천 시점 기준가 (미기입이면 null)",
+    "stop": "명시된 손절가 (미수령/유실이면 null)",
+    "stop_rule": "day0_low = '오늘 저가'라고만 말한 건 (수령일 저가로 산출)",
+    "target": "명시된 목표가 (없으면 null)",
+    "note": "특기사항"
+  },
+  "samples": [
+    {"no": 1,  "recv_date": "2026-07-30", "recv_time": null,    "code": "463020", "name": "뉴엔AI",            "ref_price": 7400,  "stop": null,  "stop_rule": null,      "target": null,  "note": "손절 유실(1-b 추정 9,060~9,200)"},
+    {"no": 2,  "recv_date": "2026-07-31", "recv_time": null,    "code": "413630", "name": "씨피시스템",        "ref_price": 3865,  "stop": 3500,  "stop_rule": null,      "target": 5100,  "note": "목표 전고 5,100 / +10% 익절 언급"},
+    {"no": 3,  "recv_date": "2026-08-03", "recv_time": null,    "code": "044340", "name": "위닉스",            "ref_price": 5660,  "stop": 5000,  "stop_rule": null,      "target": null,  "note": "손절은 3-b(08-04)에서 제시"},
+    {"no": 4,  "recv_date": "2026-08-04", "recv_time": null,    "code": "484810", "name": "티엑스알로보틱스",  "ref_price": 16740, "stop": 14900, "stop_rule": null,      "target": null,  "note": "유니버스 밖 신규상장"},
+    {"no": 5,  "recv_date": "2026-08-06", "recv_time": null,    "code": "067290", "name": "JW신약",            "ref_price": 2330,  "stop": 2020,  "stop_rule": null,      "target": null,  "note": "R패턴 원형 표본"},
+    {"no": 6,  "recv_date": "2026-08-07", "recv_time": "13:58", "code": "264850", "name": "이랜시스",          "ref_price": 6470,  "stop": 5850,  "stop_rule": null,      "target": null,  "note": "우리 스크리너가 1거래일 선행 포착"},
+    {"no": 7,  "recv_date": "2026-08-07", "recv_time": "15:02", "code": "304100", "name": "솔트룩스",          "ref_price": 17090, "stop": 14900, "stop_rule": null,      "target": null,  "note": "H-풀편향 1건째"},
+    {"no": 8,  "recv_date": "2026-08-10", "recv_time": null,    "code": "119850", "name": "지엔씨에너지",      "ref_price": 52800, "stop": null,  "stop_rule": null,      "target": 58000, "note": "손절 미수령"},
+    {"no": 9,  "recv_date": "2026-08-11", "recv_time": "09:10", "code": "162300", "name": "신스틸",            "ref_price": 2195,  "stop": 1880,  "stop_rule": null,      "target": null,  "note": "2단 손절 1,930/1,880 — 전량 기준은 깊은 쪽 1,880"},
+    {"no": 10, "recv_date": "2026-08-11", "recv_time": "15:05", "code": "0039P0", "name": "매드업",            "ref_price": 9050,  "stop": 7700,  "stop_rule": null,      "target": 10670, "note": "신형 영숫자 코드"},
+    {"no": 11, "recv_date": "2026-08-13", "recv_time": "15:00", "code": "387690", "name": "레메디",            "ref_price": 10340, "stop": 9200,  "stop_rule": null,      "target": 12465, "note": "보호예수 해제일 눌림"},
+    {"no": 12, "recv_date": "2026-08-18", "recv_time": null,    "code": "053260", "name": "금강철강",          "ref_price": 5710,  "stop": 5000,  "stop_rule": null,      "target": 7040,  "note": "당일 등락률 0.00% — 풀 진입 불가"},
+    {"no": 13, "recv_date": "2026-08-18", "recv_time": null,    "code": "388050", "name": "지투파워",          "ref_price": 10020, "stop": 9690,  "stop_rule": null,      "target": 11450, "note": "우리가 3거래일 선행"},
+    {"no": 14, "recv_date": "2026-08-20", "recv_time": "12:15", "code": "108860", "name": "셀바스AI",          "ref_price": 9260,  "stop": 8700,  "stop_rule": null,      "target": null,  "note": "기준가가 장중값 — 종가 미확정"},
+    {"no": 15, "recv_date": "2026-08-24", "recv_time": null,    "code": "007820", "name": "엠엑스로보틱스",    "ref_price": null,  "stop": 3900,  "stop_rule": null,      "target": null,  "note": "기준가 미기입. 우리가 7거래일 선행"},
+    {"no": 16, "recv_date": "2026-08-24", "recv_time": null,    "code": "053980", "name": "오상자이엘",        "ref_price": null,  "stop": 2400,  "stop_rule": null,      "target": null,  "note": "기준가 미기입. 목표 '낼 윗꼬리 파동'"},
+    {"no": 17, "recv_date": "2026-08-25", "recv_time": null,    "code": "950260", "name": "인제니아테라퓨틱스","ref_price": null,  "stop": null,  "stop_rule": "day0_low","target": null,  "note": "기준가 미기입. 08-18 상장 — len(bars)<21 구조적 배제"},
+    {"no": 18, "recv_date": "2026-08-25", "recv_time": null,    "code": "001510", "name": "SK증권",            "ref_price": null,  "stop": null,  "stop_rule": "day0_low","target": null,  "note": "기준가 미기입. 조건부 추천(하이닉스 반등), 시간외"},
+    {"no": 19, "recv_date": "2026-08-26", "recv_time": "15:00", "code": "387690", "name": "레메디(재추천)",    "ref_price": null,  "stop": null,  "stop_rule": "day0_low","target": null,  "note": "기준가 미기입. 11호와 같은 종목 재추천"},
+    {"no": 20, "recv_date": "2026-08-28", "recv_time": "15:11", "code": "388050", "name": "지투파워(재추천)",  "ref_price": 10060, "stop": 8300,  "stop_rule": null,      "target": null,  "note": "13호와 같은 종목 재추천"},
+    {"no": 21, "recv_date": "2026-09-01", "recv_time": "15:13", "code": "003350", "name": "한국화장품제조",    "ref_price": 14030, "stop": 13000, "stop_rule": null,      "target": 15690, "note": "목표 신고가 명시"},
+    {"no": 22, "recv_date": "2026-09-03", "recv_time": "15:06", "code": "476060", "name": "온코닉테라퓨틱스",  "ref_price": 17150, "stop": 16000, "stop_rule": null,      "target": 17580, "note": "목표 '낼 윗꼬리(17,580) 먹고 급등' — 시한 D+1 명시"}
+  ]
+}
