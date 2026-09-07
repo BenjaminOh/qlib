@@ -63,6 +63,7 @@ def send_telegram(text: str) -> bool:
         return False
 
 
+# 운영자 일회성 도구 — 자동 호출자 없음(의도된 것).
 def discover_chat_id() -> list[dict]:
     """One-shot helper: list chats the bot can currently see (getUpdates).
 
@@ -123,7 +124,12 @@ def _side_tag(side: str) -> str:
     return "🔴 매수" if side == "BUY" else "🔵 매도"
 
 
-STRATEGY_TITLES = {"open": "실계좌(KIS 모의투자)"}
+# 실주문 전략의 알림 제목. 빠지면 알림에 코드명이 그대로 나간다.
+# 회귀 가드: `tests/app/test_catalog_consistency.py::test_notify_titles_cover_every_real_strategy`
+STRATEGY_TITLES = {
+    "open": f"실계좌(KIS {'실전' if settings.kis_env == 'real' else '모의투자'})",
+    "cafereal": "카페 실매매 계좌",
+}
 _DIV = "━━━━━━━━━━━━━━"
 
 
@@ -147,7 +153,7 @@ def notify_open_orders(result: dict) -> None:
                       .order_by(Order.side.desc(), Order.submitted_at.asc())
                       .all())
         for o in rows:
-            # From o.kind, not o.price: sync_fills pins the reconciled average
+            # From o.kind, not o.price: reconcile_fills pins the reconciled average
             # fill onto market orders, so a re-run after 09:20 대사 would flip
             # every line to "지정가" if this keyed off price.
             ord_type = {"limit": "지정가", "sim": "시뮬", "market": "시장가"}[o.kind]
@@ -197,6 +203,7 @@ def notify_open_orders(result: dict) -> None:
     send_telegram("\n".join(lines))
 
 
+# ⚠ 호출자 없음 (2026-09-07 실측) — 유지 판단 전까지 남겨 둔다.
 def notify_order_detail(side: str, code: str, name: str | None, qty: int,
                         ok: bool, error: str | None = None) -> None:
     """Per-order line for the open strategy (fired as each order lands)."""
@@ -207,11 +214,13 @@ def notify_order_detail(side: str, code: str, name: str | None, qty: int,
 
 
 def notify_bracket_exits(strategy: str, result: dict) -> None:
-    """15:48 sim exit detail — only when something actually sold."""
+    """15:45 체인(폴백 16:25) 청산 detail — only when something actually sold."""
     exits = result.get("exits") or []
     if not telegram_enabled() or not exits:
         return
-    lines = [f"📤 <b>{strategy} 시뮬 청산</b> ({result.get('trade_date', '')})", ""]
+    # cafereal 은 실계좌 KIS 주문이다 — "시뮬"로 통지하면 거짓말이 된다.
+    kind = "실주문 청산" if strategy in STRATEGY_TITLES else "시뮬 청산"
+    lines = [f"📤 <b>{strategy} {kind}</b> ({result.get('trade_date', '')})", ""]
     for e in exits:
         realised = e.get("realised") or 0
         sign = "+" if realised >= 0 else ""

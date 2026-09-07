@@ -67,6 +67,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY app/api ./app/api
 COPY app/__init__.py ./app/__init__.py
 COPY tests/ ./tests/
+# 전략 카탈로그 정합성 테스트가 프론트 목록도 대조한다 — 이 파일이 없으면
+# 그 검사가 skip 되어 게이트에 구멍이 난다(2026-09-07 추가).
+COPY app/frontend/src/lib/strategies.ts ./app/frontend/src/lib/strategies.ts
 
 # 종료코드를 반드시 먼저 본다. 최초 구현은 `pytest | tee` 를 `;` 로 끝내
 # 종료코드를 버리고 "N passed" 문자열만 grep 했는데, 실패 요약도
