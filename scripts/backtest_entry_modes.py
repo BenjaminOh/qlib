@@ -45,6 +45,42 @@ import pandas as pd  # noqa: E402
 log = logging.getLogger("backtest_entry_modes")
 
 
+# ── open 청산 규칙 — 2026-08-27 철회 ──────────────────────────────
+#
+# 2026-08-26 에 "사다리 +10% 절반 + 잔여 트레일 −7%" 를 도입했다가 **하루 만에
+# 되돌렸다.** 도입 근거는 금호에이치티 한 종목의 사후 계산이었고, 그날 곡선
+# 마커에 *"실측은 이 변경에 반대한다"* 고 적어뒀다. 다음 날 644 거래일
+# 백테스트가 그 경고를 확증했다(2024-01~2026-08, 상승 2년·하락 2년):
+#
+#   청산 규칙            전체      MDD     2024    2025    2026
+#   랭크만(구체제)      +167.8%   −29.0%   −13.1   +83.8   +33.0
+#   사다리+트레일        +45.3%   −27.8%   −10.5   +57.1   +17.1   ← 철회
+#   트레일만            +24.9%   −28.9%    −9.9   +38.1   +21.6
+#   랭크+손절           +83.0%   −34.6%   −18.8   +95.8   +21.4
+#   동일가중 유니버스     +90.0%   −24.0%
+#
+# **수익 122%p 를 깎고 유니버스(+90%)에도 진다.** 원인은 청산 사유가 말한다:
+#   ladder 406건 평균 +10.36% · trail 901건 평균 +3.62%
+#   → **이익 나는 종목을 1,307건 잘랐다.** 회고 #1 의 "매도 후 5일 드리프트
+#     +8.6%"(조기하차)와 같은 현상이고, 이번엔 644일로 확인됐다.
+#
+# 사용자 우려에는 근거가 있었다 — MDD(−27.8%)와 하락장(2024 −10.5%)은 이 규칙이
+# 가장 낫다. 대가가 상승장 수익 122%p 라 **수익을 택했다**(사용자 결정).
+#
+# 값은 지우지 않고 여기 남긴다 — 다시 켤 때 같은 파라미터로 비교해야 하고,
+# 이 스크립트가 유일한 소비자다.
+#
+# **2026-09-07: 실행 코드는 전부 제거했다.** 철회 당시(08-27)엔 beat 등록만 지워
+# 함수를 잠재웠는데, 죽은 채 남은 `ladder_reserve` 태스크를 손으로
+# `strategy="scale"` 로 호출하면 계좌 폴백 때문에 실계좌 보유 전량에 지정가
+# 매도가 나가는 문이 열려 있었다. 그래서 함수·태스크까지 지웠다.
+# 되살리려면 코드를 다시 써야 하며, 그 전에 이 스크립트로 백테스트를 돌린다
+# (INSIGHTS §2 게이트 ⑤: 백테스트 → 모의 → 실계좌).
+# 회귀 가드: `tests/app/test_open_exit_is_rank_only.py`
+OPEN_EXIT_RULES_ARCHIVED = {"ladder": [0.10], "ladder_fraction": 0.5,
+                            "trail_rest": 0.07}
+
+
 def parse_mode(mode: str) -> tuple[str, float | None]:
     """진입 방식.
 
@@ -69,7 +105,7 @@ def parse_mode(mode: str) -> tuple[str, float | None]:
 
 def exit_line(code, entry_day, day, avg, *, peak_close, prev_low,
               sl_cap, low_window, low_buffer, trail):
-    """(청산선, 근거). 운영 `live_trader._trail_line` 과 **같은 max 구조**.
+    """(청산선, 근거). (구) 운영 트레일 청산과 **같은 max 구조**. 그 코드는 2026-09-07 제거됐다.
 
     구조적 손절(전 저점 −1%, 캡 −10%)이 바닥을 깔고, 주가가 오르면 트레일이
     그 위로 올라선다. 최고 종가가 평단 아래면 트레일선이 손절 아래로 내려가므로
@@ -258,7 +294,7 @@ def main() -> int:
     from app.api.services.kis_client import round_to_tick
     from app.api.config import settings
     from app.api.services.live_trader import (
-        LIVE_CONFIG, OPEN_EXIT_RULES_ARCHIVED, _buy_count, _day_ohlc, _peak_close,
+        LIVE_CONFIG, _buy_count, _day_ohlc, _peak_close,
         _prev_close_before, _prev_low, _prev_trading_day, trade_cost,
     )
 
@@ -473,7 +509,7 @@ def main() -> int:
             # 트레일·손절 — 저가가 선을 깨면 전량. 갭하락이면 시가 체결.
             # 트레일·손절은 **진입 당일 건너뛴다** — 운영 `watch_trailing_exits`
             # 의 `entry.trade_date >= day` 가드와 같다(기준이 될 종가가 없다).
-            # 사다리는 그 가드가 없다: 09:25 예약은 그날 매수분에도 걸린다.
+            # 사다리는 그 가드가 없었다: 09:25 예약은 그날 매수분에도 걸렸다.
             if (use_trail or use_stop) and code in pos and not same_day:
                 # ⚠ 변수명에 주의 — 바깥의 `kind` 는 **진입 모드**다.
                 # 여기서 `kind` 로 받으면 그걸 덮어써서 다음 날 매수가 엉뚱한
