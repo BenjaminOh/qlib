@@ -34,6 +34,7 @@
     {"no": 19, "recv_date": "2026-08-26", "recv_time": "15:00", "code": "387690", "name": "레메디(재추천)",    "ref_price": null,  "stop": null,  "stop_rule": "day0_low","target": null,  "note": "기준가 미기입. 11호와 같은 종목 재추천"},
     {"no": 20, "recv_date": "2026-08-28", "recv_time": "15:11", "code": "388050", "name": "지투파워(재추천)",  "ref_price": 10060, "stop": 8300,  "stop_rule": null,      "target": null,  "note": "13호와 같은 종목 재추천"},
     {"no": 21, "recv_date": "2026-09-01", "recv_time": "15:13", "code": "003350", "name": "한국화장품제조",    "ref_price": 14030, "stop": 13000, "stop_rule": null,      "target": 15690, "note": "목표 신고가 명시"},
-    {"no": 22, "recv_date": "2026-09-03", "recv_time": "15:06", "code": "476060", "name": "온코닉테라퓨틱스",  "ref_price": 17150, "stop": 16000, "stop_rule": null,      "target": 17580, "note": "목표 '낼 윗꼬리(17,580) 먹고 급등' — 시한 D+1 명시"}
+    {"no": 22, "recv_date": "2026-09-03", "recv_time": "15:06", "code": "476060", "name": "온코닉테라퓨틱스",  "ref_price": 17150, "stop": 16000, "stop_rule": null,      "target": 17580, "note": "목표 '낼 윗꼬리(17,580) 먹고 급등' — 시한 D+1 명시"},
+    {"no": 23, "recv_date": "2026-09-08", "recv_time": "15:05", "code": "443670", "name": "에스피소프트",      "ref_price": null,  "stop": 3500,  "stop_rule": null,      "target": null,  "note": "분봉 다중 눌림목 저점 형성중 · 단기 바닥 후 반등 맥점 — 기준가·목표가 미기입"}
   ]
 }
