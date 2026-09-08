@@ -162,8 +162,10 @@ def _write_fill(db: Session, o: Order, qty: int, price: float,
         existing.qty, existing.price = qty, price
         existing.fee, existing.pnl = fee, pnl
         return
+    # 계좌는 그 주문을 따라간다 — 합성 행이라도 원장의 계좌 축은 주문이 진실이다.
     db.add(Fill(order_id=o.id, filled_at=datetime.utcnow(), qty=qty,
-                price=price, fee=fee, pnl=pnl, strategy=strategy))
+                price=price, fee=fee, pnl=pnl, strategy=strategy,
+                account_id=o.account_id))
 
 
 # ⚠ 사다리 예약 표식의 생산자가 2026-09-07 에 사라져, 실질적으로 2026-08-27 자
@@ -324,7 +326,8 @@ def reconcile_by_balance(trade_date: date | None = None, *,
                                            side="SELL", qty=remaining, price=px,
                                            raw={"synthetic": "balance_diff"},
                                            error=None),
-                               strategy=strategy, reasons=reasons)
+                               strategy=strategy, account_id=account_id,
+                               reasons=reasons)
             o.status = SYNTHETIC_STATUS
             db.flush()
             _write_fill(db, o, remaining, float(px), strategy=strategy)

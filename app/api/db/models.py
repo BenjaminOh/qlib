@@ -67,6 +67,21 @@ DEFAULT_ACCOUNT_ID = "main"
 ACCOUNT_ID_LEN = 16
 CAFE_ACCOUNT_ID = "cafe"
 
+# ⚠ 스키마 괴리를 하나 알고 감수한다 (2026-09-08).
+#
+# `PositionSnapshot`/`DailyPnL` 의 uq 가 여기서는 (date, strategy, account_id) 지만,
+# **운영 SQLite 는 아직 (date, strategy) 다.** SQLite 는 unique constraint 를 ALTER 로
+# 바꾸지 못하고 테이블 재작성이 필요한데, 그건 `scripts/migrate_live_db.py` 가 하는 일이고
+# Postgres 이관과 한 번에 하는 편이 안전하다. `init_db()` 는 `create_all` 만 하므로
+# 기존 테이블을 건드리지 않아 부팅에는 영향이 없다.
+#
+# 계좌가 하나인 동안은 무해하다. 두 번째 계좌가 생기는 순간 운영에서는 두 번째 계좌의
+# 첫 `sync_account` 가 **IntegrityError 로 시끄럽게 실패**한다 — 조용히 첫 계좌 행을
+# 덮어쓰던 옛 동작보다 낫지만, 그 전에 마이그레이션이 끝나 있어야 한다.
+#
+# 잊지 않기 위한 장치: `tests/app/test_account_axis.py` 의 계좌 수 가드가 `ACCOUNT_STRATEGIES`
+# 에 세 번째 계좌가 들어오면 배포 게이트에서 실패한다.
+
 # 계좌 ↔ 그 계좌에 REAL 주문을 내는 전략들. 단일 진실원.
 #
 # 순서에 의미가 있다 — [0] 이 그 계좌의 대표(primary) 전략이고, balance_cache 의
@@ -375,6 +390,8 @@ class Order(Base):
     submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     trade_date = Column(Date, nullable=False, index=True)
     strategy = Column(String(8), nullable=False, default=STRATEGY_OPEN, index=True)
+    account_id = Column(String(ACCOUNT_ID_LEN), nullable=False,
+                        default=DEFAULT_ACCOUNT_ID, index=True)
     code = Column(String(8), nullable=False)
     name = Column(String(120), nullable=True)
     side = Column(String(4), nullable=False)  # BUY / SELL
@@ -424,6 +441,8 @@ class Fill(Base):
     id = Column(Integer, primary_key=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
     strategy = Column(String(8), nullable=False, default=STRATEGY_OPEN, index=True)
+    account_id = Column(String(ACCOUNT_ID_LEN), nullable=False,
+                        default=DEFAULT_ACCOUNT_ID, index=True)
     filled_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     qty = Column(Integer, nullable=False)
     price = Column(Float, nullable=False)
@@ -435,29 +454,35 @@ class Fill(Base):
 
 class PositionSnapshot(Base):
     """End-of-day account snapshot for the equity curve and audit trail.
-    One row per (snapshot_date, strategy) — open vs close are tracked separately."""
+    One row per (snapshot_date, strategy, account_id) — open vs close are
+    tracked separately, and so are two accounts running the same strategy."""
     __tablename__ = "position_snapshots"
 
     id = Column(Integer, primary_key=True)
     snapshot_date = Column(Date, nullable=False, index=True)
     strategy = Column(String(8), nullable=False, default=STRATEGY_OPEN, index=True)
+    account_id = Column(String(ACCOUNT_ID_LEN), nullable=False,
+                        default=DEFAULT_ACCOUNT_ID, index=True)
     cash = Column(Float, nullable=False)
     total_eval = Column(Float, nullable=False)
     holdings_json = Column(Text, nullable=False)  # JSON: [{code,name,qty,avg,eval,pnl,pnl_pct}, ...]
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("snapshot_date", "strategy", name="uq_snapshot_date_strategy"),
+        UniqueConstraint("snapshot_date", "strategy", "account_id",
+                         name="uq_snapshot_date_strategy_account"),
     )
 
 
 class DailyPnL(Base):
-    """Per-(trading-day, strategy) realised + unrealised PnL roll-up."""
+    """Per-(trading-day, strategy, account) realised + unrealised PnL roll-up."""
     __tablename__ = "daily_pnl"
 
     id = Column(Integer, primary_key=True)
     trade_date = Column(Date, nullable=False, index=True)
     strategy = Column(String(8), nullable=False, default=STRATEGY_OPEN, index=True)
+    account_id = Column(String(ACCOUNT_ID_LEN), nullable=False,
+                        default=DEFAULT_ACCOUNT_ID, index=True)
     starting_equity = Column(Float, nullable=False)
     ending_equity = Column(Float, nullable=False)
     realised_pnl = Column(Float, nullable=False, default=0.0)
@@ -467,5 +492,6 @@ class DailyPnL(Base):
     notes = Column(Text, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("trade_date", "strategy", name="uq_daily_pnl_date_strategy"),
+        UniqueConstraint("trade_date", "strategy", "account_id",
+                         name="uq_daily_pnl_date_strategy_account"),
     )

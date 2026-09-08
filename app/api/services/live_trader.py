@@ -971,7 +971,8 @@ def reconcile_fills(trade_date: date | None = None,
                 existing.fee, existing.pnl = fee, pnl
                 continue
             db.add(Fill(order_id=o.id, filled_at=datetime.utcnow(), qty=qty,
-                        price=o.price, fee=fee, pnl=pnl, strategy=strategy))
+                        price=o.price, fee=fee, pnl=pnl, strategy=strategy,
+                        account_id=account_id))
         db.commit()
     result = {"status": "ok", "trade_date": trade_date.isoformat(),
               "kis_fills": len(fills), "matched": matched, "updated": updated}
@@ -984,9 +985,17 @@ def _episode_avg(db: Session, sell_order: Order) -> float | None:
 
     Replays this strategy's filled orders for the code chronologically up to
     (but excluding) the sell — buys update the weighted average, sells reduce
-    the position, a flat position resets the episode."""
+    the position, a flat position resets the episode.
+
+    Scoped to the SAME ACCOUNT as well as the same strategy: two accounts
+    running one strategy hold the same code independently, and folding their
+    fills into one episode would price account A's sell against account B's
+    buys. Nothing in the numbers would look wrong — the realised pnl would
+    just be for a position nobody held.
+    """
     rows = (db.query(Order)
               .filter(Order.strategy == sell_order.strategy,
+                      Order.account_id == sell_order.account_id,
                       Order.code == sell_order.code,
                       Order.status.in_(("FILLED", "PARTIAL")),
                       Order.price.isnot(None),
@@ -1012,7 +1021,8 @@ def _episode_avg(db: Session, sell_order: Order) -> float | None:
 def sync_account(client: KISClient | None = None,
                  trade_date: date | None = None,
                  *,
-                 strategy: str = STRATEGY_OPEN) -> dict:
+                 strategy: str = STRATEGY_OPEN,
+                 account_id: str | None = None) -> dict:
     """Snapshot the per-strategy portfolio and roll up DailyPnL.
 
     strategy='open'     → reads KIS get_balance (기본 실계좌)
@@ -1021,26 +1031,33 @@ def sync_account(client: KISClient | None = None,
 
     실계좌를 장부로 재구성하면 안 된다: 수동 매매·미체결·부분체결이 반영되지 않아
     스냅샷과 실제 잔고가 갈라지고, 그 위에 얹힌 곡선은 아무것도 증명하지 못한다.
+
+    `account_id` 를 비우면 `_account_for(strategy)` 가 정한다 — 실주문 전략은 자기
+    계좌로, 시뮬 전략은 DEFAULT_ACCOUNT_ID 로. 스냅샷과 PnL 이 계좌 축까지 갖게
+    되므로, 한 전략을 두 계좌가 돌려도 서로의 행을 덮어쓰지 않는다.
     """
     init_db()
     _reset_qlib_caches()
     trade_date = trade_date or _last_trading_day()
+    account_id = account_id or _account_for(strategy)
     if strategy in REAL_BALANCE_STRATEGIES:
         from .kis_client import AccountNotConfigured, get_kis_client as _gc
         try:
-            snapshot = (client or _gc(_account_for(strategy))).get_balance()
+            snapshot = (client or _gc(account_id)).get_balance()
         except (AccountNotConfigured, ValueError) as exc:
             log.info("sync_account: %s 건너뜀 — %s", strategy, exc)
             return {"status": "no_account", "strategy": strategy,
                     "trade_date": trade_date.isoformat()}
     else:
         with SessionLocal() as db:
-            snapshot = _simulated_balance(db, strategy=strategy)
+            snapshot = _simulated_balance(db, strategy=strategy,
+                                          account_id=account_id)
 
     with SessionLocal() as db:
         existing = (db.query(PositionSnapshot)
                       .filter(PositionSnapshot.snapshot_date == trade_date,
-                              PositionSnapshot.strategy == strategy)
+                              PositionSnapshot.strategy == strategy,
+                              PositionSnapshot.account_id == account_id)
                       .first())
         holdings_json = json.dumps([
             {"code": h.code, "name": _stock_name(h.code),
@@ -1058,6 +1075,7 @@ def sync_account(client: KISClient | None = None,
             db.add(PositionSnapshot(
                 snapshot_date=trade_date,
                 strategy=strategy,
+                account_id=account_id,
                 cash=snapshot.cash,
                 total_eval=snapshot.total_eval,
                 holdings_json=holdings_json,
@@ -1065,7 +1083,8 @@ def sync_account(client: KISClient | None = None,
 
         prev = (db.query(PositionSnapshot)
                   .filter(PositionSnapshot.snapshot_date < trade_date,
-                          PositionSnapshot.strategy == strategy)
+                          PositionSnapshot.strategy == strategy,
+                          PositionSnapshot.account_id == account_id)
                   .order_by(PositionSnapshot.snapshot_date.desc())
                   .first())
         # First-ever sync's starting_equity must be the strategy's seed (not
@@ -1077,7 +1096,8 @@ def sync_account(client: KISClient | None = None,
         realised = (db.query(Fill)
                       .join(Order)
                       .filter(Order.trade_date == trade_date,
-                              Fill.strategy == strategy)
+                              Fill.strategy == strategy,
+                              Fill.account_id == account_id)
                       .with_entities(Fill.pnl, Fill.fee)
                       .all())
         # Fill.pnl is already NET of that round trip's cost (see trade_cost),
@@ -1088,7 +1108,8 @@ def sync_account(client: KISClient | None = None,
 
         existing_pnl = (db.query(DailyPnL)
                           .filter(DailyPnL.trade_date == trade_date,
-                                  DailyPnL.strategy == strategy)
+                                  DailyPnL.strategy == strategy,
+                                  DailyPnL.account_id == account_id)
                           .first())
         if existing_pnl:
             existing_pnl.ending_equity = snapshot.total_eval
@@ -1099,6 +1120,7 @@ def sync_account(client: KISClient | None = None,
             db.add(DailyPnL(
                 trade_date=trade_date,
                 strategy=strategy,
+                account_id=account_id,
                 starting_equity=starting,
                 ending_equity=snapshot.total_eval,
                 realised_pnl=realised_sum,
@@ -1122,10 +1144,12 @@ def sync_account(client: KISClient | None = None,
 def _persist_order(db: Session, trade_date: date, code: str, side: str,
                    qty: int, price: float | None, res: OrderResult,
                    *, strategy: str = STRATEGY_OPEN,
+                   account_id: str = DEFAULT_ACCOUNT_ID,
                    reasons: dict | None = None) -> Order:
     o = Order(
         trade_date=trade_date,
         strategy=strategy,
+        account_id=account_id,
         code=code,
         name=_stock_name(code),
         side=side,
@@ -1269,13 +1293,14 @@ def _sell_reasons(db: Session, as_of: date, code: str) -> dict | None:
 def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
                             qty: int, price: float, strategy: str = STRATEGY_CLOSE,
                             pnl: float | None = None,
-                            reasons: dict | None = None) -> None:
+                            reasons: dict | None = None,
+                            account_id: str = DEFAULT_ACCOUNT_ID) -> None:
     """Write a paper Order+Fill pair for any simulated strategy. No KIS round-trip."""
     res = OrderResult(ok=True, order_id=f"SIM-{int(datetime.utcnow().timestamp()*1000)}",
                       code=code, side=side, qty=qty, price=price,
                       raw={"simulated": True}, error=None)
     o = _persist_order(db, trade_date, code, side, qty, price, res, strategy=strategy,
-                       reasons=reasons)
+                       account_id=account_id, reasons=reasons)
     o.status = "SIMULATED"
     o.ord_dvsn = Order.ORD_DVSN_SIM  # no KIS order was sent — 지정가/시장가 is meaningless
     fee = trade_cost(side, qty, price)
@@ -1287,6 +1312,7 @@ def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
     db.add(Fill(
         order_id=o.id,
         strategy=strategy,
+        account_id=account_id,
         qty=qty,
         price=price,
         fee=fee,
@@ -1295,7 +1321,8 @@ def _persist_simulated_fill(db: Session, trade_date: date, code: str, side: str,
 
 
 def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
-                       seed_cash: float | None = None) -> AccountSnapshot:
+                       seed_cash: float | None = None,
+                       account_id: str = DEFAULT_ACCOUNT_ID) -> AccountSnapshot:
     """Reconstruct cash + holdings for a paper strategy from its Fill history.
 
     Cash = seed − sum(buy.qty × buy.price) + sum(sell.qty × sell.price)
@@ -1307,7 +1334,8 @@ def _simulated_balance(db: Session, strategy: str = STRATEGY_CLOSE,
         seed_cash = _seed_for(strategy)
     rows = (db.query(Fill, Order)
               .join(Order, Fill.order_id == Order.id)
-              .filter(Fill.strategy == strategy)
+              .filter(Fill.strategy == strategy,
+                      Fill.account_id == account_id)
               .order_by(Fill.filled_at.asc())
               .all())
     cash = seed_cash
@@ -2038,6 +2066,7 @@ def resolve_cafeopen_orders(trade_date: date | None = None) -> dict:
                                 f"{fill_px:,.0f} 체결")
             o.reasons_json = json.dumps(reasons, ensure_ascii=False)
             db.add(Fill(order_id=o.id, strategy=STRATEGY_CAFEOPEN,
+                        account_id=o.account_id,
                         qty=o.qty, price=fill_px, fee=0.0, pnl=None))
             filled.append({"code": o.code, "name": o.name, "qty": o.qty,
                            "limit_px": limit_px, "fill_px": fill_px, "kind": how})
