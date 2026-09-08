@@ -163,3 +163,33 @@ def test_cafe_twins_share_identical_exit_rules():
 def test_ladder_belongs_only_to_scale():
     laddered = sorted(k for k, v in lt.EXIT_RULES.items() if "ladder" in v)
     assert laddered == [M.STRATEGY_SCALE], laddered
+
+
+# ── 반환 계약 ────────────────────────────────────────────────────
+def test_surge_submit_returns_a_defined_strategy():
+    """`submit_surge_orders` 의 반환문이 없는 이름을 참조하지 않는가.
+
+    2026-09-07 에 이 함수가 `NameError: name 'strategy' is not defined` 로 죽었다.
+    `db.commit()` 이 반환문보다 앞이라 **매수는 기록되고 태스크만 실패**해서
+    곡선은 멀쩡한 채 알림만 빨간불이었고, 그래서 오래 눈에 띄지 않았다.
+    함수를 실행하지 않고 소스에서 정의되지 않은 이름을 잡는다.
+    """
+    import ast
+    import inspect
+
+    from app.api.services import market_screener as ms
+
+    src = inspect.getsource(ms.submit_surge_orders)
+    tree = ast.parse(src.lstrip())
+    fn = tree.body[0]
+    assigned = {n.id for node in ast.walk(fn) for n in ast.walk(node)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    assigned |= {a.arg for a in fn.args.args}
+    # 반환 딕셔너리가 참조하는 지역 이름
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for v in node.value.values:
+                for n in ast.walk(v):
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+                        assert n.id in assigned or hasattr(ms, n.id) or n.id in dir(__builtins__), (
+                            f"반환문이 정의되지 않은 이름 '{n.id}' 을 참조한다")

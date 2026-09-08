@@ -378,9 +378,12 @@ def submit_surge_orders(trade_date: date | None = None) -> dict:
             bought.append({"code": c.code, "name": c.name, "rank": c.rank,
                            "qty": qty, "price": px})
         db.commit()
+    # `strategy`·`skipped_hot` 은 이 함수에 없는 이름이었다(b31728ce 에서
+    # `_submit_cafe_like` 반환문을 복사하며 딸려 왔다). db.commit() 이 이 줄보다
+    # 앞이라 **매수는 정상 기록되고 태스크만 NameError 로 실패**했다 —
+    # 곡선은 멀쩡한데 알림·로그만 빨간불이라 오래 눈에 안 띄었다.
     return {"status": "ok", "trade_date": day.isoformat(),
-            "strategy": strategy, "buys": bought,
-            "skipped_overheated": skipped_hot}
+            "strategy": STRATEGY_SURGE, "buys": bought}
 
 
 def capture_orderbook(slot: str, trade_date: date | None = None) -> dict:
