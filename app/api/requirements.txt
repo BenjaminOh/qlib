@@ -1,3 +1,9 @@
+# ⚠ pandas 상한 (2026-09-08). pyproject.toml 에도 같은 상한이 있지만 **이 파일이 먼저
+# 설치된다**(Dockerfile.prod: requirements → pyqlib 순서). yfinance·catboost 가 pandas 를
+# 끌어오므로 여기서 막지 않으면 3.x 가 먼저 깔리고 pyqlib 설치 때 다운그레이드에 기대게 된다.
+# 근거: pandas 3.x 의 StringDtype 기본화가 scripts/dump_bin.py 를 깨뜨려 2026-09-07
+# kr_data 갱신이 죽었고, 다음 날 매매가 통째로 없었다.
+pandas<3.0
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 pydantic-settings>=2.3.0
