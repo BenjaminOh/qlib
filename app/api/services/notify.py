@@ -129,6 +129,7 @@ def _side_tag(side: str) -> str:
 STRATEGY_TITLES = {
     "open": f"실계좌(KIS {'실전' if settings.kis_env == 'real' else '모의투자'})",
     "cafereal": "카페 실매매 계좌",
+    "coolreal": "카페 냉각 실매매 계좌 (ret20 상한)",
 }
 _DIV = "━━━━━━━━━━━━━━"
 

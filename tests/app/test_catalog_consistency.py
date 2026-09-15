@@ -154,7 +154,7 @@ def test_cafe_twins_share_identical_exit_rules():
     청산이 갈리면 A/B 가 무엇을 재는지 알 수 없게 된다."""
     rules = {s: lt.EXIT_RULES[s] for s in
              (M.STRATEGY_CAFE, M.STRATEGY_CAFEOPEN,
-              M.STRATEGY_CAFECOOL, M.STRATEGY_CAFEREAL)}
+              M.STRATEGY_CAFECOOL, M.STRATEGY_CAFEREAL, M.STRATEGY_COOLREAL)}
     base = rules[M.STRATEGY_CAFE]
     for s, r in rules.items():
         assert r == base, f"{s} 청산 규칙이 cafe 와 다르다: {r} != {base}"

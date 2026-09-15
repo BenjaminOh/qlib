@@ -171,6 +171,13 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders_cafecool",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
+    # coolreal — cafecool 과 같은 조건을 **실계좌(cool)** 로. 같은 15:28 이어야
+    # 시뮬 쌍둥이와 진입 시각이 같아 비교가 성립한다. 15:30 으로 미룰 수 없다:
+    # 취소 스윕의 컷오프가 15:30 이라 방금 낸 주문을 그 자리에서 취소한다.
+    "live-orders-at-close-coolreal": {
+        "task": "live_orders_coolreal",
+        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
+    },
     # cafereal 대사 — 15:28 주문의 체결 여부를 확정한다. 15:35 는 15:30 동시호가
     # 직후이고 15:46 의 live_sync(스냅샷) 보다 앞선다: 순서가 뒤바뀌면 그날
     # 스냅샷이 미확정 원장 위에서 찍힌다. 익일 09:05 는 재확인 — 동시호가 체결이
@@ -183,6 +190,17 @@ celery_app.conf.beat_schedule = {
     "reconcile-cafereal-next-morning": {
         "task": "reconcile_fills_cafereal",
         "schedule": crontab(hour=9, minute=5, day_of_week="mon-fri"),
+        "kwargs": {"prev_day": True},
+    },
+    # coolreal 대사 — cafereal 과 같은 논리로 마감 뒤·스냅샷 앞. 분을 1분씩
+    # 밀어 두 계좌가 같은 분에 KIS·SQLite 를 동시에 때리지 않게 한다.
+    "reconcile-coolreal-after-close": {
+        "task": "reconcile_fills_coolreal",
+        "schedule": crontab(hour=15, minute=36, day_of_week="mon-fri"),
+    },
+    "reconcile-coolreal-next-morning": {
+        "task": "reconcile_fills_coolreal",
+        "schedule": crontab(hour=9, minute=6, day_of_week="mon-fri"),
         "kwargs": {"prev_day": True},
     },
     # Book depth for the 15:28 buy — research only, no trades. 15:07 is
@@ -240,6 +258,12 @@ celery_app.conf.beat_schedule = {
     "live-sync-cafecool-after-close": {
         "task": "live_sync_cafecool",
         "schedule": crontab(hour=15, minute=46, day_of_week="mon-fri"),
+    },
+    # coolreal 스냅샷 — 15:46 에 이미 셋이 쓰고 15:48 은 cafeopen 이 쓴다.
+    # SQLite 쓰기 스태거를 이어 15:49 로 둔다.
+    "live-sync-coolreal-after-close": {
+        "task": "live_sync_coolreal",
+        "schedule": crontab(hour=15, minute=49, day_of_week="mon-fri"),
     },
     # FALLBACK slot — primary trigger is the live_signal chain (it knows the
     # fresh top-30). KIS publishes the day's investor row only after the

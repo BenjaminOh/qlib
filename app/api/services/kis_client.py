@@ -1302,6 +1302,7 @@ class KISClient:
 
 ACCOUNT_MAIN = "main"
 ACCOUNT_CAFE = "cafe"
+ACCOUNT_COOL = "cool"
 
 _clients: dict[str, KISClient] = {}
 _clients_lock = threading.Lock()
@@ -1340,6 +1341,30 @@ def _build_client(account: str) -> KISClient:
             app_secret=settings.kis_cafe_app_secret,
             account_no=settings.kis_cafe_account_no,
             account_product=settings.kis_cafe_account_product or None)
+    if account == ACCOUNT_COOL:
+        if not (settings.kis_cool_app_key and settings.kis_cool_app_secret
+                and settings.kis_cool_account_no):
+            missing = [n for n, v in (
+                ("KIS_COOL_APP_KEY", settings.kis_cool_app_key),
+                ("KIS_COOL_APP_SECRET", settings.kis_cool_app_secret),
+                ("KIS_COOL_ACCOUNT_NO", settings.kis_cool_account_no)) if not v]
+            raise AccountNotConfigured(
+                "cool 계좌 미설정 — " + ", ".join(missing) + " 없음")
+        # main·cafe **둘 다**와 비교한다. 계좌가 늘수록 "다른 하나와만 다른"
+        # 키를 발급받는 실수가 쉬워지는데, 같은 appkey 는 토큰과 초당 한도를
+        # 서로 깎아 15:28 주문을 조용히 죽인다.
+        for other_name, other_key in (("기본", settings.kis_app_key),
+                                      ("카페", settings.kis_cafe_app_key)):
+            if other_key and settings.kis_cool_app_key == other_key:
+                raise AccountNotConfigured(
+                    f"cool 계좌의 appkey 가 {other_name} 계좌와 같다 — KIS 한도는 "
+                    "appkey 단위라 토큰과 호출 한도를 서로 깎는다. 별도 appkey 를 발급할 것.")
+        return KISClient(
+            env=settings.kis_cool_env or settings.kis_env,
+            app_key=settings.kis_cool_app_key,
+            app_secret=settings.kis_cool_app_secret,
+            account_no=settings.kis_cool_account_no,
+            account_product=settings.kis_cool_account_product or None)
     raise ValueError(f"unknown account: {account!r}")
 
 

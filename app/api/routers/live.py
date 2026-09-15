@@ -320,7 +320,7 @@ def update_account(account_id: str, req: AccountPolicyUpdate):
 @router.get("/balance", response_model=LiveBalanceResponse)
 # ⚠ 계좌 목록이 하드코딩이다. `ACCOUNT_STRATEGIES` 에 계좌를 추가하면 여기도 고쳐야
 # 한다 — 정합성은 `tests/app/test_catalog_consistency.py` 가 지킨다.
-def get_balance(account: str = Query("main", pattern="^(main|cafe)$")):
+def get_balance(account: str = Query("main", pattern="^(main|cafe|cool)$")):
     """Current KIS balance + holdings, through the read-path cache.
 
     Never 500s on a KIS outage — degrades to the last-known-good snapshot and
@@ -686,7 +686,7 @@ def _kis_holding_prices(code: str, account: str = "main"
 def get_stock_trades(code: str,
                      strategy: str | None = Query(None),
                      account: str | None = Query(None,
-                                                 pattern="^(main|cafe)$")):
+                                                 pattern="^(main|cafe|cool)$")):
     """Per-stock trade timeline (see _position_timeline).
 
     Pick the ledger by `strategy`, or by `account` (→ that account's primary

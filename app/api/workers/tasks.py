@@ -385,6 +385,26 @@ def live_sync_cafecool_task(self) -> dict:
     return sync_account(strategy="cafecool")
 
 
+@celery_app.task(bind=True, name="live_orders_coolreal")
+@market_day_only
+def live_orders_coolreal_task(self) -> dict:
+    """15:28 KST — coolreal: cafecool 과 같은 조건을 **실계좌**로 매수.
+
+    cool 계좌(KIS_COOL_*)가 설정돼 있지 않으면 no_account 로 조용히 끝난다.
+    """
+    from ..services.market_screener import submit_coolreal_orders
+    self.update_state(state="RUNNING")
+    return submit_coolreal_orders()
+
+
+@celery_app.task(bind=True, name="live_sync_coolreal")
+@market_day_only
+def live_sync_coolreal_task(self) -> dict:
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    return sync_account(strategy="coolreal")
+
+
 @celery_app.task(bind=True, name="live_sync_cafe")
 @market_day_only
 def live_sync_cafe_task(self) -> dict:
@@ -576,6 +596,40 @@ def reconcile_fills_cafereal_task(self, prev_day: bool = False) -> dict:
     slot = "익일 09:05 재확인" if prev_day else "15:35 대사"
     notify_reconcile(result if isinstance(result, dict) else {},
                      strategy=STRATEGY_CAFEREAL, slot_label=slot)
+    return result
+
+
+@celery_app.task(
+    bind=True,
+    name="reconcile_fills_coolreal",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=3,
+)
+@market_day_only
+def reconcile_fills_coolreal_task(self, prev_day: bool = False) -> dict:
+    """coolreal 실주문 대사. 15:36(당일) + 익일 09:06(재확인).
+
+    cafereal 태스크의 복제다 — 기존 태스크에 strategy 인자를 더하지 않는다.
+    지금 유일하게 돌고 있는 실주문 대사 경로의 시그니처를 바꾸느니, 열 줄을
+    복제하는 편이 안전하다(cafecool 이 추가됐을 때와 같은 판단).
+
+    분이 1분씩 밀린 이유: 같은 분에 두 계좌가 KIS 를 때리면 초당 한도와
+    SQLite 쓰기가 겹친다.
+    """
+    from datetime import date
+
+    from ..db import STRATEGY_COOLREAL
+    from ..services.live_trader import _prev_trading_day, reconcile_fills
+    from ..services.notify import notify_reconcile
+    self.update_state(state="RUNNING")
+    day = _prev_trading_day(date.today()) if prev_day else date.today()
+    result = reconcile_fills(day, strategy=STRATEGY_COOLREAL)
+    slot = "익일 09:06 재확인" if prev_day else "15:36 대사"
+    notify_reconcile(result if isinstance(result, dict) else {},
+                     strategy=STRATEGY_COOLREAL, slot_label=slot)
     return result
 
 

@@ -54,6 +54,11 @@ STRATEGY_CAFECOOL = "cafecool"  # exactly 8 chars — the Order.strategy limit
 # 호가 스냅샷 8건이 전부 상한가·매도잔량 0이었던 그 질문의 직접적인 답이 된다.
 # 별도 계좌·별도 appkey 를 쓴다(KIS 한도는 appkey 단위).
 STRATEGY_CAFEREAL = "cafereal"  # exactly 8 chars — the Order.strategy limit
+# coolreal — cafecool 을 **실계좌**로 돌리는 전략 (2026-09-15, 오너 지시). 픽·사이징·
+# 청산이 cafecool 과 같고 다른 것은 주문이 시뮬이 아니라 KIS 실주문이라는 것뿐이다.
+# cafereal(상한 없음)과 짝을 이루면 "과열 제외가 실제 체결에서도 값어치가 있는가"를
+# 같은 계좌 조건에서 잰다. 별도 계좌·별도 appkey 를 쓴다(KIS 한도는 appkey 단위).
+STRATEGY_COOLREAL = "coolreal"  # exactly 8 chars — the Order.strategy limit
 
 
 # ─── Account axis ───────────────────────────────────────────────────
@@ -66,6 +71,7 @@ STRATEGY_CAFEREAL = "cafereal"  # exactly 8 chars — the Order.strategy limit
 DEFAULT_ACCOUNT_ID = "main"
 ACCOUNT_ID_LEN = 16
 CAFE_ACCOUNT_ID = "cafe"
+COOL_ACCOUNT_ID = "cool"
 
 # ⚠ 스키마 괴리를 하나 알고 감수한다 (2026-09-08).
 #
@@ -75,12 +81,15 @@ CAFE_ACCOUNT_ID = "cafe"
 # Postgres 이관과 한 번에 하는 편이 안전하다. `init_db()` 는 `create_all` 만 하므로
 # 기존 테이블을 건드리지 않아 부팅에는 영향이 없다.
 #
-# 계좌가 하나인 동안은 무해하다. 두 번째 계좌가 생기는 순간 운영에서는 두 번째 계좌의
-# 첫 `sync_account` 가 **IntegrityError 로 시끄럽게 실패**한다 — 조용히 첫 계좌 행을
-# 덮어쓰던 옛 동작보다 낫지만, 그 전에 마이그레이션이 끝나 있어야 한다.
+# 무해한 조건을 2026-09-15 에 정확히 좁혔다: **한 전략이 한 계좌에만 속하면** 운영의
+# 좁은 uq 로도 충분하다. `sync_account` 가 쓰는 행은 (date, strategy, account_id) 인데
+# `_account_for` 가 전략→계좌를 1:1 로 정하므로 (date, strategy) 만으로도 이미 유일하다.
+# 충돌은 **같은 전략을 두 계좌가 돌릴 때만** 난다(그때는 IntegrityError 로 시끄럽게 실패한다 —
+# 남의 곡선을 조용히 덮어쓰던 옛 동작보다는 낫다). 그래서 계좌 3개(main·cafe·cool)는
+# 안전하고, Postgres 이관은 이 변경의 전제가 아니라 별도 과제로 남는다.
 #
-# 잊지 않기 위한 장치: `tests/app/test_account_axis.py` 의 계좌 수 가드가 `ACCOUNT_STRATEGIES`
-# 에 세 번째 계좌가 들어오면 배포 게이트에서 실패한다.
+# 잊지 않기 위한 장치: `tests/app/test_account_axis.py` 가 (1) 계좌 수 상한과
+# (2) **한 전략이 두 계좌에 속하지 않는다**는 진짜 불변식을 함께 지킨다.
 
 # 계좌 ↔ 그 계좌에 REAL 주문을 내는 전략들. 단일 진실원.
 #
@@ -94,6 +103,7 @@ CAFE_ACCOUNT_ID = "cafe"
 ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
     DEFAULT_ACCOUNT_ID: (STRATEGY_OPEN,),
     CAFE_ACCOUNT_ID: (STRATEGY_CAFEREAL,),
+    COOL_ACCOUNT_ID: (STRATEGY_COOLREAL,),
 }
 
 # 표시 순서를 가진 전 전략 목록. 화면의 필터 칩·회고 탭·곡선 기준선이 전부
@@ -119,7 +129,7 @@ EXIT_KIND_LADDER = "ladder_reserve"
 EXIT_KIND_MANUAL = "manual_exit"
 
 ALL_STRATEGIES: tuple[str, ...] = (
-    STRATEGY_OPEN, STRATEGY_CAFEREAL,                       # 실주문
+    STRATEGY_OPEN, STRATEGY_CAFEREAL, STRATEGY_COOLREAL,    # 실주문
     STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
     STRATEGY_SCALE, STRATEGY_LIMIT,                         # qlib 시뮬
     STRATEGY_CAFE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL,    # 카페 시뮬

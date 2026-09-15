@@ -23,7 +23,7 @@ export const STRATEGY_SHORT: Record<string, string> = {
   trail: "qlib 트레일", scale: "qlib 사다리", limit: "qlib 지정가",
   // 카페 모사 스크리너가 고른 것들.
   cafe: "카페 시뮬", cafeopen: "카페 익일", cafecool: "카페 냉각",
-  cafereal: "카페 실전",
+  cafereal: "카페 실전", coolreal: "카페 냉각 실전",
   // 급등 전야 프로파일.
   surge: "급등 전야",
   // 의사 전략 — 원장으로 설명되지 않는 수량. 전략이 아니라 "전략을 모른다"는 표시.
@@ -46,6 +46,7 @@ export const STRATEGY_COLORS: Record<string, string> = {
   cafeopen: "#0d9488", // teal — cafe's picks, next-morning limit entry
   cafecool: "#84cc16", // lime — cafe's picks minus the overheated ones
   cafereal: "#c026d3", // fuchsia — cafe's picks on a REAL second account
+  coolreal: "#f97316", // orange — cafecool's picks on a REAL third account
 };
 
 /**
@@ -64,6 +65,7 @@ export const STRATEGY_LABELS: Record<string, string> = {
   cafeopen: "카페 모사 · 익일 시가 −3% 지정가 (시뮬)",
   cafecool: "카페 모사 · ret20 상한 50% (시뮬)",
   cafereal: "카페 모사 · 실주문 (카페 계좌)",
+  coolreal: "카페 모사 · ret20 상한 50% · 실주문 (냉각 계좌)",
   manual: "주문 원장에 없는 수량 — 수동 매매·대체입고·액면분할 등",
 };
 
@@ -74,6 +76,7 @@ export const MANUAL_STRATEGY = "manual";
 export const PRIMARY_STRATEGY: Record<string, string> = {
   main: "open",
   cafe: "cafereal",
+  cool: "coolreal",
 };
 
 export function strategyLabel(strategy: string): string {
@@ -89,7 +92,7 @@ export function strategyLabel(strategy: string): string {
  * 골라볼 칩이 없다는 뜻이었다.
  */
 export const STRATEGY_ORDER: string[] = [
-  "open", "cafereal",                                  // 실주문
+  "open", "cafereal", "coolreal",                      // 실주문
   "close", "flow", "trail", "scale", "limit",          // qlib 시뮬
   "cafe", "cafeopen", "cafecool",                      // 카페 시뮬
   "surge",
@@ -98,6 +101,7 @@ export const STRATEGY_ORDER: string[] = [
 /** 계열 아이콘 — 칩에서 카페·급등 계열을 한눈에 묶어 보이게 한다. */
 export const STRATEGY_ICON: Record<string, string> = {
   cafe: "\u2615", cafeopen: "\u2615", cafecool: "\u2615", cafereal: "\u2615",
+  coolreal: "\u2615",
   surge: "\u26a1",
 };
 

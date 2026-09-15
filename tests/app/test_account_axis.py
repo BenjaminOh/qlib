@@ -158,26 +158,54 @@ def test_writes_default_to_the_original_account(session):
 # ─── 운영 스키마 괴리를 잊지 않기 위한 가드 ─────────────────────────
 
 
-def test_account_count_gate_until_the_uq_migration_lands():
-    """세 번째 계좌가 생기면 **배포를 막는다.**
+def test_no_strategy_belongs_to_two_accounts():
+    """운영 uq 괴리를 무해하게 만드는 **진짜 불변식**.
 
     모델의 uq 는 (date, strategy, account_id) 인데 **운영 SQLite 는 아직
-    (date, strategy)** 다 (models.py 의 괴리 주석 참조). SQLite 는 unique
-    constraint 를 ALTER 로 못 바꾸고 테이블 재작성이 필요해서,
-    `scripts/migrate_live_db.py` 로 Postgres 이관과 함께 처리하기로 미뤘다.
+    (date, strategy)** 다 (models.py 의 괴리 주석 참조). 2026-09-15 에 그 괴리가
+    언제 위험한지 정확히 좁혔다: `sync_account` 가 쓰는 행의 계좌는
+    `_account_for(strategy)` 가 정하므로, **한 전략이 한 계좌에만 속하는 한**
+    (date, strategy) 는 계좌 축 없이도 유일하다. 충돌은 같은 전략을 두 계좌가
+    돌릴 때만 난다.
 
-    계좌가 둘(main·cafe)인 동안은 무해하다 — cafereal 은 자격증명 미설정이라
-    실주문이 0건이고, 같은 (date, strategy) 에 두 행이 생길 일이 없다.
-
-    세 번째 계좌는 다르다. 그 계좌의 첫 `sync_account` 가 운영에서
-    IntegrityError 로 죽거나, 더 나쁘게는 남의 곡선을 덮어쓴다. 그러니
-    **마이그레이션을 끝내고 이 테스트를 갱신하는 것이 계좌 추가의 전제**다.
-
-    이 가드를 지우고 싶어졌다면, 지울 게 아니라 이관을 먼저 하라.
+    그래서 막아야 할 것은 계좌 '수'가 아니라 이 중복이다. 계좌를 늘리는 것은
+    안전하고(main·cafe·cool), 전략을 두 계좌에 얹는 것이 위험하다.
     """
     from app.api.db.models import ACCOUNT_STRATEGIES
 
-    assert len(ACCOUNT_STRATEGIES) <= 2, (
-        f"계좌가 {len(ACCOUNT_STRATEGIES)}개다 — 운영 DB 의 uq 가 아직 계좌 축을 "
-        "모른다. scripts/migrate_live_db.py 로 이관을 끝낸 뒤 이 상한을 올릴 것."
-    )
+    seen: dict[str, str] = {}
+    for account, strategies in ACCOUNT_STRATEGIES.items():
+        for s in strategies:
+            assert s not in seen, (
+                f"전략 {s!r} 이 계좌 {seen[s]!r} 와 {account!r} 양쪽에 있다 — "
+                "운영 DB 의 uq(date, strategy) 가 두 행을 받지 못한다. "
+                "먼저 scripts/migrate_live_db.py 로 이관할 것.")
+            seen[s] = account
+
+
+def test_account_for_agrees_with_the_map():
+    """`_account_for` 는 맵의 첫 일치를 돌려준다 — 중복이 없어야 1:1 이 된다.
+
+    위 불변식이 깨지면 여기서도 어긋난다. 두 개를 같이 둬야 "맵은 맞는데
+    해석이 다른" 상태를 잡는다.
+    """
+    from app.api.db.models import ACCOUNT_STRATEGIES
+    from app.api.services import live_trader as lt
+
+    for account, strategies in ACCOUNT_STRATEGIES.items():
+        for s in strategies:
+            assert lt._account_for(s) == account, (
+                f"{s} → {lt._account_for(s)} (맵은 {account})")
+
+
+def test_account_count_still_has_a_ceiling():
+    """상한은 남겨 둔다 — 네 번째 계좌는 다시 한 번 멈춰서 생각하게.
+
+    이관이 끝나면(운영 uq 가 계좌 축을 알게 되면) 이 상한은 의미를 잃는다.
+    그때 지우면 된다.
+    """
+    from app.api.db.models import ACCOUNT_STRATEGIES
+
+    assert len(ACCOUNT_STRATEGIES) <= 3, (
+        f"계좌가 {len(ACCOUNT_STRATEGIES)}개다 — 운영 DB 의 uq 는 아직 계좌 축을 "
+        "모른다. 늘리기 전에 scripts/migrate_live_db.py 로 이관할 것.")

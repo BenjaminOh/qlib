@@ -6,16 +6,16 @@
 
 ## 이 저장소가 실제로 하는 일
 
-**KIS(한국투자증권) 모의계좌로 11개 매매 전략을 매일 병렬 운영하고, 그 성적을
+**KIS(한국투자증권) 모의계좌로 12개 매매 전략을 매일 병렬 운영하고, 그 성적을
 비교해 승자를 고르는 실험 시스템**입니다. 2026-07-28 시작, ~3개월 테스트.
 
 | 축 | 내용 |
 |---|---|
-| **실주문 2개** | `open`(기본 계좌, 09:00 시가 시장가, **순위 이탈 매도만** — 익절·손절·트레일 없음) · `cafereal`(카페 계좌, 15:28 현재가 −3% 지정가. 계좌 미설정 시 비활성) |
+| **실주문 3개** | `open`(기본 계좌, 09:00 시가 시장가, **순위 이탈 매도만** — 익절·손절·트레일 없음) · `cafereal`(카페 계좌, 15:28 현재가 −3% 지정가. 계좌 미설정 시 비활성) · `coolreal`(냉각 계좌, cafereal 과 같은 방식 + **ret20 상한 50%**. 2026-09-15 추가) |
 | **시뮬 9개** | close·flow·trail·scale·limit·cafe·cafeopen·cafecool·surge — DB 장부에만 기록 |
 | 신호 | Alpha158 → LightGBM(lr 0.005 · **150라운드 고정** · 조기종료 없음), 유니버스 **kospi200**, topk 10 / n_drop 2 |
-| 실행 | FastAPI(`app/api`) + Celery beat 37슬롯 + Next.js(`app/frontend`) |
-| 배포 | GitHub push → Jenkins → blue/green. **`pytest tests/app`(412건)이 배포 게이트** |
+| 실행 | FastAPI(`app/api`) + Celery beat 41슬롯 + Next.js(`app/frontend`) |
+| 배포 | GitHub push → Jenkins → blue/green. **`pytest tests/app`(453건)이 배포 게이트** |
 | 운영 원칙 | **전략 동결** — 테스트 종료까지 설계 변경 금지, 버그 수정만 승인 후 |
 
 ### 코드 지도
@@ -33,7 +33,7 @@
 ### 테스트·린트 (이 프로젝트 기준)
 
 ```bash
-pytest tests/app/          # 실제 게이트. 412건, 의존성 없으면 importorskip 으로 SKIP
+pytest tests/app/          # 실제 게이트. 453건, 의존성 없으면 importorskip 으로 SKIP
 ```
 
 ⚠️ `make lint` 는 `qlib/`·`scripts/` 만 본다 — **`app/` 은 어떤 린터에도 걸리지 않는다.**

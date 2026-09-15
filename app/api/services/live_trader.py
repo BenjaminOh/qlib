@@ -31,7 +31,7 @@ from ..db import (
     DailyPnL, Fill, Order, PositionSnapshot, SessionLocal, Signal,
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
-    STRATEGY_CAFECOOL, STRATEGY_CAFEREAL,
+    STRATEGY_CAFECOOL, STRATEGY_CAFEREAL, STRATEGY_COOLREAL,
     STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID, CAFE_ACCOUNT_ID,
     ACCOUNT_STRATEGIES, EXIT_KIND_LADDER,
     BASE_OPEN, BASE_QUOTE, init_db,
@@ -62,6 +62,8 @@ def _seed_for(strategy: str) -> float:
         # cafereal 은 실계좌라 시드가 아니라 실제 예수금이 출발점이다.
         # 여기 값은 곡선 기준선 표기에만 쓰인다.
         STRATEGY_CAFEREAL: settings.live_seed_cash_cafereal,
+        # coolreal 도 실계좌 — 같은 이유로 곡선 기준선 표기용이다.
+        STRATEGY_COOLREAL: settings.live_seed_cash_coolreal,
     }
     return seeds.get(strategy, settings.live_seed_cash_open)
 
@@ -83,7 +85,7 @@ def _seed_for(strategy: str) -> float:
 
 # ① 잔고를 장부 재구성 대신 **브로커에서 읽는** 전략. open 이 여기 있어야
 #    실계좌 곡선이 실제 예수금·보유로 그려진다(`sync_account`).
-REAL_BALANCE_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL)
+REAL_BALANCE_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
 
 # ② 청산이 **실주문을 내는** 전략. 반드시 BRACKET_STRATEGIES 의 부분집합이어야
 #    한다 — 아니면 EXIT_RULES 폴백이 실계좌에 얹힌다. 회귀 가드:
@@ -93,7 +95,7 @@ REAL_BALANCE_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL)
 #    앉아 있고, open 의 청산은 09:00 랭크 이탈 매도 하나뿐이다.
 #    어느 계좌로 나가는지는 ACCOUNT_STRATEGIES → `_account_for()` 가 정한다 —
 #    여기에 계좌를 하드코딩하지 말 것. 한 계좌의 보유가 다른 계좌로 팔린다.
-REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL,)
+REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
 # CAFE_ACCOUNT_ID (the trading_accounts row supplying cafereal's order style)
 # now comes from db.models, next to ACCOUNT_STRATEGIES. ⚠ `kis_client.ACCOUNT_CAFE`
 # 는 아직 남아 있어 `market_screener` 가 두 이름을 함께 쓴다 — 완전 통합은 아니다. Re-exported
@@ -103,7 +105,7 @@ REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL,)
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
                       STRATEGY_SURGE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL,
-                      STRATEGY_CAFEREAL)
+                      STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
 
 # open 의 청산 규칙은 **랭크 이탈 매도 하나**다. 익절·손절·트레일링이 없다.
 #
@@ -149,6 +151,10 @@ EXIT_RULES: dict[str, dict] = {
     # cafereal: 실계좌. 규칙은 cafe 와 완전히 같아야 두 곡선의 차이가
     # 오직 "시뮬 체결 가정 vs 실제 체결"로 좁혀진다.
     STRATEGY_CAFEREAL: {"tp": 0.10, "stop_source": "entry"},
+    # coolreal: cafecool 의 실계좌 판. 카페 4쌍둥이와 **바이트 단위로 같아야**
+    # 한다 — 청산이 갈리면 "과열 제외"와 "실제 체결" 중 무엇이 곡선을 움직였는지
+    # 말할 수 없다. 회귀 가드: tests/app/test_catalog_consistency.py
+    STRATEGY_COOLREAL: {"tp": 0.10, "stop_source": "entry"},
 }
 
 
@@ -1027,7 +1033,10 @@ def sync_account(client: KISClient | None = None,
 
     strategy='open'     → reads KIS get_balance (기본 실계좌)
     strategy='cafereal' → reads KIS get_balance (카페 실계좌, 별도 appkey)
+    strategy='coolreal' → reads KIS get_balance (냉각 실계좌, 또 다른 appkey)
     anything else       → reconstructs from that strategy's simulated Fills
+
+    실계좌 목록의 진실원은 `REAL_BALANCE_STRATEGIES` 다 — 여기 주석이 아니라.
 
     실계좌를 장부로 재구성하면 안 된다: 수동 매매·미체결·부분체결이 반영되지 않아
     스냅샷과 실제 잔고가 갈라지고, 그 위에 얹힌 곡선은 아무것도 증명하지 못한다.

@@ -484,6 +484,21 @@ def submit_cafecool_orders(trade_date: date | None = None) -> dict:
                              ret20_max=settings.live_cafecool_ret20_max)
 
 
+def submit_coolreal_orders(trade_date: date | None = None) -> dict:
+    """15:28 — cafecool 과 같은 조건(ret20 상한)을 **실계좌**로 산다.
+
+    cafereal(상한 없음)과 짝을 이룬다: 두 실계좌의 차이는 과열 제외 하나뿐이라,
+    "ret20 상한이 실제 체결에서도 값어치가 있는가"를 시뮬 가정 없이 잰다.
+    상한값은 `QLIB_API_LIVE_COOLREAL_RET20_MAX` 로 조정한다(동결된 cafecool 과
+    별도 키라 시뮬 곡선은 흔들리지 않는다).
+
+    계좌 미설정이면 조용히 건너뛴다 — 나머지 전략은 그대로 돈다.
+    """
+    return _submit_cafe_like(trade_date, strategy=STRATEGY_COOLREAL,
+                             ret20_max=settings.live_coolreal_ret20_max,
+                             real=True)
+
+
 def _submit_cafe_like(trade_date: date | None, *, strategy: str,
                       ret20_max: float | None, real: bool = False) -> dict:
     """cafe 계열 15:28 매수 공통부.
@@ -492,21 +507,26 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
     cafe 는 None 이라 종전과 완전히 동일하게 동작한다.
 
     `real=True` 면 별도 계좌로 **실주문**을 낸다 — 잔고도 장부가 아니라 KIS 가
-    진실이고, 주문 방식은 `trading_accounts` 의 cafe 행을 따른다.
+    진실이고, 주문 방식은 `trading_accounts` 의 **그 계좌 행**을 따른다.
+    어느 계좌인지는 `_account_for(strategy)` 가 정한다(cafereal→cafe, coolreal→cool).
     """
     from .account_policy import BasePriceUnavailable, get_policies, order_price
-    from .kis_client import (ACCOUNT_CAFE, AccountNotConfigured, get_kis_client)
-    from .live_trader import (CAFE_ACCOUNT_ID, KIS_THROTTLE_SECONDS,
+    from .kis_client import AccountNotConfigured, get_kis_client
+    from .live_trader import (KIS_THROTTLE_SECONDS, _account_for,
                               _persist_order, _persist_simulated_fill,
                               _simulated_balance)
     import time as _time
     init_db()
     day = trade_date or date.today()
+    # 계좌는 **전략에서** 나온다(ACCOUNT_STRATEGIES → _account_for). 여기에 계좌를
+    # 하드코딩하면 coolreal 주문이 cafe 계좌 자격증명으로 나가고, 한 계좌의 보유가
+    # 다른 계좌로 팔린다 — live_trader._account_for 주석이 경고하던 바로 그 사고다.
+    account_id = _account_for(strategy)
     if real:
         try:
-            client = get_kis_client(ACCOUNT_CAFE)
+            client = get_kis_client(account_id)
         except (AccountNotConfigured, ValueError) as exc:
-            log.info("cafereal 건너뜀 — %s", exc)
+            log.info("%s 건너뜀 — %s", strategy, exc)
             return {"status": "no_account", "strategy": strategy,
                     "trade_date": day.isoformat(), "reason": str(exc)}
     else:
@@ -540,7 +560,7 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
                    .distinct()}
         slot_budget = max(snapshot.total_eval, snapshot.cash) / seed_slots
         cash = snapshot.cash
-        buy_pol = get_policies(db, CAFE_ACCOUNT_ID)[0] if real else None
+        buy_pol = get_policies(db, account_id)[0] if real else None
         for c in cands:
             if c.code in held or len(bought) >= settings.live_cafe_max_buys:
                 continue
@@ -575,18 +595,23 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
                     entry_px = (order_price(client, c.code, buy_pol, day, quote=q)
                                 if buy_pol.is_limit else None)
                 except BasePriceUnavailable as exc:
-                    log.warning("cafereal BUY %s 건너뜀 — 기준가 없음: %s", c.code, exc)
+                    log.warning("%s BUY %s 건너뜀 — 기준가 없음: %s",
+                                strategy, c.code, exc)
                     continue
                 if entry_px:
                     qty = int(min(cash, slot_budget) // entry_px)
                     if qty <= 0:
                         continue
                 res = client.place_order(c.code, "BUY", qty, price=entry_px)
+                # account_id 를 넘기지 않으면 실주문 Order 행이 'main' 으로 남아
+                # Fill(계좌 축을 아는 쪽)과 짝이 어긋난다 — 2026-09-15 수정.
+                # cafereal 실주문이 0건이라 과거 데이터 위험 없이 고칠 수 있었다.
                 _persist_order(db, day, c.code, "BUY", qty, entry_px, res,
-                               strategy=strategy, reasons=reasons)
+                               strategy=strategy, account_id=account_id,
+                               reasons=reasons)
                 if not res.ok:
-                    log.warning("cafereal BUY REJECTED code=%s qty=%d error=%s",
-                                c.code, qty, res.error)
+                    log.warning("%s BUY REJECTED code=%s qty=%d error=%s",
+                                strategy, c.code, qty, res.error)
                 _time.sleep(KIS_THROTTLE_SECONDS)
                 px = entry_px or px
             else:

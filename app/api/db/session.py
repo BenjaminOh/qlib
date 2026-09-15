@@ -95,7 +95,8 @@ def _seed_default_account() -> None:
     therefore reproduces exactly the pre-existing behaviour (market buy, market
     sell) rather than switching the live account to limit orders on deploy.
     """
-    from .models import (BASE_QUOTE, CAFE_ACCOUNT_ID, DEFAULT_ACCOUNT_ID, ORD_TYPE_LIMIT,
+    from .models import (BASE_QUOTE, CAFE_ACCOUNT_ID, COOL_ACCOUNT_ID,
+                         DEFAULT_ACCOUNT_ID, ORD_TYPE_LIMIT,
                          ORD_TYPE_MARKET, TradingAccount)
 
     with SessionLocal() as db:
@@ -120,6 +121,21 @@ def _seed_default_account() -> None:
                 buy_ord_type=ORD_TYPE_LIMIT,
                 buy_base=BASE_QUOTE,
                 # −3%. live_limit_discount·live_cafeopen_discount 와 같은 값이다.
+                buy_offset_pct=settings.live_cafeopen_discount,
+                buy_cancel_hhmm="15:30",
+                sell_ord_type=ORD_TYPE_MARKET,
+            ))
+            added = True
+        # cool 계좌 — coolreal(카페 모사 + ret20 상한) 전용. 주문 방식은 cafe 와
+        # 같은 기본값으로 둔다: 두 계좌의 차이를 **과열 제외 하나**로 좁히기 위해서다.
+        # 여기 값은 화면(`/live/accounts`)에서 바꿀 수 있고, 시드는 기존 행을
+        # 절대 덮어쓰지 않는다.
+        if db.get(TradingAccount, COOL_ACCOUNT_ID) is None:
+            db.add(TradingAccount(
+                account_id=COOL_ACCOUNT_ID,
+                label="카페 냉각 실매매 계좌",
+                buy_ord_type=ORD_TYPE_LIMIT,
+                buy_base=BASE_QUOTE,
                 buy_offset_pct=settings.live_cafeopen_discount,
                 buy_cancel_hhmm="15:30",
                 sell_ord_type=ORD_TYPE_MARKET,

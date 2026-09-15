@@ -43,7 +43,7 @@ export default function LiveOrdersPage() {
   // 보냈는데, cafereal 은 카페 계좌에 **실주문**을 내므로 sim 뷰(SIMULATED
   // 상태 필터)로는 **항상 0건**이었다. 실주문 전략은 백엔드
   // `ACCOUNT_STRATEGIES`(open, cafereal)와 같은 집합이어야 한다.
-  const REAL_ORDER_STRATEGIES = ["open", "cafereal"];
+  const REAL_ORDER_STRATEGIES = ["open", "cafereal", "coolreal"];
   const pickStrategy = (key: string) => {
     setStrategy(key);
     if (REAL_ORDER_STRATEGIES.includes(key)) setView("real");

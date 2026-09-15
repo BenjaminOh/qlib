@@ -28,7 +28,7 @@ const fmtKRW = (v: number) => {
 export default function LiveDashboardPage() {
   const [chartView, setChartView] = useState<"strategy" | "stocks">("strategy");
   // 계좌는 합산하지 않는다 — 별개의 장부라 더하면 어느 쪽이 벌고 잃는지 가려진다.
-  const [account, setAccount] = useState<"main" | "cafe">("main");
+  const [account, setAccount] = useState<"main" | "cafe" | "cool">("main");
   const balance = useQuery({
     queryKey: ["live-balance", account],
     queryFn: () => api.getLiveBalance(account),
@@ -229,7 +229,8 @@ export default function LiveDashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
           <h2 className="text-lg font-semibold">📦 현재 보유 종목</h2>
           <div className="flex gap-1" role="tablist" aria-label="계좌 선택">
-            {([["main", "기본 계좌"], ["cafe", "카페 계좌"]] as const).map(([v, label]) => (
+            {([["main", "기본 계좌"], ["cafe", "카페 계좌"],
+               ["cool", "냉각 계좌"]] as const).map(([v, label]) => (
               <button
                 key={v}
                 role="tab"
@@ -248,7 +249,7 @@ export default function LiveDashboardPage() {
         </div>
         <p className="text-xs text-gray-500 mb-3">
           {b?.source === "no_account"
-            ? "카페 계좌가 아직 설정되지 않았습니다 (KIS_CAFE_* 환경변수)."
+            ? `이 계좌가 아직 설정되지 않았습니다 (KIS_${account.toUpperCase()}_* 환경변수).`
             : b
               ? `${b.holdings.length}종목 / 평가금액 ${fmtKRW(b.total_eval - b.cash)}`
               : "…"}

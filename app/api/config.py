@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     kis_cafe_app_secret: str = ""
     kis_cafe_account_no: str = ""   # "12345678-01" 형태
     kis_cafe_account_product: str = ""
+
+    # ─── 3번째 실계좌 (coolreal) ────────────────────────────────
+    # cafecool(카페 모사 + ret20 상한 50%)을 실주문으로 돌리는 계좌. cafe 계좌와
+    # 같은 이유로 **또 다른 appkey** 여야 한다 — KIS 한도는 appkey 단위다.
+    # 비워두면 coolreal 이 통째로 비활성이고(no_account) 나머지 전략은 그대로 돈다.
+    kis_cool_env: str = ""          # 비우면 kis_env 를 따름
+    kis_cool_app_key: str = ""
+    kis_cool_app_secret: str = ""
+    kis_cool_account_no: str = ""   # "12345678-01" 형태
+    kis_cool_account_product: str = ""
     kis_account_product: str = "01"  # 종합매매 default
 
     # ─── Real-trading safety rails ──────────────────────────────────
@@ -116,6 +126,13 @@ class Settings(BaseSettings):
     # cafereal — 실계좌라 시드가 아니라 예수금이 출발점이다. 이 값은
     # 곡선 기준선(수익률 0% 지점) 표기에만 쓴다.
     live_seed_cash_cafereal: float = 10_000_000.0
+    # coolreal — cafecool 을 실계좌로 돌리는 쌍둥이(2026-09-15). 실계좌라
+    # 예수금이 출발점이고, 이 값도 곡선 기준선 표기에만 쓴다.
+    live_seed_cash_coolreal: float = 10_000_000.0
+    # coolreal 의 ret20 상한(%). cafecool 과 같은 50.0 에서 출발하되 **별도 키**다 —
+    # 실계좌 쪽만 조정해도 동결된 cafecool 시뮬 곡선이 흔들리지 않게 한다.
+    # env: QLIB_API_LIVE_COOLREAL_RET20_MAX
+    live_coolreal_ret20_max: float = 50.0
     live_cafeopen_discount: float = 0.03
     # The resting window: order placed at 09:00, judged against the session
     # range at this hour. 10:00 = the first hour only.

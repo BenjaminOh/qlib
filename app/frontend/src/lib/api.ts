@@ -228,8 +228,8 @@ export const api = {
     fetchApi<GridResultResponse>(`/api/v1/backtests/grid/${groupId}`),
 
   // ── Live trading ───────────────────────────────────────────
-  /** account="main" 기본 계좌, "cafe" 카페 실매매 계좌. 합산하지 않는다. */
-  getLiveBalance: (account: "main" | "cafe" = "main") =>
+  /** "main" 기본, "cafe" 카페 실매매, "cool" 카페 냉각 실매매. 합산하지 않는다. */
+  getLiveBalance: (account: "main" | "cafe" | "cool" = "main") =>
     fetchApi<LiveBalanceResponse>(`/api/v1/live/balance?account=${account}`),
   getHalt: () => fetchApi<HaltStatus>("/api/v1/live/halt"),
   /** reason=null releases the halt; any string engages it. */
