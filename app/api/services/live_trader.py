@@ -552,8 +552,16 @@ def submit_daily_orders(today: date | None = None,
             snapshot = _simulated_balance(db, strategy=strategy)
         else:
             # 정책을 읽는 계좌와 주문이 나가는 계좌는 **같아야 한다.**
+            from .kis_client import AccountNotConfigured as _ANC
             client = client or get_kis_client(_account_for(strategy))
-            snapshot = client.get_balance()
+            try:
+                snapshot = client.get_balance()
+            except _ANC as exc:
+                # 거부·미설정이면 주문을 내지 않는다. 빈 잔고로 진행하면 보유가
+                # 없는 것으로 보여 랭크 이탈 매도가 사라지고 예산도 0이 된다.
+                log.warning("live_orders: %s 건너뜀 — 잔고 조회 거부: %s", strategy, exc)
+                return {"status": "no_account", "strategy": strategy,
+                        "as_of": today.isoformat(), "reason": str(exc)}
         held_codes = {h.code for h in snapshot.holdings}
         target_codes = [s.code for s in signals]
         n_drop = LIVE_CONFIG["strategy_kwargs"]["n_drop"]
@@ -658,7 +666,17 @@ def submit_daily_orders(today: date | None = None,
         if simulated:
             snapshot_after = _simulated_balance(db, strategy=strategy)
         else:
-            snapshot_after = client.get_balance()
+            from .kis_client import AccountNotConfigured as _ANC
+            try:
+                snapshot_after = client.get_balance()
+            except _ANC as exc:
+                # 매도는 이미 나갔다. 현금을 모르는 채 매수 예산을 잡으면 없는 돈으로
+                # 주문한다 — 매수만 건너뛰고 여기서 끝낸다.
+                log.warning("live_orders: %s 매수 건너뜀 — 매도 후 잔고 조회 거부: %s",
+                            strategy, exc)
+                return {"status": "balance_unavailable", "strategy": strategy,
+                        "as_of": today.isoformat(), "submitted": submitted,
+                        "rejected": rejected, "reason": str(exc)}
             time.sleep(KIS_THROTTLE_SECONDS)
         cash = snapshot_after.cash
         # Target per-stock slot: the weight one position is supposed to hold
@@ -1551,11 +1569,13 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             from .kis_client import AccountNotConfigured, get_kis_client
             try:
                 real_client = get_kis_client(_account_for(strategy))
+                # 잔고 조회까지 같은 try 안에 둔다. 밖에 두면 계좌 거부
+                # (AccountRejected)가 예외로 새어 나가 청산 태스크가 죽는다.
+                snapshot = real_client.get_balance()
             except (AccountNotConfigured, ValueError) as exc:
                 log.info("bracket_exits: %s 건너뜀 — %s", strategy, exc)
                 return {"status": "no_account", "strategy": strategy,
                         "trade_date": day.isoformat(), "exits": []}
-            snapshot = real_client.get_balance()
         else:
             snapshot = _simulated_balance(db, strategy=strategy)
         for h in snapshot.holdings:

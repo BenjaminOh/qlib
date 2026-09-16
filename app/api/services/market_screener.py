@@ -544,7 +544,17 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
                     "strategy": strategy}
         # 실계좌는 KIS 잔고가 진실이다. 장부로 재구성하면 수동 매매나 미체결이
         # 반영되지 않아 실제보다 많이 사려 든다.
-        snapshot = client.get_balance() if real else _simulated_balance(db, strategy=strategy)
+        if real:
+            # 거부(AccountRejected)도 미설정과 같이 "오늘은 건너뜀"이다. 빈 잔고로
+            # 읽으면 예산이 0이 되어 조용히 아무것도 안 사고, 그게 정상처럼 보인다.
+            try:
+                snapshot = client.get_balance()
+            except AccountNotConfigured as exc:
+                log.warning("%s 건너뜀 — 잔고 조회 거부: %s", strategy, exc)
+                return {"status": "no_account", "strategy": strategy,
+                        "trade_date": day.isoformat(), "reason": str(exc)}
+        else:
+            snapshot = _simulated_balance(db, strategy=strategy)
         held = {h.code for h in snapshot.holdings}
         # 미체결 지정가는 잔고에 없다. 중복 방지가 잔고만 보면, 같은 종목이
         # 이틀 연속 후보로 잡힐 때 어제 걸어둔 주문 위에 하나를 더 쌓는다 —

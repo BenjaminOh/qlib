@@ -624,6 +624,20 @@ class KISClient:
         else:
             raise last_exc if last_exc else RuntimeError("KIS get_balance failed")
         d = r.json()
+        # HTTP 200 이어도 KIS 는 본문으로 거부를 말한다. rt_cd 를 보지 않고
+        # output2 를 `or [{}]` 로 받으면 거부가 **잔고 0원**으로 둔갑한다.
+        # 0원은 "돈이 없다"는 사실처럼 보여서, 곡선·예산·청산이 전부 그 위에 얹힌다.
+        rt_cd = str(d.get("rt_cd", "0"))
+        if rt_cd != "0":
+            raise AccountRejected(
+                "KIS 가 계좌 %s-%s 를 거부했다 — rt_cd=%s msg_cd=%s %s"
+                % (self.cano, self.acnt_prdt_cd, rt_cd, d.get("msg_cd"),
+                   str(d.get("msg1") or "").strip()))
+        if not (d.get("output2") or []):
+            # 보유가 0종목이어도 요약 행은 온다. 아예 없으면 조회가 성립하지 않은 것이다.
+            raise AccountRejected(
+                "KIS 잔고 응답에 요약(output2)이 없다 — 계좌 %s-%s 조회 실패"
+                % (self.cano, self.acnt_prdt_cd))
         holdings = []
         for row in d.get("output1", []) or []:
             qty = int(float(row.get("hldg_qty") or 0))
@@ -1313,6 +1327,22 @@ class AccountNotConfigured(RuntimeError):
 
     Callers treat this as "skip this strategy today", not as a failure: the
     cafe account is optional and the system must run normally without it.
+    """
+
+
+class AccountRejected(AccountNotConfigured):
+    """KIS 가 응답은 했지만 **그 계좌를 거부**했다 (rt_cd != 0 또는 요약 행 없음).
+
+    자격증명이 없는 것과 결과가 같아야 한다 — 오늘은 건너뛴다. 그래서
+    `AccountNotConfigured` 의 하위 클래스다: 이미 "계좌 미설정이면 건너뜀"을
+    구현해 둔 모든 호출부가 코드 변경 없이 이 경우도 건너뛴다.
+
+    왜 필요한가 (2026-09-16 실사고): cool 계좌에 **다른 ID 소유 계좌번호**를 넣자
+    KIS 가 HTTP 200 + `rt_cd=1` + `output2` 없음으로 답했다. 예전 코드는
+    `(output2 or [{}])[0]` 로 빈 딕셔너리를 받아 **예수금 0·평가금 0**을 돌려줬고,
+    `sync_account` 가 그걸 진짜 잔고로 믿어 스냅샷과 손익행을 썼다.
+    화면에는 시드 1천만 → 0원, 즉 **하루 만에 −100%** 인 가짜 곡선이 그려졌다.
+    거부를 '빈 잔고'로 읽으면 안 된다.
     """
 
 
