@@ -90,6 +90,47 @@ def test_appkey_shared_with_another_account_is_refused(monkeypatch, field):
         kc._build_client(kc.ACCOUNT_COOL)
 
 
+def test_entry_wrappers_actually_run(monkeypatch):
+    """래퍼를 **실제로 호출**한다 — 2026-09-16 운영 사고의 재발 방지.
+
+    그날 15:28 에 `live_orders_coolreal` 이 `NameError: STRATEGY_COOLREAL is not
+    defined` 로 죽었다. `market_screener` 의 import 목록에 상수가 빠져 있었는데,
+    테스트 453건이 전부 통과했다 — 이 파일의 다른 테스트가 `inspect.getsource` 로
+    **소스 문자열만** 보고, 래퍼를 한 번도 실행하지 않았기 때문이다. 문자열 검사는
+    "그 코드가 도는가"를 묻지 않는다.
+
+    실계좌 래퍼는 자격증명이 없으면 `SessionLocal` 에 닿기 전에 `no_account` 로
+    반환하므로, DB 도 KIS 도 건드리지 않고 함수 본문을 끝까지 통과시킬 수 있다.
+    """
+    from datetime import date
+
+    from app.api.services import market_screener as ms
+
+    monkeypatch.setattr(ms, "init_db", lambda: None)
+    monkeypatch.setattr(ms.settings, "kis_cool_app_key", "", raising=False)
+    monkeypatch.setattr(ms.settings, "kis_cafe_app_key", "", raising=False)
+
+    for name in ("submit_coolreal_orders", "submit_cafereal_orders"):
+        import app.api.services.kis_client as kc
+        kc._clients.clear()
+        res = getattr(ms, name)(date(2026, 1, 2))
+        assert isinstance(res, dict), f"{name} 반환이 dict 가 아니다: {res!r}"
+        assert res.get("status") == "no_account", f"{name} → {res!r}"
+
+
+def test_module_has_every_strategy_constant_its_wrappers_use():
+    """네 래퍼가 쓰는 상수가 모듈 이름공간에 실제로 있는가.
+
+    import 누락은 함수를 부르기 전까지 드러나지 않는다 — 위 테스트가 실계좌
+    래퍼를 덮고, 이 테스트가 시뮬 래퍼까지 같은 사고에서 지킨다.
+    """
+    from app.api.services import market_screener as ms
+
+    for name in ("STRATEGY_CAFE", "STRATEGY_CAFEREAL",
+                 "STRATEGY_CAFECOOL", "STRATEGY_COOLREAL"):
+        assert hasattr(ms, name), f"market_screener 에 {name} 이 import 되지 않았다"
+
+
 def test_frozen_simulated_twins_stay_simulated():
     # cafecool 이 실주문 경로로 넘어가면 동결된 곡선이 깨진다.
     for s in ("cafe", "cafecool", "cafeopen", "close", "flow", "trail",

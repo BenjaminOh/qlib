@@ -24,7 +24,7 @@ from datetime import date
 from ..config import settings
 from ..db import (CafeCandidate, CafeScout, MarketPoolSnapshot, Order,
                   OrderbookSnapshot, SessionLocal, STRATEGY_CAFE, STRATEGY_CAFECOOL, STRATEGY_CAFEREAL,
-                  STRATEGY_SURGE, SurgePick, init_db)
+                  STRATEGY_COOLREAL, STRATEGY_SURGE, SurgePick, init_db)
 
 log = logging.getLogger(__name__)
 
