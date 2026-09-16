@@ -201,6 +201,15 @@ def get_balance_for_read(account: str = ACCOUNT_MAIN
                 except Exception as exc:  # noqa: BLE001
                     log.warning("balance cache: redis write failed: %s", exc)
             return snap, "live", as_of
+        except AccountNotConfigured as exc:
+            # 거부(AccountRejected)는 **장애가 아니다.** KIS 가 "이 계좌는 못 쓴다"고
+            # 답한 것이므로 stale·db 로 물러나면 안 된다 — 물러나면 과거 스냅샷이
+            # 현재 잔고처럼 보이고, 화면은 이 계좌를 '연결됨'으로 그린다.
+            # (2026-09-16: cool 계좌가 정확히 그 상태로 보였다. 자격증명은 다 채워져
+            #  클라이언트 생성은 성공하고, 거부는 잔고 조회에서 났기 때문이다.)
+            log.info("balance cache: %s 계좌 사용 불가 — %s", account, exc)
+            return (AccountSnapshot(cash=0.0, total_eval=0.0, holdings=[]),
+                    "no_account", datetime.utcnow())
         except Exception as exc:  # noqa: BLE001
             log.warning("balance cache: KIS fetch failed, falling back: %s", exc)
             if r is not None:

@@ -97,6 +97,42 @@ def test_normal_response_still_parses(client, monkeypatch):
     assert snap.total_eval == 10638205.0
 
 
+def test_read_path_does_not_fall_back_to_db_when_rejected(monkeypatch):
+    """거부당한 계좌는 **과거 스냅샷으로 대체하지 않는다.**
+
+    2026-09-16 2차 사고. 자격증명을 다 채우자 클라이언트 생성은 성공하고 거부는
+    잔고 조회에서 났다. 그런데 화면용 읽기 경로는 그 예외를 "KIS 일시 장애"로 보고
+    stale → db 로 물러났고, 결과적으로 **과거 스냅샷(0원)이 현재 잔고처럼** 실려
+    화면에는 `mode=paper` 로 '연결됨'처럼 보였다. 거부는 장애가 아니라 "이 계좌는
+    못 쓴다"이므로, 폴백이 아니라 no_account 로 끝나야 한다.
+    """
+    from app.api.services import balance_cache as bc
+
+    class _Rejecting:
+        is_mock = False
+        env = "paper"
+        # redis 키 이름이 계좌번호 해시를 쓴다(balance_cache._account_scope).
+        # 가짜에도 있어야 읽기 경로가 키를 만들 수 있다.
+        cano = "50160169"
+        acnt_prdt_cd = "01"
+
+        def get_balance(self):
+            raise kc.AccountRejected("KIS 가 계좌를 거부했다 — rt_cd=1")
+
+    monkeypatch.setattr(bc, "get_kis_client", lambda account="main": _Rejecting())
+    monkeypatch.setattr(bc, "_redis", lambda: None)          # 캐시·stale 경로 제거
+    monkeypatch.setattr(bc, "_from_db", lambda account: None or _FAIL_IF_CALLED())
+
+    snap, source, _ = bc.get_balance_for_read("cool")
+
+    assert source == "no_account", f"거부인데 {source} 로 물러났다"
+    assert snap.cash == 0.0 and snap.total_eval == 0.0
+
+
+def _FAIL_IF_CALLED():
+    raise AssertionError("거부당한 계좌인데 DB 폴백을 읽었다")
+
+
 def test_sync_account_writes_no_row_when_rejected(monkeypatch):
     """이것이 실사고의 회귀 테스트다 — 거부당한 날 **행이 생기면 안 된다.**"""
     engine = create_engine("sqlite:///:memory:")
