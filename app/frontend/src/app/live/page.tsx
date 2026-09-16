@@ -5,6 +5,7 @@ import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import AssetSummary from "@/components/AssetSummary";
+import AccountSwitcher from "@/components/AccountSwitcher";
 import HaltControl from "@/components/HaltControl";
 import EquityChart from "@/components/EquityChart";
 import StockCurvesChart from "@/components/StockCurvesChart";
@@ -29,6 +30,9 @@ export default function LiveDashboardPage() {
   const [chartView, setChartView] = useState<"strategy" | "stocks">("strategy");
   // 계좌는 합산하지 않는다 — 별개의 장부라 더하면 어느 쪽이 벌고 잃는지 가려진다.
   const [account, setAccount] = useState<"main" | "cafe" | "cool">("main");
+  // 계좌 전환 팝업. 탭은 그대로 두고 트리거를 하나 더 둔다 — 팝업은 고를 때
+  // 각 계좌의 연결 상태·잔고를 같이 보여주므로, 비어 있는 계좌의 이유가 바로 읽힌다.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const balance = useQuery({
     queryKey: ["live-balance", account],
     queryFn: () => api.getLiveBalance(account),
@@ -98,6 +102,13 @@ export default function LiveDashboardPage() {
 
   return (
     <div className="space-y-6">
+      {switcherOpen && (
+        <AccountSwitcher
+          current={account}
+          onSelect={setAccount}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      )}
       <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
         <div className="flex items-baseline gap-3">
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">📊 라이브 (KIS 모의)</h1>
@@ -108,6 +119,13 @@ export default function LiveDashboardPage() {
           )}
         </div>
         <div className="flex items-center gap-4 text-sm">
+          <button
+            onClick={() => setSwitcherOpen(true)}
+            className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            title="계좌 전환 · 각 계좌의 연결 상태와 잔고 보기"
+          >
+            🔀 {account === "main" ? "기본" : account === "cafe" ? "카페" : "냉각"} 계좌
+          </button>
           <HaltControl />
           <Link href="/live/accounts" className="text-blue-600 hover:underline">
             ⚙️ 주문 설정
@@ -207,7 +225,7 @@ export default function LiveDashboardPage() {
                   <strong>카페 계좌에 실주문</strong>으로 냅니다(시뮬 아님). 시뮬 체결 가정이
                   현실에서도 성립하는지를 잽니다</p>
                 <p>판정은 매일 15:45 데이터 갱신 직후 체인(실패 시 16:25 폴백) 시가·고가·저가 기준 — 갭으로 뚫린 날은
-                  시가 체결, 익절·손절 동시 터치 시 손절 우선 가정. 범례 클릭으로 곡선별 표시/숨김.</p>
+                  시가 체결, 익절·손절 동시 터치 시 손절 우선 가정. 범례 칩을 클릭하면 전략별로 표시/숨김을 전환할 수 있습니다.</p>
               </div>
             </details>
             <EquityChart rows={pnl.data?.rows || []} seedCash={seedCash} />

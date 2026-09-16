@@ -376,12 +376,15 @@ export interface LiveBalanceResponse {
   holdings: LiveHolding[];
   /** When the numbers were read from KIS — for a stale payload, the last-known-good time. */
   fetched_at: string;
-  mode: "real" | "paper" | "mock";
+  /** unconfigured = 계좌를 만들 수 없음(자격증명 누락·앱키 중복·KIS 거부) */
+  mode: "real" | "paper" | "mock" | "unconfigured";
   /** Freshness of this payload. */
   /** no_account = 해당 계좌 자격증명 미설정 (에러가 아님) */
   source?: "live" | "cache" | "stale" | "db" | "empty" | "no_account";
   /** True when KIS was unreachable and these are last-known-good numbers. */
   stale?: boolean;
+  /** 계좌를 쓸 수 없는 **이유**. 미설정/앱키 중복/KIS 거부를 구분해 담는다. */
+  account_error?: string | null;
 }
 
 export interface SignalReasonFeature {

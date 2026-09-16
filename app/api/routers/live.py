@@ -81,12 +81,20 @@ class LiveBalanceResponse(BaseModel):
     # When the numbers were actually read from KIS — NOT the response time.
     # For a stale/db fallback this is the last-known-good timestamp.
     fetched_at: datetime
-    mode: str  # "real" | "paper" | "mock"
+    mode: str  # "real" | "paper" | "mock" | "unconfigured"
     # Freshness of this payload: "live" | "cache" | "stale" | "db" | "empty".
     source: str = "live"
     # True when KIS was unreachable and these are last-known-good numbers.
     # The UI shows the `fetched_at` time rather than hiding the card.
     stale: bool = False
+    # 계좌를 쓸 수 없을 때 **왜** 그런지. 화면이 "설정되지 않았습니다" 한 줄로
+    # 뭉뚱그리면 세 가지 다른 사고가 같은 모습으로 보인다:
+    #   * 환경변수 누락        — KIS_COOL_APP_KEY … 없음
+    #   * 앱키 중복            — 다른 계좌와 같은 appkey (KIS 한도는 appkey 단위)
+    #   * KIS 의 계좌 거부     — rt_cd=1, ID 와 계좌 주인이 다름 (2026-09-16 실사고)
+    # 세 번째는 서버 로그를 열기 전에는 알 수 없었고, 그래서 계좌번호가 틀린 채로
+    # 하루를 보냈다. 원인 문자열을 그대로 실어 보내 화면에서 바로 읽게 한다.
+    account_error: str | None = None
 
 
 class LiveSignalRow(BaseModel):
@@ -334,11 +342,15 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe|cool)$")):
     """
     from ..services.kis_client import AccountNotConfigured
     snap, source, as_of = get_balance_for_read(account)
+    account_error: str | None = None
     try:
         client = get_kis_client(account)
         mode = "mock" if client.is_mock else client.env
-    except (AccountNotConfigured, ValueError):
+    except (AccountNotConfigured, ValueError) as exc:
         mode = "unconfigured"
+        # 예외 메시지가 곧 원인 설명이다 — 미설정이면 빠진 환경변수 이름을,
+        # appkey 중복이면 어느 계좌와 겹쳤는지, 거부면 KIS 의 rt_cd·msg1 을 담고 있다.
+        account_error = str(exc)
 
     # Strategy attribution. Skipped when there is nothing to attribute, and
     # never allowed to break the response: this endpoint's whole point is that
@@ -391,6 +403,7 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe|cool)$")):
         mode=mode,
         source=source,
         stale=source in ("stale", "db", "empty", "no_account"),
+        account_error=account_error,
     )
 
 
