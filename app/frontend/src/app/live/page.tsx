@@ -232,8 +232,9 @@ export default function LiveDashboardPage() {
                   10:00 판정), cafecool 은 진입 필터(20일 상승률 50% 이상 제외). 청산은 cafe 와 동일</p>
                 <p className="text-amber-700">⚠️ <strong>cafe·cafecool 곡선은 재현 가능한 수익이 아닙니다.</strong>{" "}
                   15:28 호가를 실측해 보니 진입의 다수가 <strong>총매도잔량 0주(상한가)</strong>여서 그 가격에
-                  살 수 없었습니다(2026-09-17 전수: 스냅샷 36건 중 25건). 체결 가능했던 진입만 세면 cafe 는
-                  +35%p(10건), 현실적인 <strong>익일 시가 매수로 바꾸면 −23%</strong> 로 뒤집힙니다.
+                  살 수 없었습니다(2026-09-17 전수: 스냅샷 36건 중 25건). cafe 의 +14.99%(1,498,533원) 중
+                  <strong>75.7%가 그 체결 불가 진입</strong>에서 나왔고, cafecool 은 77.6% 입니다. 체결 가능했던
+                  진입만 세면 <strong>cafe +3.64% · cafecool +3.32%</strong> 로, 실주문 open(+7.69%)보다 낮습니다.
                   승률이 높은 것도 익절 +10% · 손절 −15%(캡) 구조상 당연합니다 — <strong>본전 승률이 60%</strong> 라
                   승률만으로 우열을 판단하면 안 됩니다.</p>
                 <p>• <strong className="text-red-700">cafereal</strong> — cafe 와 같은 후보를
