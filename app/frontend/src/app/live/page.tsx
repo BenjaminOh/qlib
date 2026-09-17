@@ -230,6 +230,12 @@ export default function LiveDashboardPage() {
                 <p>• <strong>cafeopen</strong> / <strong>cafecool</strong> — cafe 의 쌍둥이.
                   <strong>변수 하나만</strong> 다릅니다: cafeopen 은 진입 시점(익일 시가 −3% 지정가,
                   10:00 판정), cafecool 은 진입 필터(20일 상승률 50% 이상 제외). 청산은 cafe 와 동일</p>
+                <p className="text-amber-700">⚠️ <strong>cafe·cafecool 곡선은 재현 가능한 수익이 아닙니다.</strong>{" "}
+                  15:28 호가를 실측해 보니 진입의 다수가 <strong>총매도잔량 0주(상한가)</strong>여서 그 가격에
+                  살 수 없었습니다(2026-09-17 전수: 스냅샷 36건 중 25건). 체결 가능했던 진입만 세면 cafe 는
+                  +35%p(10건), 현실적인 <strong>익일 시가 매수로 바꾸면 −23%</strong> 로 뒤집힙니다.
+                  승률이 높은 것도 익절 +10% · 손절 −15%(캡) 구조상 당연합니다 — <strong>본전 승률이 60%</strong> 라
+                  승률만으로 우열을 판단하면 안 됩니다.</p>
                 <p>• <strong className="text-red-700">cafereal</strong> — cafe 와 같은 후보를
                   <strong>카페 계좌에 실주문</strong>으로 냅니다(시뮬 아님). 시뮬 체결 가정이
                   현실에서도 성립하는지를 잽니다</p>
