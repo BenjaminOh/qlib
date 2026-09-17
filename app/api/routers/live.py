@@ -352,6 +352,13 @@ def get_balance(account: str = Query("main", pattern="^(main|cafe|cool)$")):
         # appkey 중복이면 어느 계좌와 겹쳤는지, 거부면 KIS 의 rt_cd·msg1 을 담고 있다.
         account_error = str(exc)
 
+    # 자격증명이 다 있으면 클라이언트 생성은 성공하고, 거부는 **잔고 조회**에서 난다.
+    # 그 사유는 위 except 에 걸리지 않으므로 읽기 경로가 남겨 둔 것을 가져온다.
+    # (2026-09-16: 이 연결이 없어 화면이 source=no_account 인데 이유는 빈칸이었다.)
+    if source == "no_account" and not account_error:
+        from ..services.balance_cache import last_account_error
+        account_error = last_account_error(account)
+
     # Strategy attribution. Skipped when there is nothing to attribute, and
     # never allowed to break the response: this endpoint's whole point is that
     # it degrades instead of 500-ing, so a bad ledger costs the badges only.

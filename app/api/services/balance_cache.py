@@ -154,6 +154,20 @@ def _from_db(account: str = ACCOUNT_MAIN) -> tuple[AccountSnapshot, datetime] | 
         return None
 
 
+# 계좌별 **마지막 거부 사유**. 화면이 "왜 못 쓰는지"를 말하려면 이 문자열이 필요하다.
+#
+# 왜 반환 튜플에 넣지 않았나: `get_balance_for_read` 의 3-튜플은 20곳 이상에서
+# `snap, src, _ =` 로 언패킹된다(test_balance_cache.py 만 14곳). 값 하나 더 얹자고
+# 전 호출부를 고치는 건 얻는 것에 비해 파장이 크다. 읽는 쪽은 라우터 한 곳뿐이므로
+# 조회 함수로 꺼내 쓴다.
+_last_error: dict[str, str] = {}
+
+
+def last_account_error(account: str = ACCOUNT_MAIN) -> str | None:
+    """직전 읽기에서 이 계좌가 거부당한 이유(없으면 None)."""
+    return _last_error.get(account)
+
+
 def get_balance_for_read(account: str = ACCOUNT_MAIN
                          ) -> tuple[AccountSnapshot, str, datetime]:
     """(snapshot, source, as_of) for display surfaces. Never raises.
@@ -169,6 +183,7 @@ def get_balance_for_read(account: str = ACCOUNT_MAIN
         get_kis_client(account)
     except (AccountNotConfigured, ValueError) as exc:
         log.info("balance cache: %s 계좌 미설정 — %s", account, exc)
+        _last_error[account] = str(exc)
         return (AccountSnapshot(cash=0.0, total_eval=0.0, holdings=[]),
                 "no_account", datetime.utcnow())
     fresh_key, last_key, down_key = _keys(account)
@@ -200,6 +215,7 @@ def get_balance_for_read(account: str = ACCOUNT_MAIN
                     r.delete(down_key)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("balance cache: redis write failed: %s", exc)
+            _last_error.pop(account, None)   # 살아났으면 옛 사유를 남기지 않는다
             return snap, "live", as_of
         except AccountNotConfigured as exc:
             # 거부(AccountRejected)는 **장애가 아니다.** KIS 가 "이 계좌는 못 쓴다"고
@@ -208,6 +224,7 @@ def get_balance_for_read(account: str = ACCOUNT_MAIN
             # (2026-09-16: cool 계좌가 정확히 그 상태로 보였다. 자격증명은 다 채워져
             #  클라이언트 생성은 성공하고, 거부는 잔고 조회에서 났기 때문이다.)
             log.info("balance cache: %s 계좌 사용 불가 — %s", account, exc)
+            _last_error[account] = str(exc)
             return (AccountSnapshot(cash=0.0, total_eval=0.0, holdings=[]),
                     "no_account", datetime.utcnow())
         except Exception as exc:  # noqa: BLE001

@@ -129,6 +129,37 @@ def test_read_path_does_not_fall_back_to_db_when_rejected(monkeypatch):
     assert snap.cash == 0.0 and snap.total_eval == 0.0
 
 
+def test_rejection_reason_reaches_the_api_response(monkeypatch):
+    """거부 사유가 **화면까지** 간다.
+
+    2026-09-16 3차. 읽기 경로가 no_account 로 끝내도록 고쳤더니 이번엔 라우터의
+    account_error 가 빈칸이었다 — 자격증명이 다 있으면 클라이언트 생성은 성공하고
+    거부는 잔고 조회에서 나는데, 라우터는 생성 단계 예외만 보고 있었기 때문이다.
+    화면에는 "연결 실패"만 뜨고 왜인지는 서버 로그를 열어야 했다.
+    """
+    from app.api.routers import live as live_api
+    from app.api.services import balance_cache as bc
+
+    class _Rejecting:
+        is_mock = False
+        env = "paper"
+        cano = "50160169"
+        acnt_prdt_cd = "01"
+
+        def get_balance(self):
+            raise kc.AccountRejected(
+                "KIS 가 계좌 50160169-01 를 거부했다 — rt_cd=1 ID와 사용자정보가 상이")
+
+    monkeypatch.setattr(bc, "get_kis_client", lambda account="main": _Rejecting())
+    monkeypatch.setattr(bc, "_redis", lambda: None)
+    monkeypatch.setattr(live_api, "get_kis_client", lambda account="main": _Rejecting())
+
+    res = live_api.get_balance(account="cool")
+
+    assert res.source == "no_account"
+    assert res.account_error and "rt_cd=1" in res.account_error, res.account_error
+
+
 def _FAIL_IF_CALLED():
     raise AssertionError("거부당한 계좌인데 DB 폴백을 읽었다")
 
