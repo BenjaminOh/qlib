@@ -202,6 +202,16 @@ export default function LiveDashboardPage() {
               매도, close·flow(시뮬)는 종가 매수 후 <strong>브래킷 매도(+10% 익절 / 전 저점
               손절)</strong>. 시드 각 {seedCash?.open ? fmtKRW(seedCash.open) : "…"} · 30초 갱신.
             </p>
+            {/* 곡선을 보는 순간 같이 읽혀야 하는 경고. 접힌 설명 안에 두면
+                "카페가 1·2위"라는 오독을 막지 못한다(2026-09-17 전수 측정). */}
+            <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+              ⚠️ <strong>cafe·cafecool 곡선은 재현 가능한 수익이 아닙니다.</strong>{" "}
+              15:28 호가 실측 결과 진입의 다수가 <strong>총매도잔량 0주(상한가)</strong>여서 그 가격에
+              살 수 없었습니다(2026-09-17 전수: 스냅샷 36건 중 25건).
+              cafe 의 <strong>+14.99%(1,498,533원) 중 75.7%</strong>, cafecool 은 <strong>77.6%</strong> 가
+              그 체결 불가 진입에서 나왔습니다. 체결 가능했던 진입만 세면{" "}
+              <strong>cafe +3.64% · cafecool +3.32%</strong> 로, 실주문 open(+7.69%)보다 낮습니다.
+            </div>
             <details className="text-xs text-gray-500 mb-3">
               <summary className="cursor-pointer text-emerald-700 hover:underline select-none">
                 ❓ 시뮬 전략별 매매 규칙 자세히 보기 (청산 규칙 실험 매트릭스)
@@ -230,12 +240,9 @@ export default function LiveDashboardPage() {
                 <p>• <strong>cafeopen</strong> / <strong>cafecool</strong> — cafe 의 쌍둥이.
                   <strong>변수 하나만</strong> 다릅니다: cafeopen 은 진입 시점(익일 시가 −3% 지정가,
                   10:00 판정), cafecool 은 진입 필터(20일 상승률 50% 이상 제외). 청산은 cafe 와 동일</p>
-                <p className="text-amber-700">⚠️ <strong>cafe·cafecool 곡선은 재현 가능한 수익이 아닙니다.</strong>{" "}
-                  15:28 호가를 실측해 보니 진입의 다수가 <strong>총매도잔량 0주(상한가)</strong>여서 그 가격에
-                  살 수 없었습니다(2026-09-17 전수: 스냅샷 36건 중 25건). cafe 의 +14.99%(1,498,533원) 중
-                  <strong>75.7%가 그 체결 불가 진입</strong>에서 나왔고, cafecool 은 77.6% 입니다. 체결 가능했던
-                  진입만 세면 <strong>cafe +3.64% · cafecool +3.32%</strong> 로, 실주문 open(+7.69%)보다 낮습니다.
-                  승률이 높은 것도 익절 +10% · 손절 −15%(캡) 구조상 당연합니다 — <strong>본전 승률이 60%</strong> 라
+                <p className="text-amber-700">⚠️ cafe·cafecool 의 수익 구성은 곡선 위 경고 배너를 참고하세요 —
+                  진입의 다수가 매도잔량 0주(상한가)라 실제로는 체결할 수 없었습니다. 승률이 높은 것도
+                  익절 +10% · 손절 −15%(캡) 구조상 당연합니다: <strong>본전 승률이 60%</strong> 라
                   승률만으로 우열을 판단하면 안 됩니다.</p>
                 <p>• <strong className="text-red-700">cafereal</strong> — cafe 와 같은 후보를
                   <strong>카페 계좌에 실주문</strong>으로 냅니다(시뮬 아님). 시뮬 체결 가정이
