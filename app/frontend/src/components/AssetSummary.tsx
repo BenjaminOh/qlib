@@ -29,14 +29,16 @@ const signWon = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(Math.round(v))
 const pnlCls = (v: number | null | undefined) =>
   v == null ? "text-gray-400" : v >= 0 ? "text-emerald-600" : "text-red-600";
 
-function Sparkline({ rows }: { rows: DailyPnLRow[] }) {
+function Sparkline({ rows, strategy }: { rows: DailyPnLRow[]; strategy: string }) {
   const data = useMemo(
     () =>
       rows
-        .filter((r) => r.strategy === "open")
+        // 곡선도 보고 있는 계좌를 따라간다 — 예전엔 open 고정이라 카페 계좌를
+        // 보는 중에도 기본 계좌의 자산 흐름이 그려졌다.
+        .filter((r) => r.strategy === strategy)
         .slice(-30)
         .map((r) => ({ d: r.trade_date, v: r.ending_equity })),
-    [rows],
+    [rows, strategy],
   );
   if (data.length < 2) return null;
   return (
@@ -81,6 +83,8 @@ export default function AssetSummary({
   deployed,
   deployedRoi,
   pnlRows,
+  strategy,
+  noAccount,
 }: {
   balance?: LiveBalanceResponse;
   loading: boolean;
@@ -90,6 +94,10 @@ export default function AssetSummary({
   deployed: number;
   deployedRoi: number | null;
   pnlRows: DailyPnLRow[];
+  /** 지금 보고 있는 계좌의 주전략. 손익·곡선 조회의 축이다. */
+  strategy: string;
+  /** 계좌가 미설정이거나 KIS 가 거부해 조회 자체가 성립하지 않는 상태. */
+  noAccount?: boolean;
 }) {
   const total = balance?.total_eval ?? 0;
   const cash = balance?.cash ?? 0;
@@ -108,6 +116,36 @@ export default function AssetSummary({
     return [...holdings, { name: "현금", value: Math.max(cash, 0), color: CASH_COLOR }];
   }, [balance, cash]);
   const donutTotal = donut.reduce((a, s) => a + s.value, 0);
+
+  // 조회가 성립하지 않는 계좌는 **비워 둔다.** 0원을 그대로 그리면 "돈이 없다"로
+  // 읽히고(누적 −100%), 다른 계좌의 숫자를 빌려 오면 빈 계좌가 돈을 번 것처럼
+  // 보인다. 둘 다 사실이 아니므로 숫자 대신 이유를 보여준다.
+  if (noAccount) {
+    return (
+      <section className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
+        <div className="text-xs text-gray-500">총 평가금액</div>
+        <div className="text-3xl sm:text-4xl font-semibold text-gray-300 tabular-nums mt-0.5">
+          —
+        </div>
+        <p className="text-sm text-gray-600 mt-2">
+          이 계좌는 지금 조회할 수 없어 숫자를 비워 뒀습니다. 다른 계좌의 값을 대신 보여주지
+          않습니다.
+        </p>
+        {balance?.account_error && (
+          <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 break-words">
+            {balance.account_error}
+          </p>
+        )}
+        <div className="mt-4 pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-3 sm:grid-cols-4 sm:divide-x sm:divide-gray-100">
+          {["당일 실현 손익", "당일 평가손익(미실현)", "누적 수익률", "투입자본 수익률"].map(
+            (label) => (
+              <Stat key={label} label={label} value="—" valueCls="text-gray-300" />
+            ),
+          )}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
@@ -153,7 +191,7 @@ export default function AssetSummary({
             </span>
           </div>
 
-          <Sparkline rows={pnlRows} />
+          <Sparkline rows={pnlRows} strategy={strategy} />
 
           {/* Invested vs cash proportion */}
           <div className="mt-3">

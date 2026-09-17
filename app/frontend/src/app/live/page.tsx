@@ -33,6 +33,9 @@ export default function LiveDashboardPage() {
   // 계좌 전환 팝업. 탭은 그대로 두고 트리거를 하나 더 둔다 — 팝업은 고를 때
   // 각 계좌의 연결 상태·잔고를 같이 보여주므로, 비어 있는 계좌의 이유가 바로 읽힌다.
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  // 계좌를 고르면 **그 계좌의 주전략**이 정해진다. 잔고는 계좌로, 손익·곡선은
+  // 전략으로 조회되므로 화면의 모든 숫자가 이 한 값에 묶여 있어야 섞이지 않는다.
+  const strategy = PRIMARY_STRATEGY[account] ?? "open";
   const balance = useQuery({
     queryKey: ["live-balance", account],
     queryFn: () => api.getLiveBalance(account),
@@ -60,8 +63,8 @@ export default function LiveDashboardPage() {
     refetchInterval: 60_000,
   });
   const todayRealized = useQuery({
-    queryKey: ["live-today-realized"],
-    queryFn: api.getTodayRealized,
+    queryKey: ["live-today-realized", strategy],
+    queryFn: () => api.getTodayRealized(strategy),
     refetchInterval: 60_000,
   });
   const pnl = useQuery({
@@ -71,7 +74,11 @@ export default function LiveDashboardPage() {
   });
 
   const b = balance.data;
-  const today = pnl.data?.rows?.[pnl.data.rows.length - 1];
+  // 같은 날짜에 전 전략의 행이 나란히 쌓인다. 필터 없이 마지막 행을 집으면
+  // 정렬상 맨 뒤에 온 전략의 미실현손익이 잡혔다 — 카페·냉각 탭뿐 아니라
+  // **기본 계좌에서도** 남의 숫자였다.
+  const pnlRows = pnl.data?.rows ?? [];
+  const today = pnlRows.filter((r) => r.strategy === strategy).slice(-1)[0];
   const seedCash = pnl.data?.seed_cash;
   // 누적 수익률의 분모는 **지금 보고 있는 계좌**의 시드여야 한다.
   //
@@ -80,7 +87,7 @@ export default function LiveDashboardPage() {
   // open 에 고정돼 있어서, 카페 계좌 탭을 누르면 카페 잔고를 기본 계좌 시드로
   // 나눴다. 카페 계좌가 미설정이면 total_eval=0 이라 누적 −100.00% 가 빨간
   // 배지로 떴다 — 손실난 계좌처럼 보이지만 실은 계좌가 없는 것이다.
-  const seedForAccount = seedCash?.[PRIMARY_STRATEGY[account]] ?? seedCash?.open;
+  const seedForAccount = seedCash?.[strategy] ?? seedCash?.open;
   // 계좌가 아예 없으면 0원을 −100% 로 그리지 않고 "—" 로 비운다.
   const noAccount = b?.source === "no_account";
   const cumulative =
@@ -159,7 +166,9 @@ export default function LiveDashboardPage() {
         cumulative={cumulative}
         deployed={deployed}
         deployedRoi={deployedRoi}
-        pnlRows={pnl.data?.rows || []}
+        pnlRows={pnlRows}
+        strategy={strategy}
+        noAccount={noAccount}
       />
 
       {/* Equity chart — strategy curves vs per-stock curves */}

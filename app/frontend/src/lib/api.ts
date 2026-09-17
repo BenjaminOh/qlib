@@ -262,8 +262,10 @@ export const api = {
     fetchApi<StockCurvesResponse>(
       `/api/v1/live/stocks/curves?strategy=${strategy}&days=${days}`,
     ),
-  getTodayRealized: () =>
-    fetchApi<TodayRealized>("/api/v1/live/realized/today"),
+  // 전략(=계좌) 단위 집계다. 넘기지 않으면 서버 기본값 open(기본 계좌)이 잡혀,
+  // 카페·냉각 계좌를 보는 중에도 기본 계좌의 실현손익이 카드에 실린다.
+  getTodayRealized: (strategy = "open") =>
+    fetchApi<TodayRealized>(`/api/v1/live/realized/today?strategy=${strategy}`),
   getLiveOrders: (limit = 100, view: "all" | "real" | "sim" = "real", strategy?: string) =>
     fetchApi<LiveOrdersResponse>(
       `/api/v1/live/orders?limit=${limit}&view=${view}` +
