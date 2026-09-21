@@ -6,6 +6,29 @@
 
 ## 1. 시스템 운영 지식 (검증됨)
 
+- **[2026-09-21] ★★ 운영 DB 를 SQLite → PostgreSQL 로 이전했다 (계좌 확장의 전제).**
+  계좌를 3개 초과로 늘리려면 두 가지가 먼저 풀려야 했다:
+  ① 모델의 uq 는 `(date, strategy, account_id)` 인데 운영 SQLite 는 `(date, strategy)` 였고,
+  Alembic 이 없어(`init_db()` 는 `create_all` 만) ALTER 로 넓힐 수 없다.
+  ② 계좌가 늘면 09:00 동시 writer 가 늘어나는데 SQLite 방어는 `busy_timeout=5000` 뿐이고
+  `live_orders` 는 주문이 멱등하지 않아 **일부러 autoretry 가 없다** — 락 타임아웃 한 번이 그 계좌 세션을 통째로 잃는다.
+
+  **경로**: 공용 `global_shared_db`(pgvector/pg18)에 `qlib_live` 생성 → compose 의 api·worker·scheduler 에
+  외부 네트워크 `app-network` 부착 → `scripts/migrate_live_db.py --execute` → `LIVE_DB_URL` 전환 → 컨테이너 재생성.
+  **실측**: 12테이블 **11,269행** 이동(주문 763·체결 746·스냅샷 277·손익 277·신호 1,080·수급 7,178),
+  이관 후 `UNIQUE (snapshot_date, strategy, account_id)` / `(trade_date, strategy, account_id)` 확인.
+  기존 주문은 전부 `account_id='main'`. 쓰기는 INSERT→ROLLBACK 으로 사전 검증.
+
+  ⚠ **네트워크**: `global_shared_db` 는 포트를 호스트 `127.0.0.1` 에만 바인딩한다 —
+  `host.docker.internal` 로는 **Connection refused**(실측). 같은 도커 네트워크에 올리는 것이 유일한 경로이고,
+  compose 에서 `networks:` 를 쓰는 순간 기본 네트워크가 대체되므로 `default` 를 함께 적어야 redis 가 보인다.
+
+  ⚠ **내가 밟은 함정 — `.env` 를 `sed` 로 고치지 말 것.** `.env` 에 이미 `LIVE_DB_URL=sqlite:...` 줄이
+  있어서 "없으면 append" 가 아니라 **sed 치환 분기**가 돌았고, PostgreSQL 비밀번호에 포함된 `&` 가
+  sed 치환문에서 **"매치된 전체 문자열"** 로 확장돼 URL 한가운데에 옛 줄이 통째로 끼어들었다
+  (→ `password authentication failed`, api 가 DB 를 못 읽는 상태로 몇 분). 파이썬으로 다시 쓰고
+  비밀번호를 `urllib.parse.quote` 로 인코딩해 해결. **env 파일 편집은 sed 금지, 비밀번호는 URL 인코딩.**
+
 - **[2026-08-27] ★★ WAF 가 GitHub 웹훅을 6일간 막았다 — 19커밋 미배포 사고.**
   8/21 12:46 빌드 #103 이후 6일간 빌드가 없었다. 푸시는 전부 성공했고 웹훅도 도착했지만
   **ModSecurity 가 403 으로 거부**하고 있었다:
