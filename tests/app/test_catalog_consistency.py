@@ -83,18 +83,35 @@ def test_real_strategies_all_have_an_account():
 
 # ── 계좌 카탈로그 ────────────────────────────────────────────────
 def test_account_ids_match_the_api_pattern():
-    """`ACCOUNT_STRATEGIES` 에 계좌를 추가하면 API 도 받아줘야 한다.
-    `routers/live.py` 의 정규식이 하드코딩이라 여기서 대조한다."""
-    src = (ROOT / "app/api/routers/live.py").read_text(encoding="utf-8")
-    patterns = re.findall(r'pattern=r?"\^\(([^)]+)\)\$"', src)
-    # `^(all|real|sim)$`(주문 view 필터) 같은 다른 축의 정규식이 섞여 있으므로
-    # **계좌 축만** 고른다 — 기본 계좌 id 를 포함하는 것이 계좌 패턴이다.
-    account_patterns = [p for p in patterns if M.DEFAULT_ACCOUNT_ID in p.split("|")]
-    assert account_patterns, "계좌 pattern 을 찾지 못했다 — 정규식 형태가 바뀌었나?"
-    for pat in account_patterns:
-        allowed = set(pat.split("|"))
-        assert set(M.ACCOUNT_STRATEGIES) <= allowed, (
-            f"API 가 거부하는 계좌: {set(M.ACCOUNT_STRATEGIES) - allowed}")
+    """`ACCOUNT_STRATEGIES` 의 모든 계좌를 API 가 받아줘야 한다.
+
+    2026-09-21 이전에는 라우터의 정규식이 하드코딩이라 이 테스트가 **소스를 긁어**
+    대조했다. 지금은 패턴이 레지스트리에서 파생되므로 소스 파싱은 의미가 없고,
+    대신 **컴파일된 패턴에 실제로 매치되는지**를 본다 — 파생이 끊기면 여기서 잡힌다.
+    """
+    import re as _re
+
+    from app.api.routers.live import _ACCOUNT_PATTERN
+
+    rx = _re.compile(_ACCOUNT_PATTERN)
+    for account in M.ACCOUNT_STRATEGIES:
+        assert rx.match(account), (
+            f"API 가 거부하는 계좌: {account!r} (패턴 {_ACCOUNT_PATTERN})")
+
+
+def test_api_pattern_still_rejects_unknown_accounts():
+    """열어주는 것만큼 막는 것도 중요하다.
+
+    오타난 계좌 id 가 통과하면 `_build_client` 가 `ValueError` 로 죽는데, 그건
+    `AccountNotConfigured` 가 아니라 "오늘은 건너뜀" 처리를 받지 못한다.
+    """
+    import re as _re
+
+    from app.api.routers.live import _ACCOUNT_PATTERN
+
+    rx = _re.compile(_ACCOUNT_PATTERN)
+    for bad in ("nope", "main2", "", "cafe;drop"):
+        assert not rx.match(bad), f"{bad!r} 가 계좌로 통과했다"
 
 
 # ── 표시 카탈로그 (사람이 읽는 이름) ─────────────────────────────

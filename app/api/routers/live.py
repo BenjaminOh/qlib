@@ -28,7 +28,9 @@ from ..services.holding_attribution import (
     CONFIRMED_STATUSES, STATUS_MISMATCH, STATUS_UNKNOWN, UNCONFIRMED_STATUSES,
     attribute_holdings, primary_strategy,
 )
-from ..services.kis_client import get_kis_client, set_trading_halt, trading_halted
+from ..services.kis_client import (
+    ALL_ACCOUNTS, get_kis_client, set_trading_halt, trading_halted,
+)
 
 log = logging.getLogger(__name__)
 
@@ -325,10 +327,15 @@ def update_account(account_id: str, req: AccountPolicyUpdate):
 # ─── Endpoints ──────────────────────────────────────────────────────
 
 
+# 계좌 목록은 **레지스트리에서 파생**한다(2026-09-21). 예전에는 여기 정규식이
+# `^(main|cafe|cool)$` 하드코딩이라 계좌를 늘릴 때마다 두 곳을 손으로 고쳐야 했고,
+# 그걸 잊지 않으려고 테스트가 소스를 정규식으로 긁어 대조했다. 이제 파생되므로
+# 어긋날 수가 없다 — 테스트는 "맵의 모든 계좌가 이 패턴을 통과하는가"만 본다.
+_ACCOUNT_PATTERN = "^(" + "|".join(ALL_ACCOUNTS) + ")$"
+
+
 @router.get("/balance", response_model=LiveBalanceResponse)
-# ⚠ 계좌 목록이 하드코딩이다. `ACCOUNT_STRATEGIES` 에 계좌를 추가하면 여기도 고쳐야
-# 한다 — 정합성은 `tests/app/test_catalog_consistency.py` 가 지킨다.
-def get_balance(account: str = Query("main", pattern="^(main|cafe|cool)$")):
+def get_balance(account: str = Query("main", pattern=_ACCOUNT_PATTERN)):
     """Current KIS balance + holdings, through the read-path cache.
 
     Never 500s on a KIS outage — degrades to the last-known-good snapshot and
@@ -706,7 +713,7 @@ def _kis_holding_prices(code: str, account: str = "main"
 def get_stock_trades(code: str,
                      strategy: str | None = Query(None),
                      account: str | None = Query(None,
-                                                 pattern="^(main|cafe|cool)$")):
+                                                 pattern=_ACCOUNT_PATTERN)):
     """Per-stock trade timeline (see _position_timeline).
 
     Pick the ledger by `strategy`, or by `account` (→ that account's primary
