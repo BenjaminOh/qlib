@@ -34,7 +34,14 @@ docs/
 mlruns/
 catboost_info/
 workspace/
+# ⚠ `*.sqlite` 는 **루트 파일만** 거른다(Go filepath.Match 규칙). 중첩 경로는
+# `**/` 를 붙여야 걸린다 — 2026-09-21 에 개발용 app/api/db/live.sqlite 가 그대로
+# 테스트 이미지에 복사돼, 옛 스키마 때문에 게이트가 3건 실패했다. 개발자 DB 가
+# 이미지에 섞이면 게이트가 "내 머신에서만" 통과하거나 실패한다.
 *.sqlite
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
 *.log
 
 # IDE / temp

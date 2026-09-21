@@ -8,8 +8,8 @@ The tables form a daily loop (13개 테이블, 시각은 celery_app.py 가 진�
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text,
-    UniqueConstraint,
+    Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String,
+    Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -386,6 +386,27 @@ class TradingAccount(Base):
     sell_base = Column(String(12), nullable=True)
     sell_offset_pct = Column(Float, nullable=False, default=0.0)
     sell_cancel_hhmm = Column(String(5), nullable=True)
+
+    # ─── KIS 자격증명 (2026-09-21) ──────────────────────────────
+    #
+    # 계좌를 늘릴 때마다 서버 .env 를 고치고 재시작해야 하면 10계좌 운영이 안 된다.
+    # 그래서 자격증명도 여기로 옮긴다 — 웹에서 등록하면 재시작 없이 붙는다.
+    #
+    # ⚠ 앱키·시크릿은 **Fernet 암호문**으로만 들어온다(`services/secrets.py`).
+    #   공용 PostgreSQL 은 postgres 슈퍼유저를 여러 프로젝트가 공유하므로 평문은
+    #   곧 노출이다. 복호화 키는 .env 에만 있다.
+    #
+    # 비어 있으면 그 계좌는 **env 폴백**으로 읽힌다 — 기존 main·cafe·cool 이
+    # 무중단으로 계속 도는 이유다.
+    kis_env = Column(String(8), nullable=True)          # paper | real (null=전역 기본)
+    account_no = Column(String(16), nullable=True)      # "12345678-01"
+    account_product = Column(String(4), nullable=True)  # 상품코드(null=계좌번호에서 분리)
+    app_key_enc = Column(Text, nullable=True)
+    app_secret_enc = Column(Text, nullable=True)
+    # 자격증명을 지우지 않고 **잠시 끄는** 스위치. 키가 만료됐을 때 행을 지우면
+    # 주문 정책까지 같이 사라진다.
+    enabled = Column(Boolean, nullable=False, default=True)
+    note = Column(String(200), nullable=True)           # "지인 A, 2026-09 수령" 같은 메모
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow,

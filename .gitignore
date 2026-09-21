@@ -62,6 +62,10 @@ catboost_info/
 docs/.bkit-memory.json
 docs/.pdca-status.json
 app/api/db/*.sqlite
+# SQLite 런타임 산출물. 예전에 추적되고 있었는데(2026-09-21 제거) DB 를 열 때마다
+# 내용이 바뀌어 git status 가 늘 더러웠고, 정작 담긴 정보는 없다.
+app/api/db/*.sqlite-shm
+app/api/db/*.sqlite-wal
 app/frontend/.next/
 app/frontend/node_modules/
 data/kr_csv/

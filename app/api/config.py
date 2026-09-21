@@ -188,6 +188,11 @@ class Settings(BaseSettings):
     # (default is a sentinel; rotating it invalidates all existing sessions).
     # Admin user is seeded on first startup from these credentials if the users
     # table is empty (idempotent — subsequent startups are no-ops).
+    # DB 에 저장하는 계좌 자격증명을 암호화하는 Fernet 키. 비어 있으면 계좌를
+    # DB 로 등록하는 경로가 **거부**된다(평문 저장을 막기 위해 일부러 그렇게 했다).
+    # 생성: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    secrets_key: str = ""
+
     jwt_secret: str = "CHANGE_ME_IN_PROD"
     admin_username: str = "admin"
     admin_password: str = "CHANGE_ME_IN_PROD"
