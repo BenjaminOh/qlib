@@ -37,6 +37,97 @@ function StepList({ result }: { result: AccountTestResult }) {
   );
 }
 
+/** 매매 방식 선택 — 계좌가 무엇을 어떻게 살지 정한다.
+ *
+ * 비워두면(=선택 안 함) 그 계좌는 주문을 내지 않습니다. 자격증명만 먼저 등록하고
+ * 방식은 나중에 정하는 흐름을 그대로 허용합니다.
+ */
+function StrategyPicker({ row }: { row: AccountCredentialRow }) {
+  const qc = useQueryClient();
+  const { data: tpl } = useQuery({
+    queryKey: ["templates"],
+    queryFn: api.getTemplates,
+    staleTime: 60 * 60 * 1000,   // 코드에 선언된 목록이라 자주 안 바뀐다
+  });
+
+  const initialRet20 = (() => {
+    try {
+      return row.strategy_params
+        ? String(JSON.parse(row.strategy_params).ret20_max ?? "")
+        : "";
+    } catch {
+      return "";
+    }
+  })();
+
+  const [template, setTemplate] = useState(row.template ?? "");
+  const [ret20, setRet20] = useState(initialRet20);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.putAccountStrategy(row.account_id, {
+        template: template || null,
+        ret20_max: template === "cafe" && ret20 ? Number(ret20) : null,
+        strategy_enabled: true,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["account-credentials"] }),
+  });
+
+  const dirty =
+    (template || null) !== (row.template ?? null) ||
+    (template === "cafe" && ret20 !== initialRet20);
+
+  return (
+    <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-gray-100 pt-2">
+      <label className="text-xs text-gray-600">
+        매매 방식
+        <select
+          value={template}
+          onChange={(e) => setTemplate(e.target.value)}
+          className="mt-0.5 block rounded border border-gray-300 px-2 py-1 text-xs"
+        >
+          <option value="">선택 안 함 (주문 없음)</option>
+          {tpl?.templates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+              {t.slot ? ` · ${t.slot}` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {template === "cafe" && (
+        <label className="text-xs text-gray-600">
+          ret20 상한(%)
+          <input
+            value={ret20}
+            onChange={(e) => setRet20(e.target.value)}
+            placeholder="비우면 제한 없음"
+            className="mt-0.5 block w-32 rounded border border-gray-300 px-2 py-1 text-xs"
+          />
+        </label>
+      )}
+
+      <button
+        onClick={() => save.mutate()}
+        disabled={!dirty || save.isPending}
+        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+      >
+        {save.isPending ? "저장 중…" : "방식 저장"}
+      </button>
+
+      {save.isError && (
+        <span className="text-xs text-red-600">
+          {(save.error as Error).message}
+        </span>
+      )}
+      {save.isSuccess && !dirty && (
+        <span className="text-xs text-emerald-700">저장됨</span>
+      )}
+    </div>
+  );
+}
+
 function AccountCard({ row }: { row: AccountCredentialRow }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -121,6 +212,10 @@ function AccountCard({ row }: { row: AccountCredentialRow }) {
           </button>
         )}
       </div>
+
+      {/* 자격증명이 붙은 계좌만 방식을 고른다 — 계좌 없이 방식부터 정하는 것은
+          순서가 뒤집힌 것이고, 어차피 주문이 나가지 않는다. */}
+      {row.app_key_masked && <StrategyPicker row={row} />}
 
       {test && <StepList result={test} />}
       {runTest.isError && (
@@ -222,6 +317,7 @@ export default function AccountCredentialsPanel() {
     (s) => ({
       account_id: s, label: null, source: "env", app_key_masked: null,
       account_no: null, kis_env: null, enabled: true, note: null,
+      template: null, strategy_params: null, strategy_enabled: true,
     }),
   );
 

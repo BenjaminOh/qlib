@@ -248,6 +248,14 @@ export const api = {
       { method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body) },
     ),
+  getTemplates: () =>
+    fetchApi<{ templates: TemplateOption[] }>("/api/v1/live/templates"),
+  putAccountStrategy: (accountId: string, body: AccountStrategyInput) =>
+    fetchApi<AccountStrategyInput & { account_id: string }>(
+      `/api/v1/live/accounts/${accountId}/strategy`,
+      { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) },
+    ),
   testAccountConnection: (accountId: string) =>
     fetchApi<AccountTestResult>(
       `/api/v1/live/accounts/${accountId}/test`, { method: "POST" },
@@ -396,6 +404,26 @@ export interface AccountCredentialRow {
   kis_env: string | null;
   enabled: boolean;
   note: string | null;
+  /** 매매 방식. null 이면 이 계좌는 주문을 내지 않는다. */
+  template: string | null;
+  /** JSON 문자열. cafe 템플릿이면 {"ret20_max": 50} 같은 형태. */
+  strategy_params: string | null;
+  strategy_enabled: boolean;
+}
+
+/** 매매 방식 선택지 — 목록은 백엔드가 진실이다(코드에 선언된 것만 고를 수 있다). */
+export interface TemplateOption {
+  id: string;
+  label: string;
+  /** beat 가 이 방식을 실행하는 시각. "15:28" 처럼. */
+  slot: string | null;
+}
+
+export interface AccountStrategyInput {
+  /** null 이면 그 계좌는 주문을 내지 않는다. */
+  template: string | null;
+  ret20_max?: number | null;
+  strategy_enabled?: boolean;
 }
 
 export interface AccountCredentialsStatus {

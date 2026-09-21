@@ -281,9 +281,15 @@ def _cred_status(a: TradingAccount) -> dict:
     """
     from ..services import secrets as _secrets
 
+    # 매매 방식은 자격증명과 별개다 — 계좌가 env 에 있어도 방식은 DB 에서 고른다.
+    strategy = {"template": getattr(a, "template", None),
+                "strategy_params": getattr(a, "strategy_params", None),
+                "strategy_enabled": getattr(a, "strategy_enabled", True) is not False}
+
     if not getattr(a, "app_key_enc", None):
         return {"source": "env", "app_key_masked": None, "account_no": None,
-                "kis_env": None, "enabled": True, "note": getattr(a, "note", None)}
+                "kis_env": None, "enabled": True,
+                "note": getattr(a, "note", None), **strategy}
     try:
         masked = _secrets.mask(_secrets.decrypt(a.app_key_enc))
     except Exception:  # noqa: BLE001
@@ -292,7 +298,7 @@ def _cred_status(a: TradingAccount) -> dict:
             "account_no": getattr(a, "account_no", None),
             "kis_env": getattr(a, "kis_env", None),
             "enabled": getattr(a, "enabled", True) is not False,
-            "note": getattr(a, "note", None)}
+            "note": getattr(a, "note", None), **strategy}
 
 
 def _account_row(a: TradingAccount) -> AccountPolicyRow:
@@ -394,6 +400,67 @@ def put_account_credentials(account_id: str, req: AccountCredentials):
                 "created" if created else "updated", account_id,
                 req.kis_env, req.account_no)
     return {"account_id": account_id, "created": created, **status}
+
+
+class AccountStrategyUpdate(BaseModel):
+    """계좌의 **매매 방식**. 전략 id 는 계좌 id 로 고정이라 받지 않는다."""
+    template: str | None = None          # cafe | close | null(=주문 안 냄)
+    ret20_max: float | None = None       # cafe 템플릿 전용
+    strategy_enabled: bool = True
+
+
+@router.get("/templates")
+def get_templates():
+    """화면 드롭다운이 쓰는 매매 방식 목록 — 코드가 진실이다."""
+    from ..services.account_templates import TEMPLATES, TEMPLATE_SLOT_HHMM
+
+    return {"templates": [{"id": k, "label": v,
+                           "slot": TEMPLATE_SLOT_HHMM.get(k)}
+                          for k, v in TEMPLATES.items()]}
+
+
+@router.put("/accounts/{account_id}/strategy")
+def put_account_strategy(account_id: str, req: AccountStrategyUpdate):
+    """이 계좌가 무엇을 어떻게 살지 정한다 — 다음 슬롯부터 적용, 재시작 없음.
+
+    `template=null` 이면 **주문을 내지 않는다.** 자격증명만 등록해 두고 방식은
+    나중에 정하는 흐름을 허용하기 위해서다(지인마다 수령 시점이 다르다).
+    """
+    import json as _json
+
+    from ..services.account_templates import TEMPLATES
+    from ..services.kis_client import bump_accounts_rev
+
+    if req.template is not None and req.template not in TEMPLATES:
+        raise HTTPException(
+            422, f"알 수 없는 매매 방식: {req.template!r} "
+                 f"(가능: {', '.join(TEMPLATES)})")
+    if req.ret20_max is not None and not 0 < req.ret20_max <= 500:
+        raise HTTPException(422, "ret20 상한은 0 초과 500 이하여야 한다")
+
+    with SessionLocal() as db:
+        a = db.get(TradingAccount, account_id)
+        if a is None:
+            raise HTTPException(404, f"계좌 {account_id!r} 없음")
+        a.template = req.template
+        # 템플릿이 안 쓰는 값은 저장하지 않는다 — 남아 있으면 나중에 방식을
+        # 바꿨을 때 "왜 이 값이 먹히지?" 하는 혼란이 된다.
+        params = {}
+        if req.template == "cafe" and req.ret20_max is not None:
+            params["ret20_max"] = req.ret20_max
+        a.strategy_params = _json.dumps(params, ensure_ascii=False) if params else None
+        a.strategy_enabled = req.strategy_enabled
+        db.commit()
+        db.refresh(a)
+        out = {"account_id": account_id, "template": a.template,
+               "strategy_params": a.strategy_params,
+               "strategy_enabled": a.strategy_enabled}
+
+    bump_accounts_rev()
+    log.warning("account strategy changed: %s template=%s params=%s enabled=%s",
+                account_id, out["template"], out["strategy_params"],
+                out["strategy_enabled"])
+    return out
 
 
 @router.post("/accounts/{account_id}/test")
