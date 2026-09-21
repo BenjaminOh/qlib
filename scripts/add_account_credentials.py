@@ -44,6 +44,10 @@ COLUMNS: list[tuple[str, str]] = [
     ("app_secret_enc", "TEXT"),
     ("enabled", "BOOLEAN"),
     ("note", "VARCHAR(200)"),
+    # 매매 방식 (2026-09-21) — 계좌가 무엇을 어떻게 사는지. 비어 있으면 주문 없음.
+    ("template", "VARCHAR(12)"),
+    ("strategy_params", "TEXT"),
+    ("strategy_enabled", "BOOLEAN"),
 ]
 
 
@@ -83,9 +87,11 @@ def main() -> int:
         for name, sql_type in todo:
             conn.execute(text(f"ALTER TABLE {TABLE} ADD COLUMN {name} {sql_type}"))
             print(f"  + {name}")
-        # 기존 행은 enabled 가 NULL 이 된다. 지금 쓰고 있는 계좌를 꺼진 것으로
-        # 오인하지 않도록 명시적으로 켠다.
+        # 기존 행은 불린 칸이 NULL 이 된다. 지금 쓰고 있는 계좌를 꺼진 것으로
+        # 오인하면 그 계좌가 조용히 멈추므로 명시적으로 켠다.
         conn.execute(text(f"UPDATE {TABLE} SET enabled = TRUE WHERE enabled IS NULL"))
+        conn.execute(text(f"UPDATE {TABLE} SET strategy_enabled = TRUE "
+                          f"WHERE strategy_enabled IS NULL"))
 
     print(f"\n{len(todo)}개 추가 완료.")
     return 0

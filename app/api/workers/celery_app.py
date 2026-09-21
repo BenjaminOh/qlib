@@ -178,6 +178,29 @@ celery_app.conf.beat_schedule = {
         "task": "live_orders_coolreal",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
+    # ─── 계좌 슬롯(acct1~4) — 템플릿 1개당 슬롯 1개, 그 안에서 계좌를 순회 ───
+    #
+    # 전략마다 항목을 복제하던 방식을 대체한다. 계좌를 늘려도 여기는 그대로다.
+    # 어떤 계좌가 도는지는 `trading_accounts.template` 이 정한다(웹에서 변경).
+    #
+    # cafe 는 시뮬 쌍둥이와 **같은 15:28** 이어야 진입 시각이 같아 비교가 성립한다.
+    # (위 coolreal 주석과 같은 이유로 15:30 뒤로는 못 민다 — 취소 스윕 컷오프.)
+    "live-entries-cafe": {
+        "task": "live_entries",
+        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
+        "args": ("cafe",),
+    },
+    # close 는 15:20 시뮬 바로 뒤. 같은 분에 몰아 쓰지 않으려고 1분 뗀다.
+    "live-entries-close": {
+        "task": "live_entries",
+        "schedule": crontab(hour=15, minute=21, day_of_week="mon-fri"),
+        "args": ("close",),
+    },
+    # 계좌 슬롯 스냅샷 — 기존 15:49(coolreal) 다음 분. 곡선의 그날 점을 찍는다.
+    "live-sync-accounts": {
+        "task": "live_sync_accounts",
+        "schedule": crontab(hour=15, minute=50, day_of_week="mon-fri"),
+    },
     # cafereal 대사 — 15:28 주문의 체결 여부를 확정한다. 15:35 는 15:30 동시호가
     # 직후이고 15:46 의 live_sync(스냅샷) 보다 앞선다: 순서가 뒤바뀌면 그날
     # 스냅샷이 미확정 원장 위에서 찍힌다. 익일 09:05 는 재확인 — 동시호가 체결이

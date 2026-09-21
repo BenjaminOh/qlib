@@ -432,6 +432,24 @@ class TradingAccount(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     note = Column(String(200), nullable=True)           # "지인 A, 2026-09 수령" 같은 메모
 
+    # ─── 매매 방식 (2026-09-21) ─────────────────────────────────
+    #
+    # 이 계좌가 **무엇을 어떻게 사는가**. 전략 id 는 계좌 id 로 고정이고,
+    # 바뀌는 것은 여기 방식뿐이다 — 그래야 방식을 바꿔도 과거 장부가 끊기지 않는다.
+    #
+    #   cafe  : 15:28 현재가 매수 (카페 스크리너 픽)
+    #   close : 종가 신호 top-10 매수
+    #
+    # 비어 있으면 그 계좌는 **주문을 내지 않는다.** 자격증명만 등록하고 방식은
+    # 나중에 정하는 흐름을 허용하기 위해서다(지인마다 수령 시점이 다르다).
+    template = Column(String(12), nullable=True)
+    # 템플릿마다 필요한 값이 다르다(cafe 는 ret20 상한, close 는 없음).
+    # 칼럼을 미리 다 만들면 쓰지 않는 칸만 늘어나므로 JSON 문자열로 둔다.
+    strategy_params = Column(Text, nullable=True)       # {"ret20_max": 50}
+    # 방식을 지우지 않고 **잠시 멈추는** 스위치. 자격증명 enabled 와 별개다 —
+    # 계좌는 살아 있는데 오늘은 주문만 쉬고 싶은 경우가 있다.
+    strategy_enabled = Column(Boolean, nullable=False, default=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow,
                         onupdate=datetime.utcnow, nullable=False)

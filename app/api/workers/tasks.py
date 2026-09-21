@@ -405,6 +405,43 @@ def live_sync_coolreal_task(self) -> dict:
     return sync_account(strategy="coolreal")
 
 
+@celery_app.task(bind=True, name="live_entries")
+@market_day_only
+def live_entries_task(self, template: str) -> dict:
+    """계좌 설정(template)을 고른 계좌들을 한 번에 돌린다 (2026-09-21).
+
+    전략마다 태스크를 복제하던 방식을 대체한다 — 계좌가 늘어도 여기는 그대로다.
+    `cancel_unfilled_orders_task` 가 계좌 맵을 순회하는 것과 같은 이유이고,
+    그 태스크 주석이 예고한 방향이다.
+
+    템플릿을 고르지 않은 계좌는 애초에 목록에 없으므로 주문이 나가지 않는다 —
+    자격증명만 등록해 두고 방식은 나중에 정하는 흐름을 그대로 허용한다.
+    """
+    from ..services.account_templates import run_template
+    self.update_state(state="RUNNING")
+    return run_template(template)
+
+
+@celery_app.task(bind=True, name="live_sync_accounts")
+@market_day_only
+def live_sync_accounts_task(self) -> dict:
+    """계좌 슬롯의 15:49 스냅샷 — 곡선의 그날 점을 찍는다.
+
+    전략 id 가 계좌 id 라 순회가 곧 전략 순회다. 자격증명이 없으면
+    `sync_account` 가 행을 쓰기 전에 no_account 로 반환한다.
+    """
+    from ..db import ACCOUNT_STRATEGIES
+    from ..services.live_trader import sync_account
+    self.update_state(state="RUNNING")
+    out = {}
+    for account_id, strategies in ACCOUNT_STRATEGIES.items():
+        if not account_id.startswith("acct"):
+            continue          # main·cafe·cool 은 각자의 전용 슬롯이 있다
+        for strategy in strategies:
+            out[strategy] = sync_account(strategy=strategy)
+    return out
+
+
 @celery_app.task(bind=True, name="live_sync_cafe")
 @market_day_only
 def live_sync_cafe_task(self) -> dict:
