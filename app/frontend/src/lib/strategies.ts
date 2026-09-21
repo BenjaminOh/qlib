@@ -26,6 +26,8 @@ export const STRATEGY_SHORT: Record<string, string> = {
   cafereal: "카페 실전", coolreal: "카페 냉각 실전",
   // 급등 전야 프로파일.
   surge: "급등 전야",
+  // 계좌 슬롯 — 매매 방식은 계좌 설정(template)이 정한다.
+  acct1: "슬롯 1", acct2: "슬롯 2", acct3: "슬롯 3", acct4: "슬롯 4",
   // 의사 전략 — 원장으로 설명되지 않는 수량. 전략이 아니라 "전략을 모른다"는 표시.
   manual: "수동/미상",
 };
@@ -66,6 +68,10 @@ export const STRATEGY_LABELS: Record<string, string> = {
   cafecool: "카페 모사 · ret20 상한 50% (시뮬)",
   cafereal: "카페 모사 · 실주문 (카페 계좌)",
   coolreal: "카페 모사 · ret20 상한 50% · 실주문 (냉각 계좌)",
+  acct1: "계좌 슬롯 1 · 실주문 (매매 방식은 계좌 설정에서)",
+  acct2: "계좌 슬롯 2 · 실주문 (매매 방식은 계좌 설정에서)",
+  acct3: "계좌 슬롯 3 · 실주문 (매매 방식은 계좌 설정에서)",
+  acct4: "계좌 슬롯 4 · 실주문 (매매 방식은 계좌 설정에서)",
   manual: "주문 원장에 없는 수량 — 수동 매매·대체입고·액면분할 등",
 };
 
@@ -96,6 +102,7 @@ export const STRATEGY_ORDER: string[] = [
   "close", "flow", "trail", "scale", "limit",          // qlib 시뮬
   "cafe", "cafeopen", "cafecool",                      // 카페 시뮬
   "surge",
+  "acct1", "acct2", "acct3", "acct4",                  // 계좌 슬롯(실주문)
 ];
 
 /** 계열 아이콘 — 칩에서 카페·급등 계열을 한눈에 묶어 보이게 한다. */

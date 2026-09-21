@@ -134,7 +134,9 @@ def test_frontend_knows_every_strategy():
     # `string[]` 의 대괄호에 걸리지 않도록 배열 리터럴을 `= [` 로 앵커한다.
     block = block[block.index("= [") + 3:]
     block = block[:block.index("]")]
-    listed = set(re.findall(r'"([a-z]+)"', block))
+    # `[a-z0-9]` — 숫자를 빼면 `acct1` 이 `acct` 로 잘려 읽힌다(2026-09-21).
+    # 전략 id 는 `Order.strategy = String(8)` 안의 소문자·숫자 조합이면 된다.
+    listed = set(re.findall(r'"([a-z0-9]+)"', block))
     assert listed == set(M.ALL_STRATEGIES), (
         f"프론트 목록 불일치: {listed ^ set(M.ALL_STRATEGIES)}")
 
@@ -143,7 +145,7 @@ def test_frontend_labels_cover_every_strategy():
     src = _frontend_src()
     block = src[src.index("export const STRATEGY_LABELS"):]
     block = block[:block.index("};")]
-    labelled = set(re.findall(r'^\s*([a-z]+):', block, re.M))
+    labelled = set(re.findall(r'^\s*([a-z0-9]+):', block, re.M))
     missing = set(M.ALL_STRATEGIES) - labelled
     assert not missing, f"화면 설명이 없는 전략: {missing}"
 

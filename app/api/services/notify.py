@@ -130,6 +130,10 @@ STRATEGY_TITLES = {
     "open": f"실계좌(KIS {'실전' if settings.kis_env == 'real' else '모의투자'})",
     "cafereal": "카페 실매매 계좌",
     "coolreal": "카페 냉각 실매매 계좌 (ret20 상한)",
+    # 계좌 슬롯 — 매매 방식은 trading_accounts.template 로 바뀔 수 있으므로
+    # 제목에 방식을 못 박지 않는다. 계좌 라벨은 화면에서 따로 붙인다.
+    "acct1": "계좌 슬롯 1", "acct2": "계좌 슬롯 2",
+    "acct3": "계좌 슬롯 3", "acct4": "계좌 슬롯 4",
 }
 _DIV = "━━━━━━━━━━━━━━"
 

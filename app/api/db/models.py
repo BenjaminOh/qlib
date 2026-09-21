@@ -60,6 +60,22 @@ STRATEGY_CAFEREAL = "cafereal"  # exactly 8 chars — the Order.strategy limit
 # 같은 계좌 조건에서 잰다. 별도 계좌·별도 appkey 를 쓴다(KIS 한도는 appkey 단위).
 STRATEGY_COOLREAL = "coolreal"  # exactly 8 chars — the Order.strategy limit
 
+# ─── 계좌 슬롯 전략 (2026-09-21) ────────────────────────────────────
+#
+# **전략 id = 계좌 id.** 계좌 `acct1` 은 전략 `acct1` 을 돌린다.
+#
+# 왜 이렇게 묶었나: 무엇을 사고 파는지(매매 방식)는 이제 `trading_accounts.template`
+# 에 들어가는 **데이터**다. 전략 id 는 "어느 계좌의 장부인가"를 가리키는 이름표일 뿐이다.
+# 이름을 계좌와 같게 두면 "한 전략은 한 계좌에만" 불변식이 저절로 지켜져
+# (`tests/app/test_account_axis.py`) 그 안전망을 지우지 않아도 된다.
+#
+# 이름이 매매 방식을 말해주지 않는 것은 의도다 — 방식은 언제든 바뀔 수 있고,
+# 바뀔 때마다 전략 id 를 고치면 과거 주문·손익 행의 장부가 끊긴다.
+STRATEGY_ACCT1 = "acct1"
+STRATEGY_ACCT2 = "acct2"
+STRATEGY_ACCT3 = "acct3"
+STRATEGY_ACCT4 = "acct4"
+
 
 # ─── Account axis ───────────────────────────────────────────────────
 #
@@ -104,6 +120,12 @@ ACCOUNT_STRATEGIES: dict[str, tuple[str, ...]] = {
     DEFAULT_ACCOUNT_ID: (STRATEGY_OPEN,),
     CAFE_ACCOUNT_ID: (STRATEGY_CAFEREAL,),
     COOL_ACCOUNT_ID: (STRATEGY_COOLREAL,),
+    # 계좌 슬롯 — id 가 같아 1:1 이 자명하다. 자격증명이 없으면 그 계좌는
+    # AccountNotConfigured 로 잠들고, 매매 방식(template)이 없으면 주문을 내지 않는다.
+    "acct1": (STRATEGY_ACCT1,),
+    "acct2": (STRATEGY_ACCT2,),
+    "acct3": (STRATEGY_ACCT3,),
+    "acct4": (STRATEGY_ACCT4,),
 }
 
 # 표시 순서를 가진 전 전략 목록. 화면의 필터 칩·회고 탭·곡선 기준선이 전부
@@ -134,6 +156,8 @@ ALL_STRATEGIES: tuple[str, ...] = (
     STRATEGY_SCALE, STRATEGY_LIMIT,                         # qlib 시뮬
     STRATEGY_CAFE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL,    # 카페 시뮬
     STRATEGY_SURGE,
+    STRATEGY_ACCT1, STRATEGY_ACCT2,                         # 계좌 슬롯(실주문)
+    STRATEGY_ACCT3, STRATEGY_ACCT4,
 )
 
 # Order-execution vocabulary shared by the model, the policy service and the

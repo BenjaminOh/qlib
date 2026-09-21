@@ -32,6 +32,7 @@ from ..db import (
     STRATEGY_OPEN, STRATEGY_CLOSE, STRATEGY_FLOW,
     STRATEGY_TRAIL, STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
     STRATEGY_CAFECOOL, STRATEGY_CAFEREAL, STRATEGY_COOLREAL,
+    STRATEGY_ACCT1, STRATEGY_ACCT2, STRATEGY_ACCT3, STRATEGY_ACCT4,
     STRATEGY_SURGE, STRATEGY_CAFEOPEN, DEFAULT_ACCOUNT_ID, CAFE_ACCOUNT_ID,
     ACCOUNT_STRATEGIES, EXIT_KIND_LADDER,
     BASE_OPEN, BASE_QUOTE, init_db,
@@ -85,7 +86,9 @@ def _seed_for(strategy: str) -> float:
 
 # ① 잔고를 장부 재구성 대신 **브로커에서 읽는** 전략. open 이 여기 있어야
 #    실계좌 곡선이 실제 예수금·보유로 그려진다(`sync_account`).
-REAL_BALANCE_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
+REAL_BALANCE_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL, STRATEGY_COOLREAL,
+                           STRATEGY_ACCT1, STRATEGY_ACCT2,
+                           STRATEGY_ACCT3, STRATEGY_ACCT4)
 
 # ② 청산이 **실주문을 내는** 전략. 반드시 BRACKET_STRATEGIES 의 부분집합이어야
 #    한다 — 아니면 EXIT_RULES 폴백이 실계좌에 얹힌다. 회귀 가드:
@@ -95,7 +98,9 @@ REAL_BALANCE_STRATEGIES = (STRATEGY_OPEN, STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
 #    앉아 있고, open 의 청산은 09:00 랭크 이탈 매도 하나뿐이다.
 #    어느 계좌로 나가는지는 ACCOUNT_STRATEGIES → `_account_for()` 가 정한다 —
 #    여기에 계좌를 하드코딩하지 말 것. 한 계좌의 보유가 다른 계좌로 팔린다.
-REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
+REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL, STRATEGY_COOLREAL,
+                           STRATEGY_ACCT1, STRATEGY_ACCT2,
+                           STRATEGY_ACCT3, STRATEGY_ACCT4)
 # CAFE_ACCOUNT_ID (the trading_accounts row supplying cafereal's order style)
 # now comes from db.models, next to ACCOUNT_STRATEGIES. ⚠ `kis_client.ACCOUNT_CAFE`
 # 는 아직 남아 있어 `market_screener` 가 두 이름을 함께 쓴다 — 완전 통합은 아니다. Re-exported
@@ -105,7 +110,9 @@ REAL_BRACKET_STRATEGIES = (STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
 BRACKET_STRATEGIES = (STRATEGY_CLOSE, STRATEGY_FLOW, STRATEGY_TRAIL,
                       STRATEGY_SCALE, STRATEGY_LIMIT, STRATEGY_CAFE,
                       STRATEGY_SURGE, STRATEGY_CAFEOPEN, STRATEGY_CAFECOOL,
-                      STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
+                      STRATEGY_CAFEREAL, STRATEGY_COOLREAL,
+                      STRATEGY_ACCT1, STRATEGY_ACCT2,
+                      STRATEGY_ACCT3, STRATEGY_ACCT4)
 
 # open 의 청산 규칙은 **랭크 이탈 매도 하나**다. 익절·손절·트레일링이 없다.
 #
@@ -155,6 +162,13 @@ EXIT_RULES: dict[str, dict] = {
     # 한다 — 청산이 갈리면 "과열 제외"와 "실제 체결" 중 무엇이 곡선을 움직였는지
     # 말할 수 없다. 회귀 가드: tests/app/test_catalog_consistency.py
     STRATEGY_COOLREAL: {"tp": 0.10, "stop_source": "entry"},
+    # 계좌 슬롯 — 매매 **방식**은 trading_accounts.template 이 정하지만, 청산 규칙은
+    # 여기 상수로 둔다(사용자 선택: "템플릿만 고른다"). 카페 계열과 같은 값이라
+    # 새 계좌의 곡선을 기존 카페 곡선과 바로 견줄 수 있다.
+    STRATEGY_ACCT1: {"tp": 0.10, "stop_source": "entry"},
+    STRATEGY_ACCT2: {"tp": 0.10, "stop_source": "entry"},
+    STRATEGY_ACCT3: {"tp": 0.10, "stop_source": "entry"},
+    STRATEGY_ACCT4: {"tp": 0.10, "stop_source": "entry"},
 }
 
 
