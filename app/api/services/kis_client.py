@@ -1346,6 +1346,103 @@ _ACCOUNT_LABEL: dict[str, str] = {
 ALL_ACCOUNTS: tuple[str, ...] = (
     ACCOUNT_MAIN, ACCOUNT_CAFE, ACCOUNT_COOL) + EXTRA_ACCOUNTS
 
+
+# ─── 클라이언트 캐시 무효화 ─────────────────────────────────────────
+#
+# `_clients` 는 **프로세스별** lazy 싱글턴이다. 계좌를 웹에서 바꾸면 api 프로세스는
+# 알지만 worker·scheduler 는 옛 클라이언트를 그대로 들고 있다 — 15:28 주문이 옛
+# 자격증명으로 나가는 상황이 된다. redis 에 리비전을 두고 변화를 감지한다.
+#
+# 호출마다 redis 를 왕복하면 주문 경로가 느려지므로 **5초에 한 번만** 확인한다.
+# 계좌 변경이 5초 안에 반영되지 않아도 문제가 없다(사람이 웹에서 누르는 일이다).
+_ACCOUNTS_REV_KEY = "kis:accounts:rev"
+_REV_CHECK_S = 5.0
+# redis 가 죽어 있을 때 2초 연결 타임아웃을 5초마다 무는 것을 막는 쉼표.
+_REV_FAIL_BACKOFF_S = 60.0
+# "아직 관측하지 않음"을 `None` 으로 쓸 수 없다 — redis 에 키가 **아직 없을 때도**
+# None 이라, 키가 처음 생기는 순간(= 실제 첫 변경)을 '최초 관측'으로 오인해 캐시를
+# 안 비운다. 전용 센티널로 둘을 가른다.
+_UNSET = object()
+_seen_rev: object = _UNSET
+_rev_checked_at: float = 0.0
+
+
+def _accounts_redis():
+    """모듈 수준 redis — 클라이언트 인스턴스 없이 리비전을 읽고 쓴다."""
+    global _redis_singleton
+    if _redis_singleton is None:
+        try:
+            import redis  # type: ignore[import-not-found]
+            _redis_singleton = redis.Redis.from_url(
+                settings.celery_broker_url,
+                socket_connect_timeout=2, socket_timeout=2)
+        except Exception:  # noqa: BLE001
+            return None
+    return _redis_singleton
+
+
+def bump_accounts_rev() -> None:
+    """계좌 설정이 바뀌었음을 알린다 — 세 프로세스가 캐시를 버리게 한다.
+
+    redis 가 없으면 조용히 넘어간다. 그 경우에도 각 프로세스는 **다음 재시작에**
+    새 설정을 읽으므로 데이터가 틀어지지는 않는다.
+    """
+    r = _accounts_redis()
+    if r is None:
+        return
+    try:
+        r.incr(_ACCOUNTS_REV_KEY)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _invalidate_if_stale() -> None:
+    """리비전이 바뀌었으면 캐시를 버린다.
+
+    redis 가 없거나 죽었을 때 **매번 연결 타임아웃(2초)을 무는 것**이 실제 문제였다:
+    이 검사를 넣자 테스트가 8초 → 23초가 됐다. 운영에서도 redis 가 잠시 죽으면
+    주문 경로가 그만큼 느려진다. 그래서 실패하면 한동안 쉰다 — 계좌 변경이 늦게
+    반영되는 것은 사람이 웹에서 누르는 일이라 문제가 되지 않는다.
+    """
+    global _seen_rev, _rev_checked_at
+    now = time.time()
+    if now - _rev_checked_at < _REV_CHECK_S:
+        return
+    _rev_checked_at = now
+    r = _accounts_redis()
+    if r is None:
+        _rev_checked_at = now + _REV_FAIL_BACKOFF_S
+        return
+    try:
+        rev = r.get(_ACCOUNTS_REV_KEY)
+    except Exception:  # noqa: BLE001
+        _rev_checked_at = now + _REV_FAIL_BACKOFF_S
+        return
+    if rev != _seen_rev:
+        if _seen_rev is not _UNSET:    # 프로세스 기동 직후의 첫 관측은 무효화가 아니다
+            with _clients_lock:
+                _clients.clear()
+            log.info("계좌 설정이 바뀌어 KIS 클라이언트 캐시를 비웠다 (rev=%s)", rev)
+        _seen_rev = rev
+
+
+def all_accounts() -> tuple[str, ...]:
+    """env 슬롯 ∪ DB 에 등록된 계좌. 화면·검증이 쓰는 **현재** 계좌 목록이다.
+
+    `ALL_ACCOUNTS` 는 import 시점에 고정되므로 웹에서 방금 만든 계좌를 모른다.
+    """
+    known = list(ALL_ACCOUNTS)
+    try:
+        from ..db import SessionLocal, TradingAccount
+
+        with SessionLocal() as db:
+            for (aid,) in db.query(TradingAccount.account_id).all():
+                if aid not in known:
+                    known.append(aid)
+    except Exception:  # noqa: BLE001 — DB 가 없어도 env 목록은 돌려준다
+        pass
+    return tuple(known)
+
 _clients: dict[str, KISClient] = {}
 _clients_lock = threading.Lock()
 
@@ -1374,47 +1471,131 @@ class AccountRejected(AccountNotConfigured):
     """
 
 
-def _build_client(account: str) -> KISClient:
-    if account == ACCOUNT_MAIN:
-        return KISClient()
-    prefix = _ACCOUNT_PREFIX.get(account)
-    if prefix is None:
-        raise ValueError(f"unknown account: {account!r}")
+def _db_creds(account: str) -> dict | None:
+    """DB(`trading_accounts`)에 등록된 자격증명. 없으면 None → env 폴백.
 
-    key = getattr(settings, f"{prefix}_app_key", "")
-    secret = getattr(settings, f"{prefix}_app_secret", "")
-    acct_no = getattr(settings, f"{prefix}_account_no", "")
-    if not (key and secret and acct_no):
-        env_name = prefix.upper()
-        missing = [n for n, v in ((f"{env_name}_APP_KEY", key),
-                                  (f"{env_name}_APP_SECRET", secret),
-                                  (f"{env_name}_ACCOUNT_NO", acct_no)) if not v]
+    **복호화 실패는 폴백하지 않고 예외로 올린다.** DB 에 자격증명이 있는데 키가 맞지
+    않아 조용히 env 로 물러나면, 그 계좌 자리에 **다른 계좌의 키**가 들어가 주문이
+    엉뚱한 계좌로 나갈 수 있다. 반대로 DB 자체에 닿지 못하는 것(테이블 없음·연결 실패)은
+    진짜 폴백 상황이라 None 을 돌려준다 — 기존 env 계좌들이 계속 돌아야 한다.
+    """
+    try:
+        from ..db import SessionLocal, TradingAccount
+    except Exception:  # noqa: BLE001 — DB 계층이 없는 환경(일부 테스트)
+        return None
+
+    try:
+        with SessionLocal() as db:
+            row = db.get(TradingAccount, account)
+            if row is None:
+                return None
+            if getattr(row, "enabled", True) is False:
+                raise AccountNotConfigured(
+                    f"{account} 계좌가 꺼져 있다 — /live/accounts 에서 다시 켤 것.")
+            key_enc = getattr(row, "app_key_enc", None)
+            secret_enc = getattr(row, "app_secret_enc", None)
+            acct_no = getattr(row, "account_no", None)
+            if not (key_enc and secret_enc and acct_no):
+                return None          # 정책 행만 있고 자격증명은 env 에 있는 경우
+            env = getattr(row, "kis_env", None) or ""
+            product = getattr(row, "account_product", None) or ""
+    except AccountNotConfigured:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("계좌 %s: DB 자격증명 조회 실패 — env 로 폴백한다: %s", account, exc)
+        return None
+
+    from . import secrets as _secrets
+    try:
+        app_key = _secrets.decrypt(key_enc)
+        app_secret = _secrets.decrypt(secret_enc)
+    except Exception as exc:  # noqa: BLE001 — InvalidToken·키 없음 포함
         raise AccountNotConfigured(
-            f"{account} 계좌 미설정 — " + ", ".join(missing) + " 없음")
+            f"{account} 계좌 자격증명을 복호화하지 못했다 — QLIB_API_SECRETS_KEY 가 "
+            f"바뀌었거나 비어 있다({type(exc).__name__}). env 로 물러나면 남의 계좌로 "
+            "주문이 나갈 수 있어 여기서 멈춘다.") from exc
 
-    # appkey 중복은 **자기 자신을 뺀 전 계좌**와 비교한다. 예전에는 비교쌍을 손으로
-    # 나열해서, 계좌가 늘 때마다 하나를 빠뜨리기 쉬웠다(같은 키를 쓰면 토큰과 초당
-    # 한도를 서로 깎아 15:28 주문이 조용히 죽는다 — KIS 한도가 appkey 단위라서다).
+    return {"env": env, "app_key": app_key, "app_secret": app_secret,
+            "account_no": acct_no, "account_product": product}
+
+
+def _other_app_keys(account: str) -> list[tuple[str, str]]:
+    """자기 자신을 뺀 **모든 계좌**의 appkey — env 슬롯과 DB 행을 합친다.
+
+    한쪽만 보면 같은 키가 두 계좌에 들어가고, 그러면 KIS 가 토큰을 appkey 단위로
+    관리하므로 서로의 토큰을 무효화해 주문이 조용히 죽는다.
+    """
+    out: list[tuple[str, str]] = []
     for other in ALL_ACCOUNTS:
         if other == account:
             continue
-        other_key = getattr(settings, f"{_ACCOUNT_PREFIX[other]}_app_key", "")
-        if other_key and other_key == key:
-            label = _ACCOUNT_LABEL.get(other, other)
+        k = getattr(settings, f"{_ACCOUNT_PREFIX[other]}_app_key", "")
+        if k:
+            out.append((_ACCOUNT_LABEL.get(other, other), k))
+    try:
+        from ..db import SessionLocal, TradingAccount
+        from . import secrets as _secrets
+
+        with SessionLocal() as db:
+            rows = db.query(TradingAccount).all()
+            for row in rows:
+                if row.account_id == account:
+                    continue
+                enc = getattr(row, "app_key_enc", None)
+                if not enc:
+                    continue
+                try:
+                    out.append((row.label or row.account_id, _secrets.decrypt(enc)))
+                except Exception:  # noqa: BLE001 — 못 푸는 키는 비교 대상에서 뺀다
+                    continue
+    except Exception:  # noqa: BLE001 — DB 없이도 env 비교는 해야 한다
+        pass
+    return out
+
+
+def _build_client(account: str) -> KISClient:
+    if account == ACCOUNT_MAIN:
+        return KISClient()
+
+    # ① DB 우선 — 웹에서 등록한 계좌는 재시작 없이 여기로 들어온다.
+    creds = _db_creds(account)          # 복호화 실패는 예외로 올라온다
+
+    # ② env 폴백 — 기존 cafe·cool 과 acct1~4 슬롯이 이 경로다.
+    if creds is None:
+        prefix = _ACCOUNT_PREFIX.get(account)
+        if prefix is None:
+            raise ValueError(f"unknown account: {account!r}")
+        key = getattr(settings, f"{prefix}_app_key", "")
+        secret = getattr(settings, f"{prefix}_app_secret", "")
+        acct_no = getattr(settings, f"{prefix}_account_no", "")
+        if not (key and secret and acct_no):
+            env_name = prefix.upper()
+            missing = [n for n, v in ((f"{env_name}_APP_KEY", key),
+                                      (f"{env_name}_APP_SECRET", secret),
+                                      (f"{env_name}_ACCOUNT_NO", acct_no)) if not v]
+            raise AccountNotConfigured(
+                f"{account} 계좌 미설정 — " + ", ".join(missing) + " 없음")
+        creds = {"env": getattr(settings, f"{prefix}_env", ""),
+                 "app_key": key, "app_secret": secret, "account_no": acct_no,
+                 "account_product": getattr(settings, f"{prefix}_account_product", "")}
+
+    for label, other_key in _other_app_keys(account):
+        if other_key == creds["app_key"]:
             raise AccountNotConfigured(
                 f"{account} 계좌의 appkey 가 {label} 계좌와 같다 — KIS 한도는 "
                 "appkey 단위라 토큰과 호출 한도를 서로 깎는다. 별도 appkey 를 발급할 것.")
 
     return KISClient(
-        env=getattr(settings, f"{prefix}_env", "") or settings.kis_env,
-        app_key=key,
-        app_secret=secret,
-        account_no=acct_no,
-        account_product=getattr(settings, f"{prefix}_account_product", "") or None)
+        env=creds["env"] or settings.kis_env,
+        app_key=creds["app_key"],
+        app_secret=creds["app_secret"],
+        account_no=creds["account_no"],
+        account_product=creds["account_product"] or None)
 
 
 def get_kis_client(account: str = ACCOUNT_MAIN) -> KISClient:
     """Client for `account`. Default keeps every existing call site unchanged."""
+    _invalidate_if_stale()      # 웹에서 계좌가 바뀌었으면 캐시를 버린다
     c = _clients.get(account)
     if c is None:
         with _clients_lock:
