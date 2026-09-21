@@ -198,14 +198,36 @@ def test_account_for_agrees_with_the_map():
                 f"{s} → {lt._account_for(s)} (맵은 {account})")
 
 
-def test_account_count_still_has_a_ceiling():
-    """상한은 남겨 둔다 — 네 번째 계좌는 다시 한 번 멈춰서 생각하게.
+def test_account_count_has_a_working_ceiling():
+    """**2026-09-21 이관 완료** — 상한의 근거가 바뀌었다.
 
-    이관이 끝나면(운영 uq 가 계좌 축을 알게 되면) 이 상한은 의미를 잃는다.
-    그때 지우면 된다.
+    예전 상한(3)은 "운영 uq 가 계좌 축을 모른다"는 사실에 걸어둔 정지 표지였다.
+    그 전제는 사라졌다: 운영 DB 가 PostgreSQL(qlib_live)로 옮겨가면서 uq 가
+    `(date, strategy, account_id)` 로 넓어진 것을 실측 확인했다(12테이블 11,269행).
+
+    그래도 상한은 남긴다. 이유가 달라졌을 뿐이다 — `kis_client.EXTRA_ACCOUNTS` 로
+    열어 둔 슬롯 수를 넘어서면 자격증명을 넣을 자리가 없다. 즉 이 단언은 이제
+    "DB 가 못 받는다"가 아니라 "설정할 데가 없다"를 막는다.
     """
     from app.api.db.models import ACCOUNT_STRATEGIES
+    from app.api.services.kis_client import ALL_ACCOUNTS
 
-    assert len(ACCOUNT_STRATEGIES) <= 3, (
-        f"계좌가 {len(ACCOUNT_STRATEGIES)}개다 — 운영 DB 의 uq 는 아직 계좌 축을 "
-        "모른다. 늘리기 전에 scripts/migrate_live_db.py 로 이관할 것.")
+    assert len(ACCOUNT_STRATEGIES) <= len(ALL_ACCOUNTS), (
+        f"계좌가 {len(ACCOUNT_STRATEGIES)}개인데 자격증명 슬롯은 "
+        f"{len(ALL_ACCOUNTS)}개뿐이다 — kis_client.EXTRA_ACCOUNTS 와 "
+        "config.py 의 kis_acctN_* 필드를 함께 늘릴 것.")
+
+
+def test_every_mapped_account_has_a_credential_slot():
+    """맵에만 계좌를 적고 자격증명 슬롯을 안 만드는 실수를 막는다.
+
+    그 경우 `_build_client` 가 `ValueError: unknown account` 로 죽는데, 그 예외는
+    `AccountNotConfigured` 가 아니라서 "오늘은 건너뜀"으로 처리되지 않는다 —
+    태스크가 통째로 실패한다.
+    """
+    from app.api.db.models import ACCOUNT_STRATEGIES
+    from app.api.services.kis_client import _ACCOUNT_PREFIX
+
+    for account in ACCOUNT_STRATEGIES:
+        assert account in _ACCOUNT_PREFIX, (
+            f"{account!r} 이 ACCOUNT_STRATEGIES 에는 있는데 자격증명 슬롯이 없다")

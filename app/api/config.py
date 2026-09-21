@@ -51,6 +51,32 @@ class Settings(BaseSettings):
     kis_cool_account_product: str = ""
     kis_account_product: str = "01"  # 종합매매 default
 
+    # ─── 추가 계좌 슬롯 (acct1~acct4) ───────────────────────────
+    # 2026-09-21: 계좌를 늘릴 때 코드를 고치지 않아도 되도록 슬롯을 미리 연다.
+    # 비어 있으면 그 계좌는 AccountNotConfigured 로 잠들고 나머지는 평소대로 돈다.
+    # ⚠ appkey 는 **전 계좌가 서로 달라야** 한다 — KIS 한도가 appkey 단위라
+    #   같은 키를 쓰면 서로의 토큰을 무효화한다(_build_client 가 거부한다).
+    kis_acct1_env: str = ""
+    kis_acct1_app_key: str = ""
+    kis_acct1_app_secret: str = ""
+    kis_acct1_account_no: str = ""
+    kis_acct1_account_product: str = ""
+    kis_acct2_env: str = ""
+    kis_acct2_app_key: str = ""
+    kis_acct2_app_secret: str = ""
+    kis_acct2_account_no: str = ""
+    kis_acct2_account_product: str = ""
+    kis_acct3_env: str = ""
+    kis_acct3_app_key: str = ""
+    kis_acct3_app_secret: str = ""
+    kis_acct3_account_no: str = ""
+    kis_acct3_account_product: str = ""
+    kis_acct4_env: str = ""
+    kis_acct4_app_key: str = ""
+    kis_acct4_app_secret: str = ""
+    kis_acct4_account_no: str = ""
+    kis_acct4_account_product: str = ""
+
     # ─── Real-trading safety rails ──────────────────────────────────
     # Hard ceiling on a single order's notional (qty × price), in KRW.
     # A sizing bug, a bad quote, or a stale seed can otherwise turn one

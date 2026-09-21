@@ -1318,6 +1318,34 @@ ACCOUNT_MAIN = "main"
 ACCOUNT_CAFE = "cafe"
 ACCOUNT_COOL = "cool"
 
+# ─── 계좌 레지스트리 ────────────────────────────────────────────────
+#
+# 2026-09-21: 계좌를 늘리려면 여기 이름 하나와 env 다섯 줄이면 되게 했다.
+# 예전에는 `_build_client` 에 25줄짜리 분기를 복제하고, appkey 중복 비교쌍을
+# 손으로 나열해야 했다(계좌가 N개면 비교쌍이 N² 로 불어나고 하나를 빠뜨리기 쉽다).
+#
+# 추가 슬롯은 **미리 선언만 해 둔다.** 자격증명이 비어 있으면 그 계좌는
+# `AccountNotConfigured` 로 조용히 잠들고, 나머지는 평소대로 돈다 — cafe 계좌가
+# 몇 주째 지내온 상태와 같다. 그래서 슬롯을 열어 두는 것 자체는 무해하다.
+EXTRA_ACCOUNTS: tuple[str, ...] = ("acct1", "acct2", "acct3", "acct4")
+
+# 계좌 id → settings 필드 접두사. main 만 접두사가 없다(기존 env 이름을 보존한다).
+# 접두사를 대문자로 올린 것이 그대로 env 변수명이 된다: kis_cafe → KIS_CAFE_APP_KEY.
+_ACCOUNT_PREFIX: dict[str, str] = {
+    ACCOUNT_MAIN: "kis",
+    ACCOUNT_CAFE: "kis_cafe",
+    ACCOUNT_COOL: "kis_cool",
+    **{a: f"kis_{a}" for a in EXTRA_ACCOUNTS},
+}
+
+# 오류 메시지에 쓰는 사람용 이름. 없으면 id 를 그대로 쓴다.
+_ACCOUNT_LABEL: dict[str, str] = {
+    ACCOUNT_MAIN: "기본", ACCOUNT_CAFE: "카페", ACCOUNT_COOL: "냉각",
+}
+
+ALL_ACCOUNTS: tuple[str, ...] = (
+    ACCOUNT_MAIN, ACCOUNT_CAFE, ACCOUNT_COOL) + EXTRA_ACCOUNTS
+
 _clients: dict[str, KISClient] = {}
 _clients_lock = threading.Lock()
 
@@ -1349,53 +1377,40 @@ class AccountRejected(AccountNotConfigured):
 def _build_client(account: str) -> KISClient:
     if account == ACCOUNT_MAIN:
         return KISClient()
-    if account == ACCOUNT_CAFE:
-        if not (settings.kis_cafe_app_key and settings.kis_cafe_app_secret
-                and settings.kis_cafe_account_no):
-            missing = [n for n, v in (
-                ("KIS_CAFE_APP_KEY", settings.kis_cafe_app_key),
-                ("KIS_CAFE_APP_SECRET", settings.kis_cafe_app_secret),
-                ("KIS_CAFE_ACCOUNT_NO", settings.kis_cafe_account_no)) if not v]
+    prefix = _ACCOUNT_PREFIX.get(account)
+    if prefix is None:
+        raise ValueError(f"unknown account: {account!r}")
+
+    key = getattr(settings, f"{prefix}_app_key", "")
+    secret = getattr(settings, f"{prefix}_app_secret", "")
+    acct_no = getattr(settings, f"{prefix}_account_no", "")
+    if not (key and secret and acct_no):
+        env_name = prefix.upper()
+        missing = [n for n, v in ((f"{env_name}_APP_KEY", key),
+                                  (f"{env_name}_APP_SECRET", secret),
+                                  (f"{env_name}_ACCOUNT_NO", acct_no)) if not v]
+        raise AccountNotConfigured(
+            f"{account} 계좌 미설정 — " + ", ".join(missing) + " 없음")
+
+    # appkey 중복은 **자기 자신을 뺀 전 계좌**와 비교한다. 예전에는 비교쌍을 손으로
+    # 나열해서, 계좌가 늘 때마다 하나를 빠뜨리기 쉬웠다(같은 키를 쓰면 토큰과 초당
+    # 한도를 서로 깎아 15:28 주문이 조용히 죽는다 — KIS 한도가 appkey 단위라서다).
+    for other in ALL_ACCOUNTS:
+        if other == account:
+            continue
+        other_key = getattr(settings, f"{_ACCOUNT_PREFIX[other]}_app_key", "")
+        if other_key and other_key == key:
+            label = _ACCOUNT_LABEL.get(other, other)
             raise AccountNotConfigured(
-                "cafe 계좌 미설정 — " + ", ".join(missing) + " 없음")
-        if settings.kis_cafe_app_key == settings.kis_app_key:
-            # Same appkey means shared token and shared rate limit: the 09:00
-            # real-account run and the 15:28 cafe run would evict each other's
-            # token. Refuse rather than debug that at 15:28.
-            raise AccountNotConfigured(
-                "cafe 계좌의 appkey 가 기본 계좌와 같다 — KIS 한도는 appkey 단위라 "
-                "토큰과 호출 한도를 서로 깎는다. 별도 appkey 를 발급할 것.")
-        return KISClient(
-            env=settings.kis_cafe_env or settings.kis_env,
-            app_key=settings.kis_cafe_app_key,
-            app_secret=settings.kis_cafe_app_secret,
-            account_no=settings.kis_cafe_account_no,
-            account_product=settings.kis_cafe_account_product or None)
-    if account == ACCOUNT_COOL:
-        if not (settings.kis_cool_app_key and settings.kis_cool_app_secret
-                and settings.kis_cool_account_no):
-            missing = [n for n, v in (
-                ("KIS_COOL_APP_KEY", settings.kis_cool_app_key),
-                ("KIS_COOL_APP_SECRET", settings.kis_cool_app_secret),
-                ("KIS_COOL_ACCOUNT_NO", settings.kis_cool_account_no)) if not v]
-            raise AccountNotConfigured(
-                "cool 계좌 미설정 — " + ", ".join(missing) + " 없음")
-        # main·cafe **둘 다**와 비교한다. 계좌가 늘수록 "다른 하나와만 다른"
-        # 키를 발급받는 실수가 쉬워지는데, 같은 appkey 는 토큰과 초당 한도를
-        # 서로 깎아 15:28 주문을 조용히 죽인다.
-        for other_name, other_key in (("기본", settings.kis_app_key),
-                                      ("카페", settings.kis_cafe_app_key)):
-            if other_key and settings.kis_cool_app_key == other_key:
-                raise AccountNotConfigured(
-                    f"cool 계좌의 appkey 가 {other_name} 계좌와 같다 — KIS 한도는 "
-                    "appkey 단위라 토큰과 호출 한도를 서로 깎는다. 별도 appkey 를 발급할 것.")
-        return KISClient(
-            env=settings.kis_cool_env or settings.kis_env,
-            app_key=settings.kis_cool_app_key,
-            app_secret=settings.kis_cool_app_secret,
-            account_no=settings.kis_cool_account_no,
-            account_product=settings.kis_cool_account_product or None)
-    raise ValueError(f"unknown account: {account!r}")
+                f"{account} 계좌의 appkey 가 {label} 계좌와 같다 — KIS 한도는 "
+                "appkey 단위라 토큰과 호출 한도를 서로 깎는다. 별도 appkey 를 발급할 것.")
+
+    return KISClient(
+        env=getattr(settings, f"{prefix}_env", "") or settings.kis_env,
+        app_key=key,
+        app_secret=secret,
+        account_no=acct_no,
+        account_product=getattr(settings, f"{prefix}_account_product", "") or None)
 
 
 def get_kis_client(account: str = ACCOUNT_MAIN) -> KISClient:
