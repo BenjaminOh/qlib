@@ -239,6 +239,19 @@ export const api = {
       body: JSON.stringify({ reason }),
     }),
   getAccounts: () => fetchApi<AccountPolicyRow[]>("/api/v1/live/accounts"),
+  // 자격증명 **상태**만 온다 — 시크릿은 응답에 실리지 않는다(마스킹된 앱키뿐).
+  getAccountCredentials: () =>
+    fetchApi<AccountCredentialsStatus>("/api/v1/live/accounts/credentials"),
+  putAccountCredentials: (accountId: string, body: AccountCredentialsInput) =>
+    fetchApi<AccountCredentialRow & { created: boolean }>(
+      `/api/v1/live/accounts/${accountId}/credentials`,
+      { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) },
+    ),
+  testAccountConnection: (accountId: string) =>
+    fetchApi<AccountTestResult>(
+      `/api/v1/live/accounts/${accountId}/test`, { method: "POST" },
+    ),
   updateAccount: (
     accountId: string,
     body: Pick<AccountPolicyRow, "label" | "buy" | "sell">,
@@ -370,6 +383,43 @@ export interface AccountPolicyRow {
   buy: AccountSidePolicy;
   sell: AccountSidePolicy;
   updated_at: string | null;
+}
+
+/** 계좌 자격증명 **상태**. 시크릿은 절대 오지 않는다 — 앱키도 마스킹된 값이다. */
+export interface AccountCredentialRow {
+  account_id: string;
+  label: string | null;
+  /** "db" = 웹에서 등록됨, "env" = 서버 .env 에 있음(기존 계좌) */
+  source: "db" | "env";
+  app_key_masked: string | null;
+  account_no: string | null;
+  kis_env: string | null;
+  enabled: boolean;
+  note: string | null;
+}
+
+export interface AccountCredentialsStatus {
+  /** false 면 등록 폼을 열어도 저장이 거부된다(평문 저장을 막기 위해). */
+  secrets_key_configured: boolean;
+  accounts: AccountCredentialRow[];
+}
+
+export interface AccountCredentialsInput {
+  app_key: string;
+  app_secret: string;
+  account_no: string;
+  kis_env: string;
+  account_product?: string | null;
+  label?: string | null;
+  note?: string | null;
+  enabled?: boolean;
+}
+
+export interface AccountTestResult {
+  ok: boolean;
+  steps: { step: string; ok: boolean; detail: string }[];
+  /** ③만 실패할 때 나오는 안내 — 앱키와 계좌번호의 주인이 다르다는 뜻. */
+  hint: string | null;
 }
 
 export interface LiveBalanceResponse {

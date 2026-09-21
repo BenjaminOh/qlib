@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import AccountPolicyForm from "@/components/AccountPolicyForm";
+import AccountCredentialsPanel from "@/components/AccountCredentialsPanel";
 
 /** 계좌별 주문 방식 설정.
  *
@@ -32,6 +33,13 @@ export default function LiveAccountsPage() {
         시뮬레이션 곡선 9개(종가·수급·트레일·사다리·지정가·카페·카페익일·카페냉각·급등)는
         비교 실험이라 이 설정의 영향을 받지 않습니다.
       </p>
+
+      {/* 자격증명이 먼저다 — 주문 방식은 계좌가 붙어야 의미가 있다. */}
+      <AccountCredentialsPanel />
+
+      <h2 className="text-lg font-semibold text-gray-900 pt-2">
+        🧾 주문 방식
+      </h2>
 
       {isLoading && <p className="text-sm text-gray-400">불러오는 중…</p>}
       {isError && (
