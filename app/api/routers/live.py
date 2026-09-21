@@ -273,6 +273,28 @@ def _validate_side(side: AccountSidePolicy, label: str) -> None:
         raise HTTPException(422, f"{label} 취소 시각은 HH:MM 형식이어야 합니다")
 
 
+def _cred_status(a: TradingAccount) -> dict:
+    """자격증명 **상태**만 돌려준다 — 시크릿은 절대 응답에 싣지 않는다.
+
+    앱키는 마스킹해서 보여준다. 어느 키가 들어갔는지 사람이 대조할 수는 있어야
+    하고(지인이 보내준 값과 맞춰본다), 복원은 불가능해야 한다.
+    """
+    from ..services import secrets as _secrets
+
+    if not getattr(a, "app_key_enc", None):
+        return {"source": "env", "app_key_masked": None, "account_no": None,
+                "kis_env": None, "enabled": True, "note": getattr(a, "note", None)}
+    try:
+        masked = _secrets.mask(_secrets.decrypt(a.app_key_enc))
+    except Exception:  # noqa: BLE001
+        masked = "복호화 실패"
+    return {"source": "db", "app_key_masked": masked,
+            "account_no": getattr(a, "account_no", None),
+            "kis_env": getattr(a, "kis_env", None),
+            "enabled": getattr(a, "enabled", True) is not False,
+            "note": getattr(a, "note", None)}
+
+
 def _account_row(a: TradingAccount) -> AccountPolicyRow:
     return AccountPolicyRow(
         account_id=a.account_id, label=a.label,
@@ -292,6 +314,130 @@ def get_accounts():
     with SessionLocal() as db:
         rows = db.query(TradingAccount).order_by(TradingAccount.account_id).all()
         return [_account_row(a) for a in rows]
+
+
+@router.get("/accounts/credentials")
+def get_account_credentials():
+    """계좌별 **자격증명 상태**(시크릿 제외). 화면이 '연결됨/미설정'을 그리는 근거.
+
+    응답에 앱키·시크릿 원문은 들어가지 않는다 — 마스킹된 앱키와 계좌번호뿐이다.
+    """
+    from ..services import secrets as _secrets
+
+    with SessionLocal() as db:
+        rows = db.query(TradingAccount).order_by(TradingAccount.account_id).all()
+        return {
+            "secrets_key_configured": _secrets.available(),
+            "accounts": [{"account_id": a.account_id, "label": a.label,
+                          **_cred_status(a)} for a in rows],
+        }
+
+
+class AccountCredentials(BaseModel):
+    """웹에서 계좌를 등록·수정할 때 받는 값.
+
+    시크릿이 오가는 유일한 방향이다(들어오기만 한다). 응답에는 절대 싣지 않는다.
+    """
+    app_key: str
+    app_secret: str
+    account_no: str              # "12345678-01"
+    kis_env: str = "paper"
+    account_product: str | None = None
+    label: str | None = None
+    note: str | None = None
+    enabled: bool = True
+
+
+@router.put("/accounts/{account_id}/credentials")
+def put_account_credentials(account_id: str, req: AccountCredentials):
+    """계좌 자격증명을 등록/교체한다 — **재시작 없이** 다음 조회부터 적용된다.
+
+    행이 없으면 만든다(주문 정책은 기본값 = main 과 같은 시장가). 정책은
+    `PUT /accounts/{id}` 에서 따로 바꾼다.
+    """
+    from ..services import secrets as _secrets
+    from ..services.kis_client import bump_accounts_rev
+
+    if not _secrets.available():
+        raise HTTPException(
+            400, "QLIB_API_SECRETS_KEY 가 설정되지 않았다 — 자격증명을 평문으로 "
+                 "저장하지 않는다. 서버 .env 에 키를 먼저 넣을 것.")
+    if not (req.app_key and req.app_secret and req.account_no):
+        raise HTTPException(422, "앱키·시크릿·계좌번호는 모두 필요하다")
+    if req.kis_env not in ("paper", "real"):
+        raise HTTPException(422, "kis_env 는 paper 또는 real 이어야 한다")
+    if "-" not in req.account_no:
+        raise HTTPException(
+            422, "계좌번호는 '12345678-01' 형태여야 한다 — 뒤 2자리(상품코드)가 없으면 "
+                 "KIS 가 계좌를 찾지 못한다")
+
+    with SessionLocal() as db:
+        a = db.get(TradingAccount, account_id)
+        created = a is None
+        if a is None:
+            a = TradingAccount(account_id=account_id)
+            db.add(a)
+        a.label = req.label or a.label or account_id
+        a.kis_env = req.kis_env
+        a.account_no = req.account_no
+        a.account_product = req.account_product
+        a.app_key_enc = _secrets.encrypt(req.app_key)
+        a.app_secret_enc = _secrets.encrypt(req.app_secret)
+        a.enabled = req.enabled
+        a.note = req.note
+        db.commit()
+        db.refresh(a)
+        status = _cred_status(a)
+
+    bump_accounts_rev()      # api·worker·scheduler 의 클라이언트 캐시를 버리게 한다
+    log.warning("account credentials %s: %s (env=%s, acct=%s)",
+                "created" if created else "updated", account_id,
+                req.kis_env, req.account_no)
+    return {"account_id": account_id, "created": created, **status}
+
+
+@router.post("/accounts/{account_id}/test")
+def test_account_connection(account_id: str):
+    """저장된 자격증명으로 **3단 연결 테스트**.
+
+    ① 토큰 발급 → ② 시세 조회 → ③ 잔고 조회.
+    ①②가 되는데 ③만 실패하면 **앱키와 계좌번호의 주인이 다르다**(KIS 가
+    `rt_cd=1 msg_cd=90070000 ID와 사용자정보가 상이` 로 답한다). 2026-09 에 냉각
+    계좌가 정확히 그 상태였고, 그때는 서버 로그를 열어야 알 수 있었다.
+    """
+    from ..services.kis_client import AccountNotConfigured, get_kis_client
+
+    steps: list[dict] = []
+
+    def _step(name, fn):
+        try:
+            detail = fn()
+            steps.append({"step": name, "ok": True, "detail": detail})
+            return True
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"step": name, "ok": False,
+                          "detail": f"{type(exc).__name__}: {exc}"[:300]})
+            return False
+
+    try:
+        client = get_kis_client(account_id)
+    except (AccountNotConfigured, ValueError) as exc:
+        return {"ok": False, "steps": [
+            {"step": "자격증명 확인", "ok": False, "detail": str(exc)[:300]}]}
+
+    ok = _step("① 토큰 발급", lambda: f"{len(client._ensure_token())}자")
+    if ok:
+        ok = _step("② 시세 조회", lambda: f"삼성전자 {client.get_quote('005930')['price']:,.0f}원")
+    if ok:
+        ok = _step("③ 잔고 조회",
+                   lambda: f"예수금 {client.get_balance().cash:,.0f}원")
+
+    hint = None
+    if len(steps) == 3 and steps[0]["ok"] and steps[1]["ok"] and not steps[2]["ok"]:
+        hint = ("앱키는 유효한데 이 계좌를 읽지 못한다 — 앱키를 발급한 KIS ID 와 "
+                "계좌번호의 소유 ID 가 다를 때 나오는 증상이다. KIS Developers 의 "
+                "신청내역에서 그 앱키에 등록된 모의계좌 번호를 확인할 것.")
+    return {"ok": all(s["ok"] for s in steps), "steps": steps, "hint": hint}
 
 
 @router.put("/accounts/{account_id}", response_model=AccountPolicyRow)
@@ -327,15 +473,26 @@ def update_account(account_id: str, req: AccountPolicyUpdate):
 # ─── Endpoints ──────────────────────────────────────────────────────
 
 
-# 계좌 목록은 **레지스트리에서 파생**한다(2026-09-21). 예전에는 여기 정규식이
-# `^(main|cafe|cool)$` 하드코딩이라 계좌를 늘릴 때마다 두 곳을 손으로 고쳐야 했고,
-# 그걸 잊지 않으려고 테스트가 소스를 정규식으로 긁어 대조했다. 이제 파생되므로
-# 어긋날 수가 없다 — 테스트는 "맵의 모든 계좌가 이 패턴을 통과하는가"만 본다.
-_ACCOUNT_PATTERN = "^(" + "|".join(ALL_ACCOUNTS) + ")$"
+def require_known_account(account: str) -> str:
+    """계좌 id 검증 — **런타임**에 목록을 읽는다.
+
+    예전에는 `pattern="^(main|cafe|cool)$"` 하드코딩이었고, 계좌를 늘릴 때마다 두
+    곳을 손으로 고쳐야 했다. 그 다음엔 레지스트리에서 정규식을 만들었는데, 그것도
+    **import 시점에 고정**돼서 웹에서 방금 만든 계좌를 모른다(재시작해야 보인다).
+    자격증명이 DB 로 온 지금은 목록도 DB 를 봐야 한다.
+
+    오타를 통과시키면 안 되는 이유: `_build_client` 가 `ValueError` 로 죽는데,
+    그 예외는 `AccountNotConfigured` 가 아니라서 "오늘은 건너뜀" 처리를 받지 못한다.
+    """
+    from ..services.kis_client import all_accounts
+
+    if account not in all_accounts():
+        raise HTTPException(422, f"알 수 없는 계좌: {account!r}")
+    return account
 
 
 @router.get("/balance", response_model=LiveBalanceResponse)
-def get_balance(account: str = Query("main", pattern=_ACCOUNT_PATTERN)):
+def get_balance(account: str = Query("main")):
     """Current KIS balance + holdings, through the read-path cache.
 
     Never 500s on a KIS outage — degrades to the last-known-good snapshot and
@@ -348,6 +505,7 @@ def get_balance(account: str = Query("main", pattern=_ACCOUNT_PATTERN)):
     returns zeros with source="no_account" rather than an error.
     """
     from ..services.kis_client import AccountNotConfigured
+    require_known_account(account)
     snap, source, as_of = get_balance_for_read(account)
     account_error: str | None = None
     try:
@@ -712,8 +870,7 @@ def _kis_holding_prices(code: str, account: str = "main"
 @router.get("/stock/{code}/trades", response_model=list[StockTradeRow])
 def get_stock_trades(code: str,
                      strategy: str | None = Query(None),
-                     account: str | None = Query(None,
-                                                 pattern=_ACCOUNT_PATTERN)):
+                     account: str | None = Query(None)):
     """Per-stock trade timeline (see _position_timeline).
 
     Pick the ledger by `strategy`, or by `account` (→ that account's primary
@@ -723,6 +880,10 @@ def get_stock_trades(code: str,
     all, so expanding a row on the 카페 계좌 tab searched the *open* ledger and
     always rendered "기록된 매매 이력이 없습니다".
     """
+    if account:
+        # 오타를 통과시키면 primary_strategy 가 main 으로 폴백해 **남의 계좌 장부**를
+        # 그 계좌 이력인 양 보여준다. 조용한 오답보다 422 가 낫다.
+        require_known_account(account)
     strategy = strategy or (primary_strategy(account) if account else "open")
     # Intraday prices come from the broker for REAL accounts only — a simulated
     # strategy's position doesn't exist at any broker, so there is nothing to

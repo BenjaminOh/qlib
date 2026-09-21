@@ -17,6 +17,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 import app.api.services.live_trader as lt
 from app.api.db import models as M
 
@@ -89,14 +91,11 @@ def test_account_ids_match_the_api_pattern():
     대조했다. 지금은 패턴이 레지스트리에서 파생되므로 소스 파싱은 의미가 없고,
     대신 **컴파일된 패턴에 실제로 매치되는지**를 본다 — 파생이 끊기면 여기서 잡힌다.
     """
-    import re as _re
+    from app.api.routers.live import require_known_account
 
-    from app.api.routers.live import _ACCOUNT_PATTERN
-
-    rx = _re.compile(_ACCOUNT_PATTERN)
     for account in M.ACCOUNT_STRATEGIES:
-        assert rx.match(account), (
-            f"API 가 거부하는 계좌: {account!r} (패턴 {_ACCOUNT_PATTERN})")
+        assert require_known_account(account) == account, (
+            f"API 가 거부하는 계좌: {account!r}")
 
 
 def test_api_pattern_still_rejects_unknown_accounts():
@@ -105,13 +104,13 @@ def test_api_pattern_still_rejects_unknown_accounts():
     오타난 계좌 id 가 통과하면 `_build_client` 가 `ValueError` 로 죽는데, 그건
     `AccountNotConfigured` 가 아니라 "오늘은 건너뜀" 처리를 받지 못한다.
     """
-    import re as _re
+    from fastapi import HTTPException
 
-    from app.api.routers.live import _ACCOUNT_PATTERN
+    from app.api.routers.live import require_known_account
 
-    rx = _re.compile(_ACCOUNT_PATTERN)
     for bad in ("nope", "main2", "", "cafe;drop"):
-        assert not rx.match(bad), f"{bad!r} 가 계좌로 통과했다"
+        with pytest.raises(HTTPException):
+            require_known_account(bad)
 
 
 # ── 표시 카탈로그 (사람이 읽는 이름) ─────────────────────────────
