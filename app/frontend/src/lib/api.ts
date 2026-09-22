@@ -409,6 +409,12 @@ export interface AccountCredentialRow {
   /** JSON 문자열. cafe 템플릿이면 {"ret20_max": 50} 같은 형태. */
   strategy_params: string | null;
   strategy_enabled: boolean;
+  /** 매매 방식을 고를 수 있는 계좌인가(= 계좌 슬롯 acct1~4). */
+  template_eligible: boolean;
+  /** 고를 수 없는 계좌가 **코드로** 돌리는 전략(open·cafereal·coolreal).
+   *  `template_eligible` 이 true 면 null. 빈 드롭다운을 "주문 없음"으로
+   *  오독하지 않도록 무엇이 도는지 읽기 전용으로 보여주는 값이다. */
+  fixed_strategy: string | null;
 }
 
 /** 매매 방식 선택지 — 목록은 백엔드가 진실이다(코드에 선언된 것만 고를 수 있다). */

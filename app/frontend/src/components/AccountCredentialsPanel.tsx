@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, AccountCredentialRow, AccountTestResult } from "@/lib/api";
+import { STRATEGY_LABELS } from "@/lib/strategies";
 
 /** 계좌 자격증명 등록 — 지인에게 받은 값을 붙여넣고 연결을 확인하는 화면.
  *
@@ -41,7 +42,34 @@ function StepList({ result }: { result: AccountTestResult }) {
  *
  * 비워두면(=선택 안 함) 그 계좌는 주문을 내지 않습니다. 자격증명만 먼저 등록하고
  * 방식은 나중에 정하는 흐름을 그대로 허용합니다.
+ *
+ * 단, 기본·카페·냉각 계좌는 **코드가 전략을 정하고** 전용 스케줄 슬롯으로 돕니다.
+ * 그 계좌에 드롭다운을 보여주면 두 가지가 동시에 틀립니다 — 빈 값이 "주문 없음"
+ * 으로 읽히는데 실제로는 매일 실주문이 나가고, 방식을 얹으면 같은 시각에 두 번
+ * 주문이 나갑니다. 그래서 고르게 하지 않고 무엇을 돌리는지만 보여줍니다.
  */
+function FixedStrategy({ row }: { row: AccountCredentialRow }) {
+  const label = row.fixed_strategy
+    ? STRATEGY_LABELS[row.fixed_strategy] ?? row.fixed_strategy
+    : null;
+  return (
+    <div className="mt-2 border-t border-gray-100 pt-2 text-xs text-gray-600">
+      매매 방식{" "}
+      {label ? (
+        <>
+          <span className="font-medium text-gray-800">{label}</span>
+          <span className="text-gray-400">
+            {" "}
+            · {row.fixed_strategy} · 코드 고정
+          </span>
+        </>
+      ) : (
+        <span className="text-gray-400">전략 미배정 — 주문 없음</span>
+      )}
+    </div>
+  );
+}
+
 function StrategyPicker({ row }: { row: AccountCredentialRow }) {
   const qc = useQueryClient();
   const { data: tpl } = useQuery({
@@ -215,7 +243,12 @@ function AccountCard({ row }: { row: AccountCredentialRow }) {
 
       {/* 자격증명이 붙은 계좌만 방식을 고른다 — 계좌 없이 방식부터 정하는 것은
           순서가 뒤집힌 것이고, 어차피 주문이 나가지 않는다. */}
-      {row.app_key_masked && <StrategyPicker row={row} />}
+      {row.app_key_masked &&
+        (row.template_eligible ? (
+          <StrategyPicker row={row} />
+        ) : (
+          <FixedStrategy row={row} />
+        ))}
 
       {test && <StepList result={test} />}
       {runTest.isError && (
@@ -318,6 +351,8 @@ export default function AccountCredentialsPanel() {
       account_id: s, label: null, source: "env", app_key_masked: null,
       account_no: null, kis_env: null, enabled: true, note: null,
       template: null, strategy_params: null, strategy_enabled: true,
+      // 빈 슬롯은 acct1~4 라 언제나 방식을 고를 수 있다.
+      template_eligible: true, fixed_strategy: null,
     }),
   );
 

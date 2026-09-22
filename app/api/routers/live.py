@@ -280,11 +280,22 @@ def _cred_status(a: TradingAccount) -> dict:
     하고(지인이 보내준 값과 맞춰본다), 복원은 불가능해야 한다.
     """
     from ..services import secrets as _secrets
+    from ..services.account_templates import template_strategy
+    from ..services.holding_attribution import account_strategies
 
     # 매매 방식은 자격증명과 별개다 — 계좌가 env 에 있어도 방식은 DB 에서 고른다.
+    #
+    # `fixed_strategy` 는 **코드가 정한** 전략이다(main=open, cafe=cafereal,
+    # cool=coolreal). 그 계좌는 전용 beat 슬롯이 진실이라 드롭다운이 의미가 없고,
+    # 화면이 빈 드롭다운을 "주문 없음"으로 읽으면 거짓말이 된다 — cool 은 매일
+    # 15:28 에 실주문을 낸다. 그래서 무엇을 돌리는지 읽기 전용으로 내려보낸다.
+    declared = account_strategies(a.account_id)
+    eligible = template_strategy(a.account_id) is not None
     strategy = {"template": getattr(a, "template", None),
                 "strategy_params": getattr(a, "strategy_params", None),
-                "strategy_enabled": getattr(a, "strategy_enabled", True) is not False}
+                "strategy_enabled": getattr(a, "strategy_enabled", True) is not False,
+                "template_eligible": eligible,
+                "fixed_strategy": None if eligible else (declared[0] if declared else None)}
 
     if not getattr(a, "app_key_enc", None):
         return {"source": "env", "app_key_masked": None, "account_no": None,
@@ -428,13 +439,24 @@ def put_account_strategy(account_id: str, req: AccountStrategyUpdate):
     """
     import json as _json
 
-    from ..services.account_templates import TEMPLATES
+    from ..services.account_templates import TEMPLATES, template_strategy
+    from ..services.holding_attribution import account_strategies
     from ..services.kis_client import bump_accounts_rev
 
     if req.template is not None and req.template not in TEMPLATES:
         raise HTTPException(
             422, f"알 수 없는 매매 방식: {req.template!r} "
                  f"(가능: {', '.join(TEMPLATES)})")
+    # 전용 beat 슬롯이 있는 계좌에 방식을 얹으면 같은 분에 두 번 주문이 나간다.
+    # 디스패처도 그런 계좌를 건너뛰지만, 저장을 막아야 사용자가 "설정했는데 왜
+    # 안 도는가"를 겪지 않는다.
+    if req.template is not None and template_strategy(account_id) is None:
+        declared = account_strategies(account_id)
+        fixed = declared[0] if declared else None
+        raise HTTPException(
+            422, f"계좌 {account_id!r} 는 매매 방식을 고를 수 없다 — "
+                 + (f"코드가 정한 {fixed!r} 를 전용 슬롯으로 돌린다"
+                    if fixed else "전략 카탈로그에 없는 계좌다"))
     if req.ret20_max is not None and not 0 < req.ret20_max <= 500:
         raise HTTPException(422, "ret20 상한은 0 초과 500 이하여야 한다")
 

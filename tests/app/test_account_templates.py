@@ -62,13 +62,56 @@ def test_only_accounts_with_that_template_run(session):
     assert ids == ["acct1"], f"cafe 템플릿에 {ids} 가 잡혔다"
 
 
-def test_strategy_id_equals_account_id(session):
-    """이 규칙이 깨지면 주문이 남의 장부에 쌓인다."""
+def test_plan_strategy_routes_back_to_its_own_account(session):
+    """계획의 전략이 **자기 계좌**를 가리켜야 한다 (2026-09-22 버그의 역검증).
+
+    예전 코드는 `strategy = row.account_id` 로 단정했다. acct1~4 는 우연히 맞지만
+    main·cafe·cool 은 전략이 open·cafereal·coolreal 이라 틀리고, 그 순간
+    `_account_for` 가 **기본 계좌로 폴백**해 남의 계좌로 주문이 나간다.
+    그래서 "같은 문자열인가"가 아니라 "돌아오는가"를 본다.
+    """
+    from app.api.services.live_trader import _account_for
+
     _acct(session, "acct2", template="cafe")
 
     plan = AT.account_plans("cafe")[0]
 
-    assert plan["strategy"] == plan["account_id"] == "acct2"
+    assert _account_for(plan["strategy"]) == plan["account_id"] == "acct2"
+
+
+@pytest.mark.parametrize("account_id", ["main", "cafe", "cool"])
+def test_accounts_with_dedicated_slots_are_skipped(session, account_id):
+    """전용 beat 슬롯이 있는 계좌는 디스패처가 잡지 않는다.
+
+    두 가지를 동시에 막는다:
+      - **이중 주문** — cafereal·coolreal 은 이미 15:28 전용 슬롯이 있다.
+      - **계좌 유출** — 전략을 계좌 id 로 지어내면 `_account_for` 폴백으로
+        카페 픽이 기본 계좌(실주문)로 나간다.
+    """
+    _acct(session, account_id, template="cafe")
+
+    assert AT.account_plans("cafe") == []
+
+
+def test_unknown_account_is_skipped(session):
+    """카탈로그에 없는 계좌는 전략을 지어내지 않고 건너뛴다."""
+    _acct(session, "ghost", template="cafe")
+
+    assert AT.account_plans("cafe") == []
+
+
+def test_template_strategy_never_falls_back_to_default():
+    """`primary_strategy` 를 쓰면 안 되는 이유를 못으로 박아 둔다.
+
+    그쪽은 미등록 계좌에 `open`(기본 계좌 전략)을 돌려주는 읽기용 기본값이다.
+    주문 경로에서 그 값을 쓰면 고치려던 버그가 그대로 재현된다.
+    """
+    from app.api.services.holding_attribution import primary_strategy
+
+    assert primary_strategy("ghost") == "open"      # 읽기 경로의 기본값
+    assert AT.template_strategy("ghost") is None    # 주문 경로는 거부한다
+    assert AT.template_strategy("cool") is None     # 전용 슬롯이 진실
+    assert AT.template_strategy("acct3") == "acct3"
 
 
 def test_disabled_strategy_is_skipped(session):
@@ -134,6 +177,41 @@ def test_one_account_failing_does_not_stop_the_rest(session, monkeypatch):
     assert calls == ["acct1", "acct2"], "앞 계좌가 터지자 뒤 계좌를 건너뛰었다"
     assert r["accounts"]["acct1"]["status"] == "error"
     assert r["accounts"]["acct2"]["status"] == "ok"
+
+
+def test_api_refuses_template_on_a_fixed_strategy_account(session, monkeypatch):
+    """저장 단계에서 막는다 — 디스패처 방어만 두면 "설정했는데 왜 안 도나"가 된다."""
+    pytest.importorskip("fastapi")
+    from fastapi import HTTPException
+
+    import app.api.routers.live as live
+
+    monkeypatch.setattr(live, "SessionLocal", lambda: _NoClose(session))
+    _acct(session, "cool", template=None)
+
+    with pytest.raises(HTTPException) as e:
+        live.put_account_strategy(
+            "cool", live.AccountStrategyUpdate(template="cafe"))
+
+    assert e.value.status_code == 422
+    assert "coolreal" in str(e.value.detail)
+
+
+def test_api_allows_template_on_a_slot_account(session, monkeypatch):
+    """역검증 — 위 거부가 슬롯 계좌까지 막아버리면 기능이 죽는다."""
+    pytest.importorskip("fastapi")
+    import app.api.routers.live as live
+    import app.api.services.kis_client as kc
+
+    monkeypatch.setattr(live, "SessionLocal", lambda: _NoClose(session))
+    # 라우터가 함수 안에서 import 하므로 원본 모듈을 갈아끼운다(redis 접속 회피).
+    monkeypatch.setattr(kc, "bump_accounts_rev", lambda: None)
+    _acct(session, "acct1", template=None)
+
+    out = live.put_account_strategy(
+        "acct1", live.AccountStrategyUpdate(template="cafe", ret20_max=50))
+
+    assert out["template"] == "cafe"
 
 
 def test_cafe_runner_passes_ret20_and_real(session, monkeypatch):
