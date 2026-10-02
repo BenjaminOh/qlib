@@ -63,7 +63,7 @@ export default function GuidePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10, <strong>빈 슬롯을 채움 · 하루 최대 4</strong>). 같은 시각 cafeopen 쌍둥이가 어제 cafe 픽에 −3% 지정가 예약. 시장가/지정가는 <a href="/live/accounts" className="text-blue-600 underline">계좌 주문 설정</a>을 따름</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">09:00</td><td className="px-3 py-1.5"><strong>실계좌(open) 주문</strong> — 매도(순위 이탈) 먼저, 매수(신규 top-10, <strong>빈 슬롯을 채움 · 하루 최대 4</strong>). 같은 시각 cafeopen 쌍둥이가 어제 cafe 픽에 −3% 지정가 예약. 09:01 에는 <strong className="text-red-700">cafereal·coolreal 실주문</strong>이 어제 카페 후보를 오늘 시가 지정가로 매수(15:20 미체결 취소). 시장가/지정가는 <a href="/live/accounts" className="text-blue-600 underline">계좌 주문 설정</a>을 따름</td><td className="px-3 py-1.5">🌅 주문 상세</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:05</td><td className="px-3 py-1.5">전 거래일 cafereal 주문 체결 재확인</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:20</td><td className="px-3 py-1.5">체결가 대사 — 실체결가·실현손익 확정 저장</td><td className="px-3 py-1.5">✅ 체결·손익</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">09:30</td><td className="px-3 py-1.5">실계좌 잔고 동기화</td><td className="px-3 py-1.5">—</td></tr>
@@ -71,7 +71,7 @@ export default function GuidePage() {
               <tr><td className="px-3 py-1.5 font-mono">15:05</td><td className="px-3 py-1.5">☕ <strong>카페 정규 스크린</strong> — 패턴 후보 확정 + 풀 전체 전야 피처 저장</td><td className="px-3 py-1.5">☕ 후보·손절</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:12</td><td className="px-3 py-1.5">⚡ <strong>급등 전야 TOP10</strong> 선정 (풀 스냅샷 채점 — KIS 추가 호출 0)</td><td className="px-3 py-1.5">⚡ TOP10</td></tr>
               <tr><td className="px-3 py-1.5 font-mono">15:20~26</td><td className="px-3 py-1.5">close·flow·trail·scale 시뮬 매수 (신호 픽, 실시간가)</td><td className="px-3 py-1.5">—</td></tr>
-              <tr><td className="px-3 py-1.5 font-mono">15:28 / 15:29</td><td className="px-3 py-1.5">cafe · <strong>cafecool</strong> 시뮬 매수 + <strong className="text-red-700">cafereal 실주문</strong>(카페 계좌, 현재가 −3% 지정가 · 15:30 미체결 취소) / 15:29 surge 시뮬. 각자 후보 상위 2, 실시간가. cafecool 은 같은 후보에서 20일 상승률 50% 이상만 제외</td><td className="px-3 py-1.5">—</td></tr>
+              <tr><td className="px-3 py-1.5 font-mono">15:28 / 15:29</td><td className="px-3 py-1.5">cafe · <strong>cafecool</strong> 시뮬 매수 / 15:29 surge 시뮬. 각자 후보 상위 2, 실시간가. cafecool 은 같은 후보에서 20일 상승률 50% 이상만 제외. 실계좌(cafereal·coolreal)는 이 후보를 <strong>다음 날 09:01 시가 지정가</strong>로 산다</td><td className="px-3 py-1.5">—</td></tr>
               <tr className="bg-red-50/50">
                 <td className="px-3 py-2 whitespace-nowrap">{CURVE("#dc2626")}<strong>cafereal</strong> <span className="text-red-700 font-semibold">(실주문)</span></td>
                 <td className="px-3 py-2">cafe 와 <strong>같은 후보</strong></td>

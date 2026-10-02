@@ -39,7 +39,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import (
-    EXIT_KIND_MANUAL, Fill, Order, SessionLocal, STRATEGY_OPEN, init_db,
+    EXIT_KIND_MANUAL, Fill, Order, SessionLocal, STRATEGY_CAFEREAL,
+    STRATEGY_COOLREAL, STRATEGY_OPEN, init_db,
 )
 
 log = logging.getLogger(__name__)
@@ -347,4 +348,117 @@ def reconcile_by_balance(trade_date: date | None = None, *,
         log.warning("reconcile_balance: 수동 매도 %d건 봉합%s — %s",
                     len(manual), "" if do_write else "(미기록)",
                     ", ".join(f"{m['name'] or m['code']} {m['qty']}주" for m in manual))
+    return result
+
+
+# 대상은 **다음날 시가 지정가**로 사는 실계좌뿐이다. open 은 09:00 시장가라
+# reconcile_fills pass 2 가 따로 확정하고, 계좌 슬롯(acct1~4)은 이 판정을 검증한
+# 적이 없다. 넓힐 때는 그 계좌의 주문 방식부터 확인할 것.
+RESTING_BUY_STRATEGIES = (STRATEGY_CAFEREAL, STRATEGY_COOLREAL)
+
+EXPIRED_NOTE = "장 마감 — 당일 유효 주문 소멸"
+
+
+def settle_resting_buys(day: date, *, strategy: str, client=None) -> dict:
+    """`day` 이하의 SUBMITTED 지정가 매수를 **잔고로** 체결/소멸 판정한다. 멱등.
+
+    한국 주식 주문은 당일 유효라 장이 닫히면 결과가 정해져 있다. 그런데 모의
+    환경은 체결내역 TR 이 비어 있어(`kis_fills: 0`) `reconcile_fills` 가 아무것도
+    확정하지 못하고, 15:30 취소는 "장종료"로 거부된다. 그래서 주문이 영구히
+    SUBMITTED 로 남았고 — `_submit_cafe_like` 가 SUBMITTED 를 "이미 잡은 자리"로
+    치므로 — **그 종목은 다시는 사지 않게 됐다**(2026-09-28·29 coolreal 2건).
+
+    한 종목에서 **원장이 설명하지 못하는 보유분**을 오래된 주문부터 배분한다:
+
+        미설명 = KIS 보유수량 − (체결된 매수 − 매도)
+        배분 ≥ 주문수량 → FILLED, 0 < 배분 < 주문수량 → PARTIAL, 0 → CANCELLED
+
+    오차의 대가가 비대칭이라 **FILLED 쪽으로 기운다.** 체결된 매수를 소멸로 지우면
+    실제 보유가 청산 규칙 밖에 놓인다(손절이 안 걸린다). 소멸된 주문을 체결로
+    적으면 청산이 없는 주식을 팔려다 거부될 뿐이다. 그래서 매도는 미체결
+    (SUBMITTED)도 나간 것으로 센다 — 청산은 시장가라 거의 체결되고, 원장이
+    그걸 확정하지 못해 보유를 부풀리면 새 매수가 소멸로 읽힌다.
+
+    `day` 이하만 본다: 익일 09:06 재확인이 직전 거래일로 부르므로, 그날 09:01 에
+    막 낸 주문(아직 장중)을 건드리지 않는다. 잔고 조회가 실패하면 아무것도
+    쓰지 않는다 — 빈 잔고를 "전부 소멸"로 읽으면 진짜 체결이 지워진다.
+    """
+    init_db()
+    from .kis_client import AccountNotConfigured, get_kis_client
+    from .live_trader import _account_for
+
+    if strategy not in RESTING_BUY_STRATEGIES:
+        return {"status": "skipped", "reason": "not_resting_buy_strategy",
+                "strategy": strategy}
+    account_id = _account_for(strategy)
+    with SessionLocal() as db:
+        resting = (db.query(Order)
+                     .filter(Order.strategy == strategy,
+                             Order.side == "BUY",
+                             Order.ord_dvsn == "00",
+                             Order.status == "SUBMITTED",
+                             Order.trade_date <= day)
+                     .order_by(Order.trade_date.asc(), Order.id.asc())
+                     .all())
+        if not resting:
+            return {"status": "nothing_resting", "strategy": strategy,
+                    "trade_date": day.isoformat()}
+        try:
+            client = client or get_kis_client(account_id)
+            snapshot = client.get_balance()
+        except (AccountNotConfigured, ValueError) as exc:
+            log.info("settle_resting_buys: %s 건너뜀 — %s", strategy, exc)
+            return {"status": "no_account", "strategy": strategy,
+                    "trade_date": day.isoformat(), "reason": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("settle_resting_buys: 잔고 조회 실패 — 판정 보류: %s", exc)
+            return {"status": "balance_unavailable", "strategy": strategy,
+                    "trade_date": day.isoformat(), "error": str(exc)}
+        held = {h.code: h for h in snapshot.holdings}
+        executed = _executed_statuses()
+        unexplained: dict[str, int] = {}
+        for code in {o.code for o in resting}:
+            rows = (db.query(Order)
+                      .filter(Order.strategy == strategy, Order.code == code)
+                      .all())
+            ledger = 0
+            for r in rows:
+                side = (r.side or "").upper()
+                if side == "BUY" and r.status in executed:
+                    ledger += _filled_qty(r)
+                elif side == "SELL" and (r.status in executed
+                                         or r.status == "SUBMITTED"):
+                    ledger -= _filled_qty(r)
+            kis = int(held[code].qty) if code in held else 0
+            unexplained[code] = max(kis - max(ledger, 0), 0)
+
+        filled, partial, expired = [], [], []
+        for o in resting:
+            avail = unexplained[o.code]
+            take = min(avail, int(o.qty or 0))
+            unexplained[o.code] = avail - take
+            item = {"id": o.id, "code": o.code, "name": o.name,
+                    "trade_date": o.trade_date.isoformat(), "qty": o.qty}
+            if take <= 0:
+                o.status = "CANCELLED"
+                o.error = EXPIRED_NOTE
+                expired.append(item)
+                continue
+            # 잔고 평단은 종목 전체의 평균이다. 원장이 이미 들고 있던 종목이면
+            # 섞인 값이라 쓰지 않고 지정가(체결가 상한)를 그대로 둔다.
+            h = held[o.code]
+            px = float(h.avg_price) if take == int(h.qty) else float(o.price or h.avg_price)
+            o.price = px
+            o.status = "FILLED" if take >= int(o.qty or 0) else "PARTIAL"
+            db.flush()
+            _write_fill(db, o, take, px, strategy=strategy)
+            (filled if o.status == "FILLED" else partial).append(
+                {**item, "filled_qty": take, "price": px})
+        db.commit()
+
+    result = {"status": "ok", "strategy": strategy, "account_id": account_id,
+              "trade_date": day.isoformat(), "filled": filled,
+              "partial": partial, "expired": expired}
+    log.info("settle_resting_buys: %s 체결 %d · 부분 %d · 소멸 %d", strategy,
+             len(filled), len(partial), len(expired))
     return result

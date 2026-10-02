@@ -459,18 +459,27 @@ def submit_cafe_orders(trade_date: date | None = None) -> dict:
     return _submit_cafe_like(trade_date, strategy=STRATEGY_CAFE, ret20_max=None)
 
 
-def submit_cafereal_orders(trade_date: date | None = None) -> dict:
-    """15:28 — cafe 와 같은 픽을 **실계좌**로 산다.
+def _prev_session(day: date) -> date:
+    from .live_trader import _prev_trading_day
+    return _prev_trading_day(day)
 
-    규칙(픽·슬롯·손절·익절)이 cafe 와 완전히 같고 다른 것은 주문이 실제라는 것뿐이다.
-    그래서 cafe(시뮬) 곡선과의 격차가 곧 **체결 가정이 부풀린 크기**다 — 호가 8건이
-    전부 상한가·매도잔량 0이었던 그 질문에 유일하게 답할 수 있는 방법이다.
+
+def submit_cafereal_orders(trade_date: date | None = None) -> dict:
+    """09:01 — **직전 거래일** cafe 후보를 오늘 시가 지정가로 **실계좌**에서 산다.
+
+    픽·슬롯·손절·익절은 cafe 와 같고 진입만 다르다. 2026-09-30 까지는 cafe 와
+    같은 15:28 에 현재가 −3% 지정가를 걸었는데, 후보가 거의 전부 상한가로
+    닫히는 종목이라 한 번도 체결되지 않았다(9/28·9/29 coolreal 2건 실측).
+    오너 지시로 "다음날 아침 시가"로 옮겼다 — 가격 자체는 계좌 설정
+    (`buy_base='open'`, 할인 0%)이 정하고, 여기서는 후보 날짜만 하루 당긴다.
 
     계좌 미설정이면 조용히 건너뛴다. 카페 계좌는 선택 사항이고, 없다고 해서
     나머지 전략이 멈춰서는 안 된다.
     """
-    return _submit_cafe_like(trade_date, strategy=STRATEGY_CAFEREAL,
-                             ret20_max=None, real=True)
+    day = trade_date or date.today()
+    return _submit_cafe_like(day, strategy=STRATEGY_CAFEREAL,
+                             ret20_max=None, real=True,
+                             source_date=_prev_session(day))
 
 
 def submit_cafecool_orders(trade_date: date | None = None) -> dict:
@@ -485,22 +494,24 @@ def submit_cafecool_orders(trade_date: date | None = None) -> dict:
 
 
 def submit_coolreal_orders(trade_date: date | None = None) -> dict:
-    """15:28 — cafecool 과 같은 조건(ret20 상한)을 **실계좌**로 산다.
+    """09:01 — 직전 거래일 cafe 후보 중 ret20 상한을 통과한 것을 **실계좌**로 산다.
 
-    cafereal(상한 없음)과 짝을 이룬다: 두 실계좌의 차이는 과열 제외 하나뿐이라,
-    "ret20 상한이 실제 체결에서도 값어치가 있는가"를 시뮬 가정 없이 잰다.
-    상한값은 `QLIB_API_LIVE_COOLREAL_RET20_MAX` 로 조정한다(동결된 cafecool 과
-    별도 키라 시뮬 곡선은 흔들리지 않는다).
+    cafereal(상한 없음)과 짝을 이룬다: 두 실계좌는 진입 시각·가격 방식이 같고
+    차이는 과열 제외 하나뿐이다. 진입 방식이 바뀐 사정은 `submit_cafereal_orders`
+    참조. 상한값은 `QLIB_API_LIVE_COOLREAL_RET20_MAX` 로 조정한다(동결된
+    cafecool 과 별도 키라 시뮬 곡선은 흔들리지 않는다).
 
     계좌 미설정이면 조용히 건너뛴다 — 나머지 전략은 그대로 돈다.
     """
-    return _submit_cafe_like(trade_date, strategy=STRATEGY_COOLREAL,
+    day = trade_date or date.today()
+    return _submit_cafe_like(day, strategy=STRATEGY_COOLREAL,
                              ret20_max=settings.live_coolreal_ret20_max,
-                             real=True)
+                             real=True, source_date=_prev_session(day))
 
 
 def _submit_cafe_like(trade_date: date | None, *, strategy: str,
-                      ret20_max: float | None, real: bool = False) -> dict:
+                      ret20_max: float | None, real: bool = False,
+                      source_date: date | None = None) -> dict:
     """cafe 계열 15:28 매수 공통부.
 
     `ret20_max` 가 주어지면 진입 시점 ret20(%)이 그 값 이상인 후보를 건너뛴다.
@@ -509,6 +520,10 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
     `real=True` 면 별도 계좌로 **실주문**을 낸다 — 잔고도 장부가 아니라 KIS 가
     진실이고, 주문 방식은 `trading_accounts` 의 **그 계좌 행**을 따른다.
     어느 계좌인지는 `_account_for(strategy)` 가 정한다(cafereal→cafe, coolreal→cool).
+
+    `source_date` 는 후보(`cafe_candidates`)를 읽을 날짜다. 없으면 주문일과 같다.
+    익일 아침에 사는 실계좌는 직전 거래일을 넘긴다 — 주문 행의 `trade_date` 는
+    여전히 주문일이다.
     """
     from .account_policy import BasePriceUnavailable, get_policies, order_price
     from .kis_client import AccountNotConfigured, get_kis_client
@@ -536,12 +551,13 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
     skipped_hot: list[dict] = []
     with SessionLocal() as db:
         cands = (db.query(CafeCandidate)
-                   .filter(CafeCandidate.trade_date == day)
+                   .filter(CafeCandidate.trade_date == (source_date or day))
                    .order_by(CafeCandidate.rank.asc())
                    .all())
         if not cands:
             return {"status": "no_candidates", "trade_date": day.isoformat(),
-                    "strategy": strategy}
+                    "strategy": strategy,
+                    "source_date": (source_date or day).isoformat()}
         # 실계좌는 KIS 잔고가 진실이다. 장부로 재구성하면 수동 매매나 미체결이
         # 반영되지 않아 실제보다 많이 사려 든다.
         if real:

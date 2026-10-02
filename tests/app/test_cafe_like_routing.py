@@ -170,3 +170,66 @@ def test_cafereal_still_routes_to_the_cafe_account(session, env):
     assert env["policy"] == ["cafe"]
     o = session.query(Order).filter(Order.strategy == STRATEGY_CAFEREAL).one()
     assert o.account_id == "cafe"
+
+
+# ─── 익일 시가 진입(2026-09-30) — 후보 날짜와 주문 날짜가 갈린다 ───────────
+
+def test_source_date_reads_previous_days_candidates(session, env):
+    # 전날(DAY) 후보를 오늘(NEXT) 산다. 주문 행은 **주문일**로 남아야
+    # 대사·취소 스윕(둘 다 trade_date == 오늘)이 그 주문을 찾는다.
+    from datetime import timedelta
+    nxt = DAY + timedelta(days=1)
+    _candidate(session, "000001", ret20=10.0)
+
+    res = ms._submit_cafe_like(nxt, strategy=STRATEGY_COOLREAL, ret20_max=50.0,
+                               real=True, source_date=DAY)
+
+    assert [b["code"] for b in res["buys"]] == ["000001"]
+    o = session.query(Order).filter(Order.strategy == STRATEGY_COOLREAL).one()
+    assert o.trade_date == nxt
+
+
+def test_without_source_date_todays_candidates_only(session, env):
+    # 시뮬(cafe·cafecool)은 source_date 를 넘기지 않는다 — 동결 곡선의 회귀 가드.
+    from datetime import timedelta
+    _candidate(session, "000001", ret20=10.0)
+
+    res = ms._submit_cafe_like(DAY + timedelta(days=1),
+                               strategy=STRATEGY_COOLREAL, ret20_max=50.0,
+                               real=True)
+
+    assert res["status"] == "no_candidates"
+
+
+@pytest.mark.parametrize("name,strategy", [
+    ("submit_cafereal_orders", STRATEGY_CAFEREAL),
+    ("submit_coolreal_orders", STRATEGY_COOLREAL),
+])
+def test_real_wrappers_buy_previous_sessions_picks(monkeypatch, name, strategy):
+    seen = {}
+
+    def fake(trade_date, **kw):
+        seen.update(kw, trade_date=trade_date)
+        return {}
+
+    monkeypatch.setattr(ms, "_submit_cafe_like", fake)
+    monkeypatch.setattr(ms, "_prev_session", lambda d: date(2026, 9, 29))
+
+    getattr(ms, name)(date(2026, 9, 30))
+
+    assert seen["strategy"] == strategy
+    assert seen["real"] is True
+    assert seen["trade_date"] == date(2026, 9, 30)
+    assert seen["source_date"] == date(2026, 9, 29)
+
+
+def test_real_entries_fire_in_the_morning_not_at_close():
+    pytest.importorskip("celery")
+    from app.api.workers.celery_app import celery_app
+    beat = celery_app.conf.beat_schedule
+    by_task = {}
+    for key, entry in beat.items():
+        by_task.setdefault(entry["task"], []).append(entry["schedule"])
+    for task in ("live_orders_cafereal", "live_orders_coolreal"):
+        (sched,) = by_task[task]  # 정확히 한 슬롯 — 15:28 이 남아 있으면 이중 매수
+        assert sched.hour == {9} and sched.minute == {1}, task

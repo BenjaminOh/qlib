@@ -346,7 +346,7 @@ def live_orders_cafe_task(self) -> dict:
 @celery_app.task(bind=True, name="live_orders_cafereal")
 @market_day_only
 def live_orders_cafereal_task(self) -> dict:
-    """15:28 KST — cafereal: cafe 와 같은 픽을 **실계좌**로 매수.
+    """09:01 KST — cafereal: 직전 거래일 cafe 픽을 오늘 시가 지정가로 **실계좌** 매수.
 
     카페 계좌(KIS_CAFE_*)가 설정돼 있지 않으면 no_account 로 조용히 끝난다 —
     선택 전략이므로 미설정이 실패는 아니다.
@@ -388,7 +388,7 @@ def live_sync_cafecool_task(self) -> dict:
 @celery_app.task(bind=True, name="live_orders_coolreal")
 @market_day_only
 def live_orders_coolreal_task(self) -> dict:
-    """15:28 KST — coolreal: cafecool 과 같은 조건을 **실계좌**로 매수.
+    """09:01 KST — coolreal: 직전 거래일 cafe 픽 중 ret20 상한 통과분을 **실계좌** 매수.
 
     cool 계좌(KIS_COOL_*)가 설정돼 있지 않으면 no_account 로 조용히 끝난다.
     """
@@ -611,8 +611,8 @@ def reconcile_fills_task(self) -> dict:
 def reconcile_fills_cafereal_task(self, prev_day: bool = False) -> dict:
     """cafereal 실주문 대사. 15:35(당일) + 익일 09:05(재확인) 두 번 돈다.
 
-    cafereal 은 15:28 에 −3% 지정가를 낸다. 상한가 종목이 대부분이라 대개
-    체결되지 않는데, **그 체결률이 이 실험의 측정값 자체**다. 지금까지는
+    cafereal 은 09:01 에 그날 시가 지정가를 낸다(2026-09-30 까지는 15:28 −3%).
+    **그 체결률이 이 실험의 측정값 자체**다. 지금까지는
     reconcile_fills 를 부르는 곳이 open 하나뿐이라 cafereal 주문이 영구히
     SUBMITTED 로 남았고, "안 샀다"와 "샀는지 모른다"를 구분할 수 없었다.
 
@@ -625,11 +625,19 @@ def reconcile_fills_cafereal_task(self, prev_day: bool = False) -> dict:
     from datetime import date
 
     from ..db import STRATEGY_CAFEREAL
+    from ..services.balance_reconcile import settle_resting_buys
     from ..services.live_trader import _prev_trading_day, reconcile_fills
     from ..services.notify import notify_reconcile
     self.update_state(state="RUNNING")
     day = _prev_trading_day(date.today()) if prev_day else date.today()
     result = reconcile_fills(day, strategy=STRATEGY_CAFEREAL)
+    # 모의 환경은 체결내역 TR 이 비어 위 대사가 아무것도 확정하지 못한다.
+    # 장이 닫힌 뒤이므로 남은 지정가 매수를 잔고로 체결/소멸 판정한다.
+    settled = settle_resting_buys(day, strategy=STRATEGY_CAFEREAL)
+    if isinstance(result, dict):
+        result["settled"] = settled
+        result["updated"] = (result.get("updated") or 0) + len(
+            (settled.get("filled") or []) + (settled.get("partial") or []))
     slot = "익일 09:05 재확인" if prev_day else "15:35 대사"
     notify_reconcile(result if isinstance(result, dict) else {},
                      strategy=STRATEGY_CAFEREAL, slot_label=slot)
@@ -659,11 +667,19 @@ def reconcile_fills_coolreal_task(self, prev_day: bool = False) -> dict:
     from datetime import date
 
     from ..db import STRATEGY_COOLREAL
+    from ..services.balance_reconcile import settle_resting_buys
     from ..services.live_trader import _prev_trading_day, reconcile_fills
     from ..services.notify import notify_reconcile
     self.update_state(state="RUNNING")
     day = _prev_trading_day(date.today()) if prev_day else date.today()
     result = reconcile_fills(day, strategy=STRATEGY_COOLREAL)
+    # 모의 환경은 체결내역 TR 이 비어 위 대사가 아무것도 확정하지 못한다.
+    # 장이 닫힌 뒤이므로 남은 지정가 매수를 잔고로 체결/소멸 판정한다.
+    settled = settle_resting_buys(day, strategy=STRATEGY_COOLREAL)
+    if isinstance(result, dict):
+        result["settled"] = settled
+        result["updated"] = (result.get("updated") or 0) + len(
+            (settled.get("filled") or []) + (settled.get("partial") or []))
     slot = "익일 09:06 재확인" if prev_day else "15:36 대사"
     notify_reconcile(result if isinstance(result, dict) else {},
                      strategy=STRATEGY_COOLREAL, slot_label=slot)

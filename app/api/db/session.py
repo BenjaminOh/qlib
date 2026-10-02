@@ -95,7 +95,7 @@ def _seed_default_account() -> None:
     therefore reproduces exactly the pre-existing behaviour (market buy, market
     sell) rather than switching the live account to limit orders on deploy.
     """
-    from .models import (BASE_QUOTE, CAFE_ACCOUNT_ID, COOL_ACCOUNT_ID,
+    from .models import (BASE_OPEN, CAFE_ACCOUNT_ID, COOL_ACCOUNT_ID,
                          DEFAULT_ACCOUNT_ID, ORD_TYPE_LIMIT,
                          ORD_TYPE_MARKET, TradingAccount)
 
@@ -119,10 +119,13 @@ def _seed_default_account() -> None:
                 account_id=CAFE_ACCOUNT_ID,
                 label="카페 실매매 계좌",
                 buy_ord_type=ORD_TYPE_LIMIT,
-                buy_base=BASE_QUOTE,
-                # −3%. live_limit_discount·live_cafeopen_discount 와 같은 값이다.
-                buy_offset_pct=settings.live_cafeopen_discount,
-                buy_cancel_hhmm="15:30",
+                # 익일 09:01 에 그날 시가 그대로 지정가(2026-09-30 오너 지시).
+                # 예전 기본값(현재가 −3%, 15:28)은 상한가 픽이라 체결되지 않았다.
+                # 15:20 컷오프: 종일 걸어 두되, 15:30 은 모의투자가 "장종료"로
+                # 취소를 거부해 주문이 SUBMITTED 로 남는다.
+                buy_base=BASE_OPEN,
+                buy_offset_pct=0.0,
+                buy_cancel_hhmm="15:20",
                 sell_ord_type=ORD_TYPE_MARKET,
             ))
             added = True
@@ -135,9 +138,9 @@ def _seed_default_account() -> None:
                 account_id=COOL_ACCOUNT_ID,
                 label="카페 냉각 실매매 계좌",
                 buy_ord_type=ORD_TYPE_LIMIT,
-                buy_base=BASE_QUOTE,
-                buy_offset_pct=settings.live_cafeopen_discount,
-                buy_cancel_hhmm="15:30",
+                buy_base=BASE_OPEN,
+                buy_offset_pct=0.0,
+                buy_cancel_hhmm="15:20",
                 sell_ord_type=ORD_TYPE_MARKET,
             ))
             added = True

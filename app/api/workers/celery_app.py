@@ -162,21 +162,23 @@ celery_app.conf.beat_schedule = {
     },
     # cafecool — cafe 와 같은 15:28 슬롯. 같은 후보 행을 읽고 ret20 상한만
     # 다르게 적용하므로 스캔·순위는 공유되고 진입 조건 하나만 갈린다.
-    # cafereal — 같은 15:28 슬롯, 실계좌 주문. 계좌 미설정이면 즉시 반환한다.
-    "live-orders-at-close-cafereal": {
-        "task": "live_orders_cafereal",
-        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
-    },
     "live-orders-at-close-cafecool": {
         "task": "live_orders_cafecool",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
     },
-    # coolreal — cafecool 과 같은 조건을 **실계좌(cool)** 로. 같은 15:28 이어야
-    # 시뮬 쌍둥이와 진입 시각이 같아 비교가 성립한다. 15:30 으로 미룰 수 없다:
-    # 취소 스윕의 컷오프가 15:30 이라 방금 낸 주문을 그 자리에서 취소한다.
-    "live-orders-at-close-coolreal": {
+    # cafereal·coolreal(실계좌) — 직전 거래일 카페 후보를 **오늘 시가 지정가**로.
+    # 2026-09-30 까지는 15:28 현재가 −3% 였는데, 후보가 상한가로 닫히는 종목이라
+    # 한 번도 체결되지 않았다(오너 지시로 이동). 09:00 은 시가 단일가가 막
+    # 찍히는 순간이라 시세의 `open` 이 아직 0 일 수 있어 1분 뒤에 둔다.
+    # 두 계좌는 appkey 가 달라 같은 분이어도 초당 한도를 나눠 쓰지 않는다.
+    # 키 이름은 옛 `live-orders-at-close-*` 와 겹치지 않게 새로 지었다.
+    "live-orders-cafereal-open": {
+        "task": "live_orders_cafereal",
+        "schedule": crontab(hour=9, minute=1, day_of_week="mon-fri"),
+    },
+    "live-orders-coolreal-open": {
         "task": "live_orders_coolreal",
-        "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
+        "schedule": crontab(hour=9, minute=1, day_of_week="mon-fri"),
     },
     # ─── 계좌 슬롯(acct1~4) — 템플릿 1개당 슬롯 1개, 그 안에서 계좌를 순회 ───
     #
@@ -184,7 +186,7 @@ celery_app.conf.beat_schedule = {
     # 어떤 계좌가 도는지는 `trading_accounts.template` 이 정한다(웹에서 변경).
     #
     # cafe 는 시뮬 쌍둥이와 **같은 15:28** 이어야 진입 시각이 같아 비교가 성립한다.
-    # (위 coolreal 주석과 같은 이유로 15:30 뒤로는 못 민다 — 취소 스윕 컷오프.)
+    # 15:30 뒤로는 못 민다 — 취소 스윕 컷오프가 방금 낸 주문을 그 자리에서 취소한다.
     "live-entries-cafe": {
         "task": "live_entries",
         "schedule": crontab(hour=15, minute=28, day_of_week="mon-fri"),
@@ -201,8 +203,8 @@ celery_app.conf.beat_schedule = {
         "task": "live_sync_accounts",
         "schedule": crontab(hour=15, minute=50, day_of_week="mon-fri"),
     },
-    # cafereal 대사 — 15:28 주문의 체결 여부를 확정한다. 15:35 는 15:30 동시호가
-    # 직후이고 15:46 의 live_sync(스냅샷) 보다 앞선다: 순서가 뒤바뀌면 그날
+    # cafereal 대사 — 그날 09:01 주문의 체결 여부를 확정한다(잔고로 체결/소멸
+    # 판정 포함). 15:35 는 장 마감 직후이고 15:46 의 live_sync(스냅샷) 보다 앞선다: 순서가 뒤바뀌면 그날
     # 스냅샷이 미확정 원장 위에서 찍힌다. 익일 09:05 는 재확인 — 동시호가 체결이
     # KIS 조회에 반영되는 시점이 확정적이지 않아 15:35 에 놓칠 수 있다.
     # 키 이름이 겹치면 뒤엣것이 앞을 덮어쓴다(2026-08-20 live-sync-cafe 사고).

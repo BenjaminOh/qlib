@@ -29,7 +29,7 @@ export default function LiveAccountsPage() {
       <p className="text-sm text-gray-600">
         여기서 고른 방식으로 <strong>실주문</strong>이 나갑니다 — 계좌마다 따로입니다:
         <strong>기본 계좌</strong>는 09:00 의 <code>open</code> 전략,
-        <strong>카페 계좌</strong>는 15:28 의 <code>cafereal</code> 전략을 지배합니다.
+        <strong>카페 계좌</strong>·<strong>냉각 계좌</strong>는 09:01 의 <code>cafereal</code>·<code>coolreal</code> 전략(어제 카페 후보를 오늘 시가 지정가로)을 지배합니다.
         시뮬레이션 곡선 9개(종가·수급·트레일·사다리·지정가·카페·카페익일·카페냉각·급등)는
         비교 실험이라 이 설정의 영향을 받지 않습니다.
       </p>
