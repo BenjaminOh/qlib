@@ -15,7 +15,7 @@
 | **시뮬 9개** | close·flow·trail·scale·limit·cafe·cafeopen·cafecool·surge — DB 장부에만 기록 |
 | 신호 | Alpha158 → LightGBM(lr 0.005 · **150라운드 고정** · 조기종료 없음), 유니버스 **kospi200**, topk 10 / n_drop 2 |
 | 실행 | FastAPI(`app/api`) + Celery beat 41슬롯 + Next.js(`app/frontend`) |
-| 배포 | GitHub push → Jenkins → blue/green. **`pytest tests/app`(521건)이 배포 게이트** |
+| 배포 | GitHub push → Jenkins → blue/green. **`pytest tests/app`(523건)이 배포 게이트** |
 | 운영 원칙 | **전략 동결** — 테스트 종료까지 설계 변경 금지, 버그 수정만 승인 후 |
 
 ### 코드 지도
@@ -33,7 +33,7 @@
 ### 테스트·린트 (이 프로젝트 기준)
 
 ```bash
-pytest tests/app/          # 실제 게이트. 521건, 의존성 없으면 importorskip 으로 SKIP
+pytest tests/app/          # 실제 게이트. 523건, 의존성 없으면 importorskip 으로 SKIP
 ```
 
 ⚠️ `make lint` 는 `qlib/`·`scripts/` 만 본다 — **`app/` 은 어떤 린터에도 걸리지 않는다.**

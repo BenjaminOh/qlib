@@ -522,12 +522,32 @@ def close_bracket_exits_task(self) -> dict:
     from ..services.notify import notify_bracket_exits
     self.update_state(state="RUNNING")
     results = {}
+    failed: dict[str, str] = {}
+
+    def _isolated(key, fn):
+        # 전략 하나가 터져도 나머지는 돌아야 한다. 2026-09-23~10-02 동안 cafe
+        # 계좌 토큰 발급 403 이 10번째(cafereal)에서 태스크를 죽여, 그 뒤의
+        # coolreal·acct1~4 청산과 limit 매수 판정이 6거래일 연속 돌지 않았다.
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("close_bracket_exits: %s 실패 — 다음으로 넘어간다", key)
+            failed[key] = f"{type(exc).__name__}: {str(exc)[:200]}"
+            return {"status": "error", "error": failed[key]}
+
     for strategy in BRACKET_STRATEGIES:
-        results[strategy] = evaluate_bracket_exits(strategy=strategy)
+        results[strategy] = _isolated(
+            strategy, lambda s=strategy: evaluate_bracket_exits(strategy=s))
+        if failed.get(strategy):
+            continue
         notify_bracket_exits(strategy, results[strategy])
-        sync_account(strategy=strategy)
-    results["limit_entries"] = evaluate_limit_entries()
-    sync_account(strategy="limit")
+        _isolated(f"sync:{strategy}", lambda s=strategy: sync_account(strategy=s))
+    results["limit_entries"] = _isolated("limit_entries", evaluate_limit_entries)
+    _isolated("sync:limit", lambda: sync_account(strategy="limit"))
+    if failed:
+        # 나머지는 다 돌린 뒤에 실패를 알린다 — 조용히 삼키면 celery 로그의
+        # "raised" 흔적이 사라져 아무도 모른다. 멱등이라 16:25 폴백 재실행은 무해.
+        raise RuntimeError(f"close_bracket_exits 일부 실패: {failed}")
     return results
 
 
