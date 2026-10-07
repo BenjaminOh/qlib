@@ -119,6 +119,27 @@ else
   docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} build --parallel api web
 fi
 
+# ─────────────────────────────────────────────────────────────
+# 4-1. 종가 시간대에는 컨테이너를 교체하지 않는다
+# ─────────────────────────────────────────────────────────────
+# 평일 14:55~16:40 KST 는 카페 스캔(15:00)·종가 주문(15:20~15:29)·대사(15:35)·
+# 동기화(15:40~15:50)·일봉 갱신(15:45)·신호 생성(→16:20)·청산 판정(16:25)이 몰린다.
+# 2026-10-07 15:53 교체가 15:45 일봉 갱신과 겹쳤다. 빌드는 미리 해 두고, 교체(redis
+# 재생성·새 워커 기동·이전 슬롯 종료)만 이 구간이 끝날 때까지 미룬다. 장중 나머지
+# 시간은 허용한다. 긴급 배포는 DEPLOY_IGNORE_CLOSE_WINDOW=1 로 우회.
+in_close_window() {
+  local dow hm
+  dow=$(TZ=Asia/Seoul date +%u)
+  hm=$((10#$(TZ=Asia/Seoul date +%H%M)))
+  [ "$dow" -le 5 ] && [ "$hm" -ge 1455 ] && [ "$hm" -lt 1640 ]
+}
+if [ "${DEPLOY_IGNORE_CLOSE_WINDOW:-0}" != "1" ]; then
+  while in_close_window; do
+    echo "⏸  종가 시간대(평일 14:55~16:40 KST) — 컨테이너 교체 대기 중 ($(TZ=Asia/Seoul date +%H:%M))"
+    sleep 60
+  done
+fi
+
 # redis is shared across slots (qlib_redis container, not per-color).
 # `container_name: qlib_redis` is fixed in compose; compose projects
 # (qlib-blue / qlib-green) differ. So when target color flips, the existing

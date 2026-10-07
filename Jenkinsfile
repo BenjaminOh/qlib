@@ -45,7 +45,9 @@ pipeline {
         // but an abort a few steps later (after the nginx flip, before the new
         // slot is healthy) would have been an outage. The per-stage timeout on
         // Test catches a hung gate; Deploy must never be interrupted midway.
-        timeout(time: 120, unit: 'MINUTES')
+        // +120: deploy.sh holds the container swap through the weekday closing
+        // window (14:55~16:40 KST), which can add up to 105 minutes.
+        timeout(time: 240, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '30'))
     }
 
