@@ -1,0 +1,111 @@
+"""KIS 가 응답을 안 줄 때(타임아웃·연결 끊김) **조회는 다시 묻고, 주문은 다시 내지 않는다.**
+
+2026-10-07 실사고. 09:00 직후 모의서버가 30초가량 응답하지 않았고, 주문 태스크
+4개(open·cafeopen·cafereal·coolreal)가 **첫 조회**에서 각각 ReadTimeout 으로 죽었다.
+open 은 잔고 조회, cafeopen 은 시세 조회, cafereal·coolreal 은 토큰 발급이었다.
+재시도가 없어서 타임아웃 한 번에 그날 주문이 전부 사라졌다.
+
+조회와 토큰 발급은 다시 보내도 부작용이 없다. 주문은 다르다 — 타임아웃이 나도
+KIS 가 이미 접수했을 수 있으므로, 다시 보내면 같은 주문이 두 번 들어간다.
+"""
+
+import pytest
+
+pytest.importorskip("requests")
+
+from app.api.services import kis_client as kc  # noqa: E402
+
+BALANCE_OK = {"rt_cd": "0", "output1": [],
+              "output2": [{"prvs_rcdl_excc_amt": "824970", "tot_evlu_amt": "10638205",
+                           "scts_evlu_amt": "9813235"}]}
+
+
+class _Resp:
+    def __init__(self, body, status_code=200):
+        self._body = body
+        self.status_code = status_code
+        self.text = ""
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        pass
+
+
+class _Flaky:
+    """처음 `fails` 번은 예외를 던지고 그다음부터 `resp` 를 돌려준다."""
+
+    def __init__(self, fails, resp, exc=None):
+        self.fails = fails
+        self.resp = resp
+        self.exc = exc or kc.requests.ReadTimeout("read timed out")
+        self.calls = 0
+
+    def __call__(self, *a, **kw):
+        self.calls += 1
+        if self.calls <= self.fails:
+            raise self.exc
+        return self.resp
+
+
+@pytest.fixture
+def client(monkeypatch):
+    c = kc.KISClient(env="paper", app_key="k", app_secret="s", account_no="50160169-01")
+    monkeypatch.setattr(c, "_ensure_token", lambda: "tok")
+    monkeypatch.setattr(c, "_gate", lambda: None)
+    monkeypatch.setattr(c, "_hashkey", lambda body: "hash")
+    monkeypatch.setattr(kc.time, "sleep", lambda s: None)
+    return c
+
+
+def test_balance_survives_two_timeouts(client, monkeypatch):
+    get = _Flaky(2, _Resp(BALANCE_OK))
+    monkeypatch.setattr(kc.requests, "get", get)
+    snap = client.get_balance()
+    assert snap.cash == 824970.0
+    assert get.calls == 3
+
+
+def test_balance_gives_up_after_three_timeouts(client, monkeypatch):
+    get = _Flaky(99, _Resp(BALANCE_OK))
+    monkeypatch.setattr(kc.requests, "get", get)
+    with pytest.raises(kc.requests.ReadTimeout):
+        client.get_balance()
+    assert get.calls == 3
+
+
+def test_quote_survives_a_dropped_connection(client, monkeypatch):
+    get = _Flaky(1, _Resp({"output": {"stck_oprc": "4290", "stck_prpr": "4300"}}),
+                 exc=kc.requests.ConnectionError("reset"))
+    monkeypatch.setattr(kc.requests, "get", get)
+    assert client.get_quote("200350")["open"] == 4290.0
+    assert get.calls == 2
+
+
+def test_token_issue_survives_a_timeout(monkeypatch):
+    c = kc.KISClient(env="paper", app_key="k", app_secret="s", account_no="50160169-01")
+    monkeypatch.setattr(c, "_redis", lambda: None)
+    monkeypatch.setattr(kc.time, "sleep", lambda s: None)
+    post = _Flaky(1, _Resp({"access_token": "T", "expires_in": 86400}))
+    monkeypatch.setattr(kc.requests, "post", post)
+    assert c._ensure_token() == "T"
+    assert post.calls == 2
+
+
+def test_display_read_does_not_wait_out_retries(client, monkeypatch):
+    # 화면 조회는 balance_cache 가 마지막 정상값으로 답한다. 브라우저가 백오프를 기다리면 안 된다.
+    get = _Flaky(1, _Resp(BALANCE_OK))
+    monkeypatch.setattr(kc.requests, "get", get)
+    with kc.fail_fast_tokens(), pytest.raises(kc.requests.ReadTimeout):
+        client.get_balance()
+    assert get.calls == 1
+
+
+def test_order_is_never_resent_after_a_timeout(client, monkeypatch):
+    # 타임아웃 난 주문은 접수됐을 수도 있다. 다시 보내면 포지션이 두 배가 된다.
+    post = _Flaky(99, _Resp({"rt_cd": "0", "output": {"ODNO": "1"}}))
+    monkeypatch.setattr(kc.requests, "post", post)
+    res = client.place_order("200350", "BUY", 10, price=4290)
+    assert res.ok is False
+    assert post.calls == 1

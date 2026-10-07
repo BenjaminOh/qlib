@@ -175,6 +175,36 @@ def _is_token_error(r: "requests.Response") -> bool:
         return False
 
 
+# Network-level failures: no HTTP response came back at all. Distinct from a
+# KIS rejection (which arrives as a status code and is handled per call site).
+_TRANSIENT_NET = (requests.Timeout, requests.ConnectionError)
+
+
+def _send_retrying(send, what: str, attempts: int = 3):
+    """Run `send()` again when the request times out or the connection drops.
+
+    2026-10-07 실사고: the paper host did not answer for ~30s right at 09:00,
+    and the four order tasks each died on their FIRST read (balance, quote,
+    token issue) — a single timeout cost the whole day's orders on every
+    account. Only reads and token issuance go through here. Order POSTs never
+    do: a timed-out order may still have been accepted, and resending it would
+    double the position.
+
+    A display read (`fail_fast_tokens`) gets one attempt — balance_cache answers
+    for it instead of a browser waiting through the backoff.
+    """
+    attempts = 1 if _fail_fast.get() else attempts
+    for attempt in range(attempts):
+        try:
+            return send()
+        except _TRANSIENT_NET as exc:
+            if attempt + 1 >= attempts:
+                raise
+            log.warning("KIS %s network error (attempt %d/%d): %s",
+                        what, attempt + 1, attempts, exc)
+            time.sleep(2 * (attempt + 1))
+
+
 # ─── Domain models ──────────────────────────────────────────────────
 
 @dataclass
@@ -414,7 +444,8 @@ class KISClient:
             payload = {"grant_type": "client_credentials",
                        "appkey": self.app_key, "appsecret": self.app_secret}
             try:
-                r = requests.post(url, json=payload, timeout=10)
+                r = _send_retrying(
+                    lambda: requests.post(url, json=payload, timeout=10), "token issue")
             except Exception:
                 self._set_token_cooldown()
                 raise
@@ -605,8 +636,11 @@ class KISClient:
         last_exc: Exception | None = None
         for attempt in range(attempts):
             self._gate()
-            r = requests.get(self.host + path, headers=self._headers(self.tr_set["balance"]),
-                             params=params, timeout=15)
+            r = _send_retrying(
+                lambda: requests.get(self.host + path,
+                                     headers=self._headers(self.tr_set["balance"]),
+                                     params=params, timeout=15),
+                "get_balance")
             if r.status_code == 200:
                 break
             log.warning(
@@ -806,11 +840,13 @@ class KISClient:
         if self.is_mock:
             return {}
         self._gate()
-        r = requests.get(
-            self.host + "/uapi/domestic-stock/v1/quotations/inquire-price",
-            headers=self._headers("FHKST01010100"),
-            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code},
-            timeout=10)
+        r = _send_retrying(
+            lambda: requests.get(
+                self.host + "/uapi/domestic-stock/v1/quotations/inquire-price",
+                headers=self._headers("FHKST01010100"),
+                params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code},
+                timeout=10),
+            "get_quote")
         if r.status_code != 200:
             return {}
         d = r.json().get("output") or {}
