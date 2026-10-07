@@ -36,6 +36,25 @@ def market_day_only(fn):
     return _wrapped
 
 
+def kis_retry_until(hour: int, minute: int):
+    """이 태스크의 KIS 조회는 응답이 없으면 오늘 `hour:minute` 까지 계속 다시 묻는다.
+
+    09:00 주문은 서버가 살아나는 순간 나가야 한다(2026-10-07: 30초 장애로 그날 주문이
+    전부 사라졌다). 10:00 이 지나면 포기하고 실패 알림으로 넘긴다 — 그때는 이미
+    '시가 진입' 전략이라고 부를 수 없다.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def _wrapped(self, *args, **kwargs):
+            from ..services.kis_client import retry_until
+            deadline = datetime.now().replace(hour=hour, minute=minute,
+                                              second=0, microsecond=0)
+            with retry_until(deadline.timestamp()):
+                return fn(self, *args, **kwargs)
+        return _wrapped
+    return deco
+
+
 @celery_app.task(bind=True, name="run_backtest")
 def run_backtest_task(self, config: dict) -> dict:
     """Execute a qlib backtest in an isolated worker process.
@@ -77,12 +96,13 @@ def live_signal_task(self) -> dict:
 
 @celery_app.task(bind=True, name="live_orders")
 @market_day_only
+@kis_retry_until(10, 0)
 def live_orders_task(self) -> dict:
     """09:00 KST — open strategy: read today's Signal, submit KIS orders."""
     from ..services.live_trader import submit_daily_orders
     from ..services.notify import notify_open_orders
     self.update_state(state="RUNNING")
-    result = submit_daily_orders(strategy="open", simulated=False)
+    result = submit_daily_orders(strategy="open", simulated=False, late_open_guard=True)
     notify_open_orders(result)
     return result
 
@@ -345,6 +365,7 @@ def live_orders_cafe_task(self) -> dict:
 
 @celery_app.task(bind=True, name="live_orders_cafereal")
 @market_day_only
+@kis_retry_until(10, 0)
 def live_orders_cafereal_task(self) -> dict:
     """09:01 KST — cafereal: 직전 거래일 cafe 픽을 오늘 시가 지정가로 **실계좌** 매수.
 
@@ -387,6 +408,7 @@ def live_sync_cafecool_task(self) -> dict:
 
 @celery_app.task(bind=True, name="live_orders_coolreal")
 @market_day_only
+@kis_retry_until(10, 0)
 def live_orders_coolreal_task(self) -> dict:
     """09:01 KST — coolreal: 직전 거래일 cafe 픽 중 ret20 상한 통과분을 **실계좌** 매수.
 
@@ -473,6 +495,7 @@ def capture_orderbook_task(self, slot: str) -> dict:
 
 @celery_app.task(bind=True, name="live_orders_cafeopen")
 @market_day_only
+@kis_retry_until(10, 0)
 def live_orders_cafeopen_task(self) -> dict:
     """09:00 KST — cafeopen twin: rest a −3% limit off today's open for every
     code cafe bought yesterday. No fill yet; resolve_cafeopen judges at 10:00."""

@@ -322,12 +322,16 @@ def run_surge_screen(trade_date: date | None = None) -> dict:
                 metrics_json=json.dumps({
                     "ret20": s.ret20, "pos_vs_5d_high": s.pos_vs_5d_high,
                     "vol_x": s.vol_x, "ma20_gap": s.ma20_gap}, ensure_ascii=False)))
+        # 결과는 커밋 **전에** 만든다. 커밋하면 세션이 객체 값을 비우고(expire_on_commit),
+        # 블록을 나가면 세션이 닫혀 다시 읽을 수 없다 — 그래서 9-21 이후 매일
+        # DetachedInstanceError 로 끝나 서지 알림이 한 번도 나가지 않았다.
+        result = {"status": "ok", "trade_date": day.isoformat(),
+                  "pool": len(snaps), "matched": len(scored),
+                  "picks": [{"rank": i + 1, "code": s.code, "name": s.name,
+                             "close": s.close, "score": sc}
+                            for i, (sc, s) in enumerate(picks)]}
         db.commit()
-    return {"status": "ok", "trade_date": day.isoformat(),
-            "pool": len(snaps), "matched": len(scored),
-            "picks": [{"rank": i + 1, "code": s.code, "name": s.name,
-                       "close": s.close, "score": sc}
-                      for i, (sc, s) in enumerate(picks)]}
+    return result
 
 
 def submit_surge_orders(trade_date: date | None = None) -> dict:

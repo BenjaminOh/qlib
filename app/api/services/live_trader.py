@@ -38,7 +38,7 @@ from ..db import (
     BASE_OPEN, BASE_QUOTE, init_db,
 )
 from .account_policy import (
-    MARKET_BUY, MARKET_SELL, BasePriceUnavailable, get_policies, order_price,
+    MARKET_BUY, MARKET_SELL, BasePriceUnavailable, OrderPolicy, get_policies, order_price,
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
@@ -511,11 +511,35 @@ def _select_affordable_buys(candidates: list[str],
     return selected, skipped
 
 
+# 09:00 시가 진입이 늦어졌다고 보는 시각. 이후엔 시장가 대신 당일 시가 지정가로 낸다.
+LATE_OPEN_AFTER = (9, 5)
+
+
+def late_open_policies(buy_pol: OrderPolicy, sell_pol: OrderPolicy,
+                       now: datetime) -> tuple[OrderPolicy, OrderPolicy]:
+    """open 전략이 늦게 나가면 **시장가를 당일 시가 지정가로** 바꾼다.
+
+    open 은 '09:00 시가에 산다'가 전략의 정의다. KIS 장애로 09:40 에야 주문이
+    나가는데 시장가로 내면 시가와 무관한 가격에 체결된다 — 그건 이 전략의 성적이
+    아니다. 시가 지정가면 시가로 되돌아왔을 때만 체결되고, 아니면 장 마감에
+    소멸한다(2026-10-07 수동 처리와 같은 방식). 이미 지정가인 정책은 건드리지 않는다.
+    """
+    if (now.hour, now.minute) < LATE_OPEN_AFTER:
+        return buy_pol, sell_pol
+    if not buy_pol.is_limit:
+        buy_pol = OrderPolicy(side="BUY", ord_type="limit", base="open", offset_pct=0.0)
+    if not sell_pol.is_limit:
+        sell_pol = OrderPolicy(side="SELL", ord_type="limit", base="open", offset_pct=0.0)
+    log.warning("live_orders: %02d:%02d 늦은 진입 — 시장가 대신 당일 시가 지정가", now.hour, now.minute)
+    return buy_pol, sell_pol
+
+
 def submit_daily_orders(today: date | None = None,
                          client: KISClient | None = None,
                          *,
                          strategy: str = STRATEGY_OPEN,
-                         simulated: bool = False) -> dict:
+                         simulated: bool = False,
+                         late_open_guard: bool = False) -> dict:
     """Compute (sell, buy) lists from today's signal vs current holdings,
     then either:
       - strategy='open', simulated=False (default): place KIS orders at the opening auction,
@@ -622,6 +646,9 @@ def submit_daily_orders(today: date | None = None,
             # (호출자가 없어 실제로 터진 적은 없다, 2026-09-07 제거).
             account_id = _account_for(strategy)
             buy_pol, sell_pol = get_policies(db, account_id)
+            # 09:00 예약 태스크만 켠다 — 수동 호출·테스트는 계좌 정책 그대로.
+            if strategy == STRATEGY_OPEN and late_open_guard:
+                buy_pol, sell_pol = late_open_policies(buy_pol, sell_pol, datetime.now())
             log.info("live_orders: account=%s buy=%s%s sell=%s%s", account_id,
                      buy_pol.ord_type,
                      f"({buy_pol.base} −{buy_pol.offset_pct * 100:.1f}%)" if buy_pol.is_limit else "",

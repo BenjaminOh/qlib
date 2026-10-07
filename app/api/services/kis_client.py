@@ -180,34 +180,118 @@ def _is_token_error(r: "requests.Response") -> bool:
         return False
 
 
-# Network-level failures: no HTTP response came back at all. Distinct from a
-# KIS rejection (which arrives as a status code and is handled per call site).
+# "응답이 오지 않았다" 류의 장애. 타임아웃·연결 끊김, 그리고 게이트웨이가 뒤의
+# 서버를 못 찾는 502/503/504. KIS 의 업무 거부(그 외 상태 코드)는 각 호출부가 다룬다.
 _TRANSIENT_NET = (requests.Timeout, requests.ConnectionError)
+_TRANSIENT_HTTP = (502, 503, 504)
+
+# 재시도 간격(초). 마지막 값으로 계속 반복한다.
+_RETRY_BACKOFF_S = (5, 10, 20, 30)
+# 마감이 지정되지 않은 호출이 장애를 기다리는 최대 시간.
+_DEFAULT_RETRY_WINDOW_S = 600
+# 이만큼 응답이 없으면 텔레그램으로 장애를 알린다.
+_OUTAGE_ALERT_AFTER_S = 60
+_OUTAGE_ALERT_TTL_S = 1800
+
+# 태스크가 지정하는 재시도 마감(epoch 초). 09:00 주문은 10:00 까지 기다린다.
+_retry_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "kis_retry_deadline", default=None)
 
 
-def _send_retrying(send, what: str, attempts: int = 3):
-    """Run `send()` again when the request times out or the connection drops.
+@contextlib.contextmanager
+def retry_until(deadline: float):
+    """이 블록 안의 KIS 조회는 응답이 없으면 `deadline` 까지 계속 다시 묻는다."""
+    token = _retry_deadline.set(deadline)
+    try:
+        yield
+    finally:
+        _retry_deadline.reset(token)
 
-    2026-10-07 실사고: the paper host did not answer for ~30s right at 09:00,
-    and the four order tasks each died on their FIRST read (balance, quote,
-    token issue) — a single timeout cost the whole day's orders on every
-    account. Only reads and token issuance go through here. Order POSTs never
-    do: a timed-out order may still have been accepted, and resending it would
-    double the position.
 
-    A display read (`fail_fast_tokens`) gets one attempt — balance_cache answers
-    for it instead of a browser waiting through the backoff.
-    """
-    attempts = 1 if _fail_fast.get() else attempts
-    for attempt in range(attempts):
+def _outage_key() -> str:
+    return f"kis:alert:outage:{settings.kis_env or 'paper'}"
+
+
+def _alert_outage(what: str, elapsed: float, err: str) -> bool:
+    """장애 알림 — 30분에 1번. 이 호출이 보냈으면 True(복구 알림도 이 호출이 보낸다)."""
+    r = _halt_redis()
+    if r is not None:
         try:
-            return send()
+            if not r.set(_outage_key(), "1", nx=True, ex=_OUTAGE_ALERT_TTL_S):
+                return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("KIS outage alert dedupe failed: %s", exc)
+    try:
+        from .notify import notify_kis_outage
+        notify_kis_outage(what, elapsed, err)
+    except Exception as exc:  # noqa: BLE001 — 알림 실패가 재시도를 막으면 안 된다
+        log.warning("KIS outage alert send failed: %s", exc)
+    return True
+
+
+def _alert_recovered(what: str, elapsed: float) -> None:
+    r = _halt_redis()
+    if r is not None:
+        try:
+            r.delete(_outage_key())    # 다음 장애는 다시 바로 알린다
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        from .notify import notify_kis_recovered
+        notify_kis_recovered(what, elapsed)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("KIS recovery alert send failed: %s", exc)
+
+
+def _send_retrying(send, what: str):
+    """응답이 없으면 마감까지 계속 다시 보낸다 — 살아나는 순간 바로 진행한다.
+
+    2026-10-07 실사고: 09:00 직후 모의서버가 ~30초 응답하지 않아 주문 태스크 4개가
+    첫 조회(잔고·시세·토큰)에서 죽었다. 처음엔 3회 재시도로 막았지만 서버가
+    언제 살아날지는 알 수 없다 — 그래서 횟수가 아니라 **마감 시각**까지 5·10·20·30초
+    간격(이후 30초 고정)으로 계속 묻는다. 마감은 태스크가 `retry_until` 로 정하고,
+    없으면 첫 시도부터 10분이다.
+
+    조회·토큰 발급·hashkey 만 여기를 지난다. 주문 POST 는 절대 아니다 — 타임아웃 난
+    주문은 접수됐을 수 있고, 다시 보내면 포지션이 두 배가 된다.
+
+    60초 넘게 응답이 없으면 장애 알림을, 그 뒤 살아나면 복구 알림을 보낸다.
+    화면 조회(`fail_fast_tokens`)는 1회만 — balance_cache 가 대신 답한다.
+    """
+    if _fail_fast.get():
+        return send()
+    started = time.time()
+    deadline = _retry_deadline.get() or (started + _DEFAULT_RETRY_WINDOW_S)
+    attempt = 0
+    alert_checked = alerted = False
+    while True:
+        err: Exception | None = None
+        r = None
+        try:
+            r = send()
         except _TRANSIENT_NET as exc:
-            if attempt + 1 >= attempts:
-                raise
-            log.warning("KIS %s network error (attempt %d/%d): %s",
-                        what, attempt + 1, attempts, exc)
-            time.sleep(2 * (attempt + 1))
+            err = exc
+        if err is None and getattr(r, "status_code", None) not in _TRANSIENT_HTTP:
+            if alerted:
+                _alert_recovered(what, time.time() - started)
+            return r
+        now = time.time()
+        wait = _RETRY_BACKOFF_S[min(attempt, len(_RETRY_BACKOFF_S) - 1)]
+        if now + wait > deadline:
+            log.error("KIS %s: %ds 동안 응답 없음 — 마감이라 포기한다 (%s)",
+                      what, now - started, err or f"HTTP {r.status_code}")
+            if err is not None:
+                raise err
+            return r                       # 5xx 응답은 호출부의 기존 처리로
+        if not alert_checked and now - started >= _OUTAGE_ALERT_AFTER_S:
+            alert_checked = True
+            alerted = _alert_outage(what, now - started,
+                                    str(err) if err else f"HTTP {r.status_code}")
+        log.warning("KIS %s 응답 없음 (시도 %d, %ds 경과) — %ds 후 재시도: %s",
+                    what, attempt + 1, now - started, wait,
+                    err or f"HTTP {r.status_code}")
+        time.sleep(wait)
+        attempt += 1
 
 
 # ─── Domain models ──────────────────────────────────────────────────
@@ -620,6 +704,10 @@ class KISClient:
                 time.sleep(wait)
             self._last_call = time.monotonic()
 
+    def _http_get(self, what: str, *args, **kwargs):
+        """GET 조회 — 응답이 없으면 `_send_retrying` 규칙대로 계속 다시 묻는다."""
+        return _send_retrying(lambda: requests.get(*args, **kwargs), what)
+
     def _hashkey(self, body: dict) -> str:
         if self.is_mock:
             return "MOCK_HASHKEY"
@@ -627,7 +715,8 @@ class KISClient:
         url = f"{self.host}/uapi/hashkey"
         headers = {"content-type": "application/json",
                    "appkey": self.app_key, "appsecret": self.app_secret}
-        r = requests.post(url, headers=headers, json=body, timeout=10)
+        r = _send_retrying(
+            lambda: requests.post(url, headers=headers, json=body, timeout=10), "hashkey")
         r.raise_for_status()
         return r.json()["HASH"]
 
@@ -787,7 +876,7 @@ class KISClient:
             return {}
         self._gate()
         try:
-            r = requests.get(
+            r = self._http_get("get_orderable_cash",
                 self.host + "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
                 headers=self._headers(self.tr_set["psbl"]),
                 params={
@@ -925,7 +1014,7 @@ class KISClient:
         if self.is_mock:
             return {}
         self._gate()
-        r = requests.get(
+        r = self._http_get("get_orderbook",
             self.host + "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn",
             headers=self._headers("FHKST01010200"),
             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code.zfill(6)},
@@ -976,7 +1065,7 @@ class KISClient:
         if self.is_mock:
             return []
         self._gate()
-        r = requests.get(
+        r = self._http_get("get_investor_daily",
             self.host + "/uapi/domestic-stock/v1/quotations/inquire-investor",
             headers=self._headers("FHKST01010900"),
             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code.zfill(6)},
@@ -1019,7 +1108,7 @@ class KISClient:
         if self.is_mock:
             return []
         self._gate()
-        r = requests.get(
+        r = self._http_get("get_rank_fluctuation",
             self.host + "/uapi/domestic-stock/v1/ranking/fluctuation",
             headers=self._headers("FHPST01700000"),
             params={
@@ -1058,7 +1147,7 @@ class KISClient:
         if self.is_mock:
             return []
         self._gate()
-        r = requests.get(
+        r = self._http_get("get_rank_volume",
             self.host + "/uapi/domestic-stock/v1/quotations/volume-rank",
             headers=self._headers("FHPST01710000"),
             params={
@@ -1099,7 +1188,7 @@ class KISClient:
         if self.is_mock:
             return []
         self._gate()
-        r = requests.get(
+        r = self._http_get("get_daily_bars",
             self.host + "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
             headers=self._headers("FHKST01010400"),
             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code.zfill(6),
@@ -1160,7 +1249,7 @@ class KISClient:
                 "CTX_AREA_NK100": nk,
             }
             self._gate()
-            r = requests.get(self.host + path,
+            r = self._http_get("get_daily_fills", self.host + path,
                              headers=self._headers(self.tr_set["fills"]),
                              params=params, timeout=15)
             if r.status_code != 200:
