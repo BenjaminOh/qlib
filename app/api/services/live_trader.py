@@ -901,7 +901,15 @@ def reconcile_fills(trade_date: date | None = None,
                     "account_id": account_id, "reason": str(exc)}
     if client.is_mock:
         return {"status": "skipped", "reason": "mock"}
-    fills = client.get_daily_fills(trade_date, trade_date)
+    from .kis_client import AccountNotConfigured
+    try:
+        fills = client.get_daily_fills(trade_date, trade_date)
+    except AccountNotConfigured as exc:
+        # 키 거부(AccountRejected)는 재시도해도 풀리지 않는다. 예외로 올리면
+        # celery autoretry 가 워커 슬롯을 분 단위로 붙잡는다(2026-10-07).
+        log.warning("reconcile_fills: %s 계좌 거부 — %s", account_id, exc)
+        return {"status": "no_account", "strategy": strategy,
+                "account_id": account_id, "reason": str(exc)}
     matched = updated = 0
     # order_id → KIS 가 알려준 **실제 체결수량**. 지금까지 이 값은 상태 판정에만
     # 쓰이고 버려져서, Fill 행에는 늘 주문 수량이 들어갔다 — 부분체결 주문이

@@ -89,6 +89,14 @@ def discover_chat_id() -> list[dict]:
         return []
 
 
+def notify_account_rejected(label: str, reason: str) -> bool:
+    """KIS 가 계좌 키를 거부했다 — 그 계좌 매매가 멈췄음을 알린다."""
+    return send_telegram(
+        f"⚠️ <b>{_esc(label)} 계좌 KIS 키 거부</b>\n"
+        f"{_esc(reason[:200])}\n"
+        "이 계좌 매매·대사가 중단됐다. KIS 에서 앱키·시크릿과 모의투자 기간을 확인할 것.")
+
+
 # ─── Formatting helpers (Korean, detailed per-order blocks) ─────────
 
 

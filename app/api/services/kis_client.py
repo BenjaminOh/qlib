@@ -76,6 +76,11 @@ _THROTTLE_MARKERS = ("초당 거래건수", "EGW00201")
 # re-auth + retry cannot double-execute.
 _TOKEN_MARKERS = ("기간이 만료된 token", "EGW00123")
 
+# 토큰 발급이 **키 자체**를 거부한 경우(EGW00103 유효하지 않은 AppKey,
+# EGW00105 유효하지 않은 AppSecret). 발급 1분 제한(EGW00133)과 같은 403 으로 오지만
+# 기다려도 절대 풀리지 않는다 — `_ensure_token` 은 이걸 먼저 걸러 즉시 포기한다.
+_CREDENTIAL_MARKERS = ("EGW00103", "EGW00105")
+
 # Shared redis handle for the token cache + call gate (see KISClient._redis).
 _redis_singleton = None
 
@@ -314,6 +319,8 @@ class KISClient:
                 f"KIS_ENV=real but {', '.join(missing)} missing — refusing to run. "
                 "Mock mode would report fake fills as real orders.")
 
+        # 알림 문구용 계좌 이름("카페" 등). get_kis_client 가 채운다.
+        self.account_label: str | None = None
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._lock = threading.Lock()
@@ -449,6 +456,19 @@ class KISClient:
             except Exception:
                 self._set_token_cooldown()
                 raise
+            if r.status_code != 200 and any(
+                    m in (getattr(r, "text", "") or "") for m in _CREDENTIAL_MARKERS):
+                # 2026-10-06 실사고: cafe 키가 EGW00105 로 거부됐는데 아래 403 분기가
+                # 이걸 발급 제한으로 보고 매번 70초를 기다렸다. 워커는 2슬롯뿐이라
+                # 재시도까지 합쳐 ~4.6분 동안 다른 계좌 태스크의 자리를 빼앗았고,
+                # 알림도 없어 하루 넘게 아무도 몰랐다.
+                self._set_token_cooldown()
+                reason = (getattr(r, "text", "") or "")[:300]
+                log.error("KIS token issue rejected (credentials): %s %s",
+                          r.status_code, reason)
+                self._alert_credential_rejected(reason)
+                raise AccountRejected(
+                    f"{self.account_label or self.cano} 계좌 KIS 키 거부 — {reason}")
             if r.status_code in (403, 429):
                 # EGW00133: issuance is rate-limited to 1/min. When two
                 # processes race (e.g. the 09:00 order task vs a dashboard
@@ -521,6 +541,27 @@ class KISClient:
             r_client.delete(self._redis_cooldown_key)
         except Exception:  # noqa: BLE001
             pass
+
+    def _alert_credential_rejected(self, reason: str) -> None:
+        """키 거부를 텔레그램으로 알린다 — 같은 키·같은 날 1회만.
+
+        거부된 키로는 하루 수십 개 태스크가 계속 실패한다. 매번 보내면 도배가
+        되고, 한 번도 안 보내면 이번처럼 하루 넘게 아무도 모른다.
+        """
+        r_client = self._redis()
+        if r_client is not None:
+            key = (f"kis:alert:rejected:{self.env}:{self._appkey_scope}:"
+                   f"{date.today().isoformat()}")
+            try:
+                if not r_client.set(key, "1", nx=True, ex=86400):
+                    return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("KIS reject alert dedupe failed: %s", exc)
+        try:
+            from .notify import notify_account_rejected
+            notify_account_rejected(self.account_label or self.cano, reason)
+        except Exception as exc:  # noqa: BLE001 — 알림 실패가 거부 처리를 막으면 안 된다
+            log.warning("KIS reject alert send failed: %s", exc)
 
     def _drop_token(self) -> None:
         """Invalidate the cached token (local + redis) so the next call re-auths."""
@@ -1638,6 +1679,7 @@ def get_kis_client(account: str = ACCOUNT_MAIN) -> KISClient:
             c = _clients.get(account)
             if c is None:
                 c = _build_client(account)
+                c.account_label = _ACCOUNT_LABEL.get(account, account)
                 _clients[account] = c
     return c
 
