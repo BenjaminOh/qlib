@@ -1,7 +1,7 @@
 """Celery application configuration for background backtest jobs."""
 
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import task_failure, task_success, worker_process_init
 
 from ..config import settings
 
@@ -104,10 +104,11 @@ celery_app.conf.beat_schedule = {
     # Flow strategy: identical execution to close (sim fills at the same
     # last close, ±5% brackets) — the ONLY difference is that picks come from
     # the top-30 signal re-ranked by 기관/외국인 net buying.
-    # Offset by a minute from the close slots on purpose: prod runs SQLite
-    # with --concurrency=2, and stacking a third writer on 15:20/15:40 is how
-    # "database is locked" starts. Both strategies price off the same stored
-    # close, so the minute of offset changes nothing about the comparison.
+    # Offset by a minute from the close slots: when prod ran SQLite with
+    # --concurrency=2, stacking a third writer on 15:20/15:40 was how
+    # "database is locked" started. Prod is PostgreSQL since 2026-09-21 and the
+    # worker runs 4 slots (2026-10-07, so a KIS outage retry cannot starve the
+    # rest); the offset stays — it changes nothing about the comparison.
     "live-orders-at-close-flow": {
         "task": "live_orders_flow",
         "schedule": crontab(hour=15, minute=22, day_of_week="mon-fri"),
@@ -342,3 +343,29 @@ def init_qlib_in_worker(**kwargs):
             getattr(module, cls)
         except Exception as exc:  # noqa: BLE001 - we want every miss surfaced
             print(f"[worker] catalog import failed: {module_path}.{cls}: {exc}")
+
+
+# ─── 모든 실패를 알린다 ─────────────────────────────────────────────
+# 2026-10-07: 09:00 주문 태스크 4개가 죽었는데 아무 알림이 없어 사람이 "오늘 매매가
+# 없다"를 보고서야 알았다. 예외로 끝난 태스크(autoretry 는 재시도를 다 쓴 뒤 한 번)와,
+# 정상 종료했지만 결과가 실패를 말하는 태스크를 전부 텔레그램으로 보낸다.
+
+
+@task_failure.connect
+def _alert_task_failure(sender=None, exception=None, **_kw):
+    try:
+        from ..services.notify import notify_task_failure
+        notify_task_failure(getattr(sender, "name", str(sender)), exception)
+    except Exception:  # noqa: BLE001 — 알림이 태스크 처리를 깨면 안 된다
+        pass
+
+
+@task_success.connect
+def _alert_task_problems(sender=None, result=None, **_kw):
+    try:
+        from ..services.notify import notify_task_problems, result_problems
+        problems = result_problems(result)
+        if problems:
+            notify_task_problems(getattr(sender, "name", str(sender)), problems)
+    except Exception:  # noqa: BLE001
+        pass

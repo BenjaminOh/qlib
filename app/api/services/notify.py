@@ -97,6 +97,89 @@ def notify_account_rejected(label: str, reason: str) -> bool:
         "이 계좌 매매·대사가 중단됐다. KIS 에서 앱키·시크릿과 모의투자 기간을 확인할 것.")
 
 
+_once_redis = None
+
+
+def send_once(key: str, text: str, ttl_s: int = 1800) -> bool:
+    """같은 `key` 는 `ttl_s` 동안 한 번만 보낸다. redis 가 없으면 그냥 보낸다.
+
+    장애 중에는 같은 실패가 몇 분 사이 수십 번 난다. 매번 보내면 정작 새 실패가
+    묻히고, 아예 안 보내면 이번처럼 하루 넘게 아무도 모른다(2026-10-06~07).
+    """
+    global _once_redis
+    try:
+        if _once_redis is None:
+            import redis  # type: ignore[import-not-found]
+            _once_redis = redis.Redis.from_url(
+                settings.celery_broker_url, socket_connect_timeout=2, socket_timeout=2)
+        if not _once_redis.set(f"alert:once:{key}", "1", nx=True, ex=ttl_s):
+            return False
+    except Exception as exc:  # noqa: BLE001 — 중복 억제 실패로 알림을 잃지 않는다
+        log.warning("alert dedupe failed, sending anyway: %s", exc)
+    return send_telegram(text)
+
+
+def notify_kis_outage(what: str, elapsed: float, err: str) -> bool:
+    return send_telegram(
+        f"🚨 <b>KIS 응답 없음</b> — {_esc(what)} {int(elapsed)}초째\n"
+        f"{_esc(err[:200])}\n"
+        "살아날 때까지 계속 다시 묻는 중이다. 복구되면 다시 알린다.")
+
+
+def notify_kis_recovered(what: str, elapsed: float) -> bool:
+    return send_telegram(
+        f"✅ <b>KIS 복구</b> — {_esc(what)} {int(elapsed)}초 만에 응답. 작업을 이어간다.")
+
+
+def notify_task_failure(task: str, exc: BaseException) -> bool:
+    """태스크가 예외로 끝났다(재시도까지 다 쓴 뒤). 같은 태스크·같은 예외는 30분에 1번."""
+    return send_once(
+        f"fail:{task}:{type(exc).__name__}",
+        f"❌ <b>태스크 실패</b> — <code>{_esc(task)}</code>\n"
+        f"{_esc(type(exc).__name__)}: {_esc(_scrub(exc)[:300])}")
+
+
+# 결과 dict 의 status 중 "일이 안 됐다"는 뜻인 것. 그 외(ok·skipped·market_closed·
+# no_candidates·nothing_resting·no_cutoff·no_accounts 등)는 정상 흐름이다.
+FAILURE_STATUSES = frozenset({
+    "no_account", "balance_unavailable", "no_signal", "error",
+    "unknown_template", "no_calendar", "empty_pool",
+})
+
+
+def result_problems(result, _path: str = "") -> list[str]:
+    """태스크 결과에서 실패 신호를 찾는다 — 실패 status, 거부·실패 건수.
+
+    계좌별로 중첩된 결과(cancel_unfilled_orders 의 {main: {...}, cafe: {...}})도 본다.
+    """
+    out: list[str] = []
+    if not isinstance(result, dict):
+        return out
+    status = result.get("status")
+    if status in FAILURE_STATUSES:
+        why = result.get("reason") or result.get("error") or ""
+        out.append(f"{_path}status={status}" + (f" ({str(why)[:150]})" if why else ""))
+    for k in ("rejected", "failed"):
+        v = result.get(k)
+        n = len(v) if isinstance(v, (list, tuple, dict)) else v
+        if isinstance(n, (int, float)) and not isinstance(n, bool) and n > 0:
+            out.append(f"{_path}{k}={int(n)}")
+    if _path.count("/") < 2:
+        for k, v in result.items():
+            if isinstance(v, dict):
+                out.extend(result_problems(v, f"{_path}{k}/"))
+    return out
+
+
+def notify_task_problems(task: str, problems: list[str]) -> bool:
+    """태스크는 끝났지만 결과가 실패를 말한다. 같은 태스크·같은 내용은 30분에 1번."""
+    sig = "|".join(sorted(p.split(" (")[0] for p in problems))
+    return send_once(
+        f"result:{task}:{sig}",
+        f"⚠️ <b>태스크 결과 이상</b> — <code>{_esc(task)}</code>\n"
+        + "\n".join(f"• {_esc(p)}" for p in problems[:10]))
+
+
 # ─── Formatting helpers (Korean, detailed per-order blocks) ─────────
 
 

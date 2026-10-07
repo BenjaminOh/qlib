@@ -113,7 +113,7 @@ services:
       - app.api.workers.celery_app
       - worker
       - --loglevel=info
-      - --concurrency=2
+      - --concurrency=4
       - --pool=prefork
     volumes:
       - /home/qlib/data/qlib:/root/.qlib
