@@ -152,6 +152,12 @@ FAILURE_STATUSES = frozenset({
 # 실패는 결과 알림에서 뺀다. kis_client 의 AccountRejected 문구와 같아야 한다.
 KEY_REJECTED_MARK = "계좌 KIS 키 거부"
 
+# 키·시크릿·계좌번호가 **하나도** 없는 자리(acct1~4)는 아직 쓰지 않는 계좌다.
+# 계좌를 도는 태스크(손익절 판정·잔고 동기화)가 매일 no_account 로 보고하지만
+# 고장이 아니다(2026-10-08 15:50·16:26 오경보). 일부만 빠진 설정 실수는 그대로 알린다.
+EMPTY_SLOT_MARK = "빈 슬롯"
+_QUIET_MARKS = (KEY_REJECTED_MARK, EMPTY_SLOT_MARK)
+
 
 def result_problems(result, _path: str = "") -> list[str]:
     """태스크 결과에서 실패 신호를 찾는다 — 실패 status, 거부·실패 건수.
@@ -163,7 +169,7 @@ def result_problems(result, _path: str = "") -> list[str]:
         return out
     status = result.get("status")
     why = result.get("reason") or result.get("error") or ""
-    if status in FAILURE_STATUSES and KEY_REJECTED_MARK not in str(why):
+    if status in FAILURE_STATUSES and not any(m in str(why) for m in _QUIET_MARKS):
         out.append(f"{_path}status={status}" + (f" ({str(why)[:150]})" if why else ""))
     for k in ("rejected", "failed"):
         v = result.get(k)

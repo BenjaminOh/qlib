@@ -42,6 +42,25 @@ def test_key_rejection_results_are_left_to_the_daily_key_alert():
                                    "cool": {"status": "ok", "failed": 1}}) == ["cool/failed=1"]
 
 
+def test_empty_account_slots_are_quiet():
+    # acct1~4 는 아직 쓰지 않는 자리다. 매일 no_account 가 나오지만 고장이 아니다.
+    reason = "acct1 계좌 미설정(빈 슬롯) — KIS_ACCT1_APP_KEY, KIS_ACCT1_APP_SECRET, KIS_ACCT1_ACCOUNT_NO 없음"
+    assert notify.result_problems({"acct1": {"status": "no_account", "reason": reason}}) == []
+
+
+def test_partly_missing_credentials_are_still_reported():
+    reason = "cool 계좌 미설정 — KIS_COOL_APP_SECRET 없음"
+    assert notify.result_problems({"status": "no_account", "reason": reason}) != []
+
+
+def test_empty_slot_message_carries_the_mark(monkeypatch):
+    from app.api.services import kis_client as kc
+    monkeypatch.setattr(kc, "_db_creds", lambda account: None)
+    with pytest.raises(kc.AccountNotConfigured) as e:
+        kc._build_client("acct1")
+    assert notify.EMPTY_SLOT_MARK in str(e.value)
+
+
 def test_other_no_account_reasons_are_still_reported():
     p = notify.result_problems({"status": "no_account",
                                 "reason": "KIS 가 계좌 1-01 를 거부했다 — rt_cd=1"})

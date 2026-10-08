@@ -344,6 +344,23 @@ def test_a_failed_cancel_leaves_the_row_open_and_records_why(sweep_env):
     assert "취소 실패" in (o.error or "")
 
 
+@pytest.mark.parametrize("error", ["1 모의투자 정정/취소할 수량이 없습니다.", "1 모의투자 장종료 입니다."])
+def test_nothing_left_to_cancel_is_not_a_failure(sweep_env, error):
+    # 2026-10-08 coolreal 142280: 09:01 에 다 샀는데 원장은 장 마감 대사 전까지
+    # SUBMITTED 라 15:20 취소가 나갔고, KIS 는 "취소할 수량이 없다"고 답했다.
+    _account(sweep_env, buy_ord_type="limit", buy_base="prev_close",
+             buy_offset_pct=0.03, buy_cancel_hhmm="15:20")
+    o = _order(sweep_env)
+    client = CancelClient(ok=False, error=error)
+
+    res = lt.cancel_unfilled_orders(DAY, now=datetime(2026, 8, 18, 15, 30),
+                                    client=client, account_id="main")
+
+    assert res["failed"] == 0 and len(res["moot"]) == 1
+    assert o.status == "SUBMITTED", "체결 여부는 대사가 정한다 — 여기서 바꾸지 않는다"
+    assert not o.error
+
+
 def test_sell_side_uses_its_own_cutoff(sweep_env):
     _account(sweep_env,
              buy_ord_type="limit", buy_base="prev_close", buy_offset_pct=0.03,

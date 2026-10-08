@@ -1973,6 +1973,10 @@ def _order_ids_from_response(raw: str | None) -> tuple[str | None, str | None]:
             str(out.get("ODNO") or "") or None)
 
 
+# KIS 가 취소를 이렇게 거절하면 취소할 주문이 이미 없다는 뜻이다(체결 또는 장 종료).
+CANCEL_MOOT_MARKERS = ("정정/취소할 수량이 없습니다", "장종료")
+
+
 def cancel_unfilled_orders(trade_date: date | None = None, *,
                            now: datetime | None = None,
                            client: KISClient | None = None,
@@ -2054,7 +2058,7 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
                 log.info("cancel sweep: %s 계좌 클라이언트 없음 — %s", account_id, exc)
                 return {"status": "no_account", "trade_date": day.isoformat(),
                         "account_id": account_id, "cancelled": 0, "failed": 0}
-        cancelled, failed = 0, []
+        cancelled, failed, moot = 0, [], []
         for o in due:
             org_no, odno = _order_ids_from_response(o.raw_response)
             odno = odno or o.kis_order_id
@@ -2066,6 +2070,13 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
                 cancelled += 1
                 log.info("cancel sweep: cancelled %s %s(%s) x%d @ %s",
                          o.side, o.name or o.code, o.code, o.qty, o.price)
+            elif any(m in (res.error or "") for m in CANCEL_MOOT_MARKERS):
+                # 취소할 게 없다 — 이미 체결됐거나(원장은 장 마감 뒤 대사가 FILLED 로
+                # 바꾼다) 장이 끝나 주문이 사라졌다. 실패가 아니다(2026-10-08 coolreal
+                # 142280: 09:01 에 다 샀는데 15:20 취소가 거절돼 실패 알림이 갔다).
+                # 상태는 대사에 맡기고 건드리지 않는다.
+                moot.append(f"{o.code}({res.error})")
+                log.info("cancel sweep: %s %s 취소할 것 없음 — %s", o.side, o.code, res.error)
             else:
                 # Surfaced on the row rather than swallowed: a cancel that
                 # failed because the order actually filled looks identical to
@@ -2077,7 +2088,8 @@ def cancel_unfilled_orders(trade_date: date | None = None, *,
         db.commit()
 
     return {"status": "ok", "trade_date": day.isoformat(), "account_id": account_id,
-            "cancelled": cancelled, "failed": len(failed), "errors": failed}
+            "cancelled": cancelled, "failed": len(failed), "errors": failed,
+            "moot": moot}
 
 
 def resolve_cafeopen_orders(trade_date: date | None = None) -> dict:

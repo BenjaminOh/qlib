@@ -1740,8 +1740,12 @@ def _build_client(account: str) -> KISClient:
             missing = [n for n, v in ((f"{env_name}_APP_KEY", key),
                                       (f"{env_name}_APP_SECRET", secret),
                                       (f"{env_name}_ACCOUNT_NO", acct_no)) if not v]
+            # 셋 다 없으면 아직 아무도 쓰지 않는 자리(acct1~4)다. 하나만 빠진 건
+            # 설정 실수다 — 알림은 앞엣것만 조용히 넘긴다(notify.EMPTY_SLOT_MARK).
+            from .notify import EMPTY_SLOT_MARK
+            tag = f"({EMPTY_SLOT_MARK})" if len(missing) == 3 else ""
             raise AccountNotConfigured(
-                f"{account} 계좌 미설정 — " + ", ".join(missing) + " 없음")
+                f"{account} 계좌 미설정{tag} — " + ", ".join(missing) + " 없음")
         creds = {"env": getattr(settings, f"{prefix}_env", ""),
                  "app_key": key, "app_secret": secret, "account_no": acct_no,
                  "account_product": getattr(settings, f"{prefix}_account_product", "")}
