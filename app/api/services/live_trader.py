@@ -1123,7 +1123,7 @@ def sync_account(client: KISClient | None = None,
         except (AccountNotConfigured, ValueError) as exc:
             log.info("sync_account: %s 건너뜀 — %s", strategy, exc)
             return {"status": "no_account", "strategy": strategy,
-                    "trade_date": trade_date.isoformat()}
+                    "trade_date": trade_date.isoformat(), "reason": str(exc)}
     else:
         with SessionLocal() as db:
             snapshot = _simulated_balance(db, strategy=strategy,
@@ -1624,7 +1624,8 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             except (AccountNotConfigured, ValueError) as exc:
                 log.info("bracket_exits: %s 건너뜀 — %s", strategy, exc)
                 return {"status": "no_account", "strategy": strategy,
-                        "trade_date": day.isoformat(), "exits": []}
+                        "trade_date": day.isoformat(), "exits": [],
+                        "reason": str(exc)}
         else:
             snapshot = _simulated_balance(db, strategy=strategy)
         for h in snapshot.holdings:

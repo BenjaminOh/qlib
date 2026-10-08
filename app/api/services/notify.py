@@ -146,6 +146,12 @@ FAILURE_STATUSES = frozenset({
     "unknown_template", "no_calendar", "empty_pool",
 })
 
+# 키 거부는 `notify_account_rejected` 가 계좌·날짜당 1번 따로 알린다. 그 뒤로 같은
+# 계좌를 만지는 태스크마다(09:01 매수·09:05 대사·15:35 대사·15:46 동기화) "결과
+# 이상"을 또 보내면 원인 하나에 하루 4~5통이 온다(2026-10-08). 이 표지가 붙은
+# 실패는 결과 알림에서 뺀다. kis_client 의 AccountRejected 문구와 같아야 한다.
+KEY_REJECTED_MARK = "계좌 KIS 키 거부"
+
 
 def result_problems(result, _path: str = "") -> list[str]:
     """태스크 결과에서 실패 신호를 찾는다 — 실패 status, 거부·실패 건수.
@@ -156,8 +162,8 @@ def result_problems(result, _path: str = "") -> list[str]:
     if not isinstance(result, dict):
         return out
     status = result.get("status")
-    if status in FAILURE_STATUSES:
-        why = result.get("reason") or result.get("error") or ""
+    why = result.get("reason") or result.get("error") or ""
+    if status in FAILURE_STATUSES and KEY_REJECTED_MARK not in str(why):
         out.append(f"{_path}status={status}" + (f" ({str(why)[:150]})" if why else ""))
     for k in ("rejected", "failed"):
         v = result.get(k)

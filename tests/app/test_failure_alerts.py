@@ -30,8 +30,22 @@ def test_normal_results_are_quiet(result):
 
 
 def test_failure_status_is_reported_with_reason():
-    p = notify.result_problems({"status": "no_account", "reason": "카페 계좌 KIS 키 거부"})
-    assert p == ["status=no_account (카페 계좌 KIS 키 거부)"]
+    p = notify.result_problems({"status": "balance_unavailable", "reason": "KIS 잔고 조회 실패"})
+    assert p == ["status=balance_unavailable (KIS 잔고 조회 실패)"]
+
+
+def test_key_rejection_results_are_left_to_the_daily_key_alert():
+    # 키 거부는 계좌·날짜당 1번 따로 알린다. 같은 원인으로 건너뛴 태스크마다 또 보내지 않는다.
+    reason = "카페 계좌 KIS 키 거부 — {\"error_code\":\"EGW00105\"}"
+    assert notify.result_problems({"status": "no_account", "reason": reason}) == []
+    assert notify.result_problems({"cafe": {"status": "no_account", "reason": reason},
+                                   "cool": {"status": "ok", "failed": 1}}) == ["cool/failed=1"]
+
+
+def test_other_no_account_reasons_are_still_reported():
+    p = notify.result_problems({"status": "no_account",
+                                "reason": "KIS 가 계좌 1-01 를 거부했다 — rt_cd=1"})
+    assert len(p) == 1 and p[0].startswith("status=no_account")
 
 
 def test_rejected_orders_are_reported():

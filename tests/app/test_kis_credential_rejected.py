@@ -78,6 +78,8 @@ def test_rejected_key_gives_up_at_once(env, monkeypatch):
     assert sleeps == []          # 70초 대기 없음
     assert len(posts) == 1       # 재발급 시도 없음
     assert "카페" in str(e.value)
+    from app.api.services import notify
+    assert notify.KEY_REJECTED_MARK in str(e.value)   # 결과 알림 중복 억제가 이 표지를 본다
 
 
 def test_rejection_is_skippable_like_missing_credentials(env, monkeypatch):

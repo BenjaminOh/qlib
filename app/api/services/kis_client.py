@@ -551,8 +551,9 @@ class KISClient:
                 log.error("KIS token issue rejected (credentials): %s %s",
                           r.status_code, reason)
                 self._alert_credential_rejected(reason)
+                from .notify import KEY_REJECTED_MARK
                 raise AccountRejected(
-                    f"{self.account_label or self.cano} 계좌 KIS 키 거부 — {reason}")
+                    f"{self.account_label or self.cano} {KEY_REJECTED_MARK} — {reason}")
             if r.status_code in (403, 429):
                 # EGW00133: issuance is rate-limited to 1/min. When two
                 # processes race (e.g. the 09:00 order task vs a dashboard
