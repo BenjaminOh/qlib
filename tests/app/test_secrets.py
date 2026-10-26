@@ -31,7 +31,7 @@ def _reset():
 
 def test_roundtrip(monkeypatch):
     monkeypatch.setattr(S.settings, "secrets_key", KEY, raising=False)
-    plain = "PSYuRT17NUgfuprLAyQKSZ0vXW7VKL8nnn8V"
+    plain = "PSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
     token = S.encrypt(plain)
 
@@ -70,11 +70,12 @@ def test_empty_values_pass_through(monkeypatch):
 
 def test_mask_hides_the_middle():
     """화면·로그에 쓰는 표시용. 어느 키인지 알아보되 복원은 안 돼야 한다."""
-    plain = "PSYuRT17NUgfuprLAyQKSZ0vXW7VKL8nnn8V"
+    # 더미 값이다 — 공개 저장소라 실제 앱키를 붙여넣지 않는다(2026-10-26 교체).
+    plain = "PSdm" + "x" * 29 + "dmy"
 
     m = S.mask(plain)
 
-    assert m.startswith("PSYu") and m.endswith("n8V")
+    assert m.startswith("PSdm") and m.endswith("dmy")
     assert "…" in m
     assert len(m) < len(plain)
     # 가운데가 남으면 마스킹이 아니다

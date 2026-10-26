@@ -9,6 +9,7 @@ from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import get_current_user
+from ..core.backtest_guard import UnsafeBacktestConfig, check_backtest_config
 
 from ..schemas.backtest import (
     BacktestJobResponse,
@@ -41,6 +42,10 @@ _group_registry: dict[str, dict] = {}
 @router.post("/", response_model=BacktestJobResponse)
 def submit_backtest(req: BacktestRequest):
     config = req.model_dump()
+    try:
+        check_backtest_config(config)
+    except UnsafeBacktestConfig as exc:
+        raise HTTPException(400, str(exc)) from exc
     result = run_backtest_task.delay(config)
     _job_registry[result.id] = {
         "instruments": req.instruments,
@@ -169,6 +174,7 @@ def submit_grid(req: GridBacktestRequest):
     group_id = str(uuid.uuid4())
     job_ids: list[str] = []
     members: list[dict] = []
+    cfgs: list[tuple[dict, tuple]] = []
 
     for model in req.models:
         for strategy in req.strategies:
@@ -185,25 +191,33 @@ def submit_grid(req: GridBacktestRequest):
                 cfg["strategy_kwargs"] = dict(strategy.kwargs)
                 for k, v in zip(sweep_keys, combo):
                     _set_dotted(cfg, k, v)
+                # sweep 은 점 경로로 아무 키나 덮어쓴다(model_module 포함) — 덮어쓴 뒤에 검사.
+                try:
+                    check_backtest_config(cfg)
+                except UnsafeBacktestConfig as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                cfgs.append((cfg, combo))
 
-                result = run_backtest_task.delay(cfg)
-                job_ids.append(result.id)
+    # 전부 통과한 뒤에만 큐에 넣는다 — 중간에 거부되면 앞의 조합만 돌아가는 일을 막는다.
+    for cfg, combo in cfgs:
+        result = run_backtest_task.delay(cfg)
+        job_ids.append(result.id)
 
-                summary = {
-                    "model_class": cfg["model_class"],
-                    "strategy_class": cfg["strategy_class"],
-                    **{k: v for k, v in zip(sweep_keys, combo)},
-                }
-                members.append({"job_id": result.id, "summary": summary})
-                _job_registry[result.id] = {
-                    "instruments": cfg["instruments"],
-                    "strategy_class": cfg["strategy_class"],
-                    "model_class": cfg["model_class"],
-                    "backtest_start": cfg["backtest_start"],
-                    "backtest_end": cfg["backtest_end"],
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "group_id": group_id,
-                }
+        summary = {
+            "model_class": cfg["model_class"],
+            "strategy_class": cfg["strategy_class"],
+            **{k: v for k, v in zip(sweep_keys, combo)},
+        }
+        members.append({"job_id": result.id, "summary": summary})
+        _job_registry[result.id] = {
+            "instruments": cfg["instruments"],
+            "strategy_class": cfg["strategy_class"],
+            "model_class": cfg["model_class"],
+            "backtest_start": cfg["backtest_start"],
+            "backtest_end": cfg["backtest_end"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "group_id": group_id,
+        }
 
     _group_registry[group_id] = {
         "members": members,

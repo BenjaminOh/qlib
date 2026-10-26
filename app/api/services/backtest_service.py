@@ -46,6 +46,12 @@ def run_backtest(config: dict) -> dict:
     -------
     dict with keys: metrics, extended_metrics, portfolio, recommended_picks, error
     """
+    # 요청이 어디서 왔든(grid sweep 포함) 여기서 다시 막는다 — core/backtest_guard.py
+    from ..core.backtest_guard import UnsafeBacktestConfig, check_backtest_config
+    try:
+        check_backtest_config(config)
+    except UnsafeBacktestConfig as exc:
+        return {"error": f"rejected: {exc}"}
     try:
         # 1. Build data handler
         handler_config = {

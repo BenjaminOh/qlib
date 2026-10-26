@@ -14,11 +14,11 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { login } from "@/lib/auth";
+import { login, safeNext } from "@/lib/auth";
 
 function LoginForm() {
   const params = useSearchParams();
-  const next = params.get("next") || "/";
+  const next = safeNext(params.get("next"));
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

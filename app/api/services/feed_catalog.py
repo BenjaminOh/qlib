@@ -125,9 +125,11 @@ def common_params() -> dict:
     """Settings every runner has regardless of type — safety rails first."""
     return {
         "mode": _enum("실행 모드", "sim", ["sim", "paper", "real"]),
-        "seed_cash": _num("시드(원)", 10_000_000.0, 100_000),
-        "max_order_value": _num("1회 주문 상한(원) — 시장가 포함", settings.live_max_order_value,
-                                0),
+        "seed_cash": _num("시드(원)", 10_000_000.0, 100_000, 1_000_000_000),
+        # 최댓값이 없으면 runner 검증이 1e15·inf 를 받았다(2026-10-26 점검). runner 의
+        # 기동 가드 상한(MAX_ORDER_VALUE_CEILING)과 같은 값.
+        "max_order_value": _num("1회 매수 상한(원) — 시장가 포함", settings.live_max_order_value,
+                                10_000, 50_000_000),
         "manual_exit_max_per_day": _int("수동 청산 인식 하루 상한",
                                         settings.live_manual_exit_max_per_day, 0, 50),
     }

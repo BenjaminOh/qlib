@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth import get_current_user
+from ..core.backtest_guard import UnsafeBacktestConfig, check_field
 from ..core.kr_market import KR_MARKETS
 from ..schemas.data import (
     CalendarResponse,
@@ -54,6 +55,11 @@ def get_features(
 ):
     inst_list = [s.strip() for s in instruments.split(",")]
     field_list = [s.strip() for s in fields.split(",")]
+    try:
+        for f in field_list:
+            check_field(f)  # qlib 이 eval 하는 식이다 — core/backtest_guard.py
+    except UnsafeBacktestConfig as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         data = data_service.get_features(inst_list, field_list, start, end, freq)
     except Exception as e:

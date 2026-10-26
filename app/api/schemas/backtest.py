@@ -167,8 +167,9 @@ class GridBacktestRequest(BaseModel):
     models: list[CatalogEntry]
     strategies: list[CatalogEntry]
     param_sweeps: dict[str, list] = Field(default_factory=dict)
-    # Hard cap to keep one accidental click from queueing 10k jobs.
-    max_jobs: int = 100
+    # Hard cap to keep one accidental click from queueing 10k jobs. The client
+    # may lower it but not raise it past the server ceiling.
+    max_jobs: int = Field(100, ge=1, le=200)
 
 
 class GridJobResponse(BaseModel):

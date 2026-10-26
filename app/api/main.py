@@ -29,30 +29,41 @@ def _assert_secrets_configured() -> None:
     the difference between "the deploy failed" and "the deploy succeeded and
     anyone can forge a session".
 
-    Enforced whenever real money is reachable (`kis_env == "real"`) and, for
-    jwt_secret, always — a forgeable session on the paper account still exposes
-    the dashboard and the kill switch.
+    Both are enforced in EVERY env. The admin-password check used to apply
+    only when `kis_env == "real"`; production ran on paper, and on 2026-10-26
+    `admin` / the public placeholder logged in to the live site. A paper
+    session still reaches the kill switch, account credentials and — through
+    the backtest endpoints — the worker itself.
     """
     if settings.jwt_secret == INSECURE_PLACEHOLDER:
         raise RuntimeError(
             "QLIB_API_JWT_SECRET is still the placeholder. Anyone could forge a "
             "session cookie. Set it in .env before starting."
         )
-    if settings.kis_env == "real" and settings.admin_password == INSECURE_PLACEHOLDER:
+    if settings.admin_password == INSECURE_PLACEHOLDER:
         raise RuntimeError(
-            "QLIB_API_ADMIN_PASSWORD is still the placeholder while KIS_ENV=real. "
+            "QLIB_API_ADMIN_PASSWORD is still the placeholder. Anyone could log in. "
             "Set it in .env before starting."
         )
 
 
 def _seed_admin_user() -> None:
-    """Create the admin account on first startup. Idempotent."""
-    from .auth.security import bcrypt_hash
+    """Create the admin account, or bring its password in line with .env.
+
+    .env is the source of truth. This used to return as soon as the row
+    existed, so changing QLIB_API_ADMIN_PASSWORD later never reached the DB —
+    the hash seeded on first boot (the placeholder) stayed valid for months.
+    """
+    from .auth.security import bcrypt_hash, bcrypt_verify
     from .db import SessionLocal, User
 
     with SessionLocal() as db:
         existing = db.query(User).filter_by(username=settings.admin_username).first()
         if existing:
+            if not bcrypt_verify(settings.admin_password, existing.password_hash):
+                existing.password_hash = bcrypt_hash(settings.admin_password)
+                db.commit()
+                print(f"[api] admin password synced from .env: {settings.admin_username}")
             return
         db.add(User(
             username=settings.admin_username,

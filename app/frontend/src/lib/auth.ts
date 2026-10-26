@@ -49,3 +49,11 @@ export async function fetchMe(): Promise<MeResponse | null> {
   }
   return null;
 }
+
+// `next` must be a path on THIS site. Anything else — `javascript:…` (runs
+// script in our origin with the new session) or `//evil.com` / `/\\evil.com`
+// (a protocol-relative jump off-site) — falls back to "/".
+export function safeNext(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return "/";
+  return raw;
+}

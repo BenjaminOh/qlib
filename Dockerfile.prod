@@ -70,6 +70,11 @@ COPY tests/ ./tests/
 # 전략 카탈로그 정합성 테스트가 프론트 목록도 대조한다 — 이 파일이 없으면
 # 그 검사가 skip 되어 게이트에 구멍이 난다(2026-09-07 추가).
 COPY app/frontend/src/lib/strategies.ts ./app/frontend/src/lib/strategies.ts
+# 보안 회귀 테스트(test_security_hardening)가 백테스트 허용 목록을 프런트 카탈로그와,
+# 로그인 next 검증을 페이지 소스와 대조한다.
+COPY app/frontend/src/lib/catalogs.ts ./app/frontend/src/lib/catalogs.ts
+COPY app/frontend/src/lib/auth.ts ./app/frontend/src/lib/auth.ts
+COPY app/frontend/src/app/login/page.tsx ./app/frontend/src/app/login/page.tsx
 # feed 가 공개 도메인에서 막혀 있는지(test_feed_api)를 nginx 설정으로 검사한다.
 COPY infra/nginx ./infra/nginx
 

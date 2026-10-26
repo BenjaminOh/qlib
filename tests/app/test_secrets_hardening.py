@@ -44,15 +44,19 @@ def test_placeholder_admin_password_blocks_real_env(monkeypatch):
         main._assert_secrets_configured()
 
 
-def test_placeholder_admin_password_allowed_on_paper(monkeypatch):
-    """A dev checkout must still run — the guard is about real money."""
+def test_placeholder_admin_password_refused_on_paper_too(monkeypatch):
+    """Used to be allowed on paper "because the guard is about real money" —
+    and production ran on paper, so the public placeholder logged in to the
+    live site (2026-10-26). A paper session still reaches the kill switch,
+    the account credentials and the backtest workers."""
     from app.api import main
 
     monkeypatch.setattr(main.settings, "jwt_secret", "a-real-64-char-secret")
     monkeypatch.setattr(main.settings, "admin_password", main.INSECURE_PLACEHOLDER)
     monkeypatch.setattr(main.settings, "kis_env", "paper")
 
-    main._assert_secrets_configured()   # must not raise
+    with pytest.raises(RuntimeError, match="ADMIN_PASSWORD"):
+        main._assert_secrets_configured()
 
 
 def test_configured_secrets_pass(monkeypatch):
