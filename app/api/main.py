@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import auth_router
 from .config import settings
-from .routers import backtest, data, live
+from .routers import backtest, data, feed, live
 from .schemas.common import HealthResponse
 
 _qlib_initialized = False
@@ -103,6 +103,7 @@ app.include_router(auth_router, prefix="/api/v1")  # /login, /logout, /me — no
 app.include_router(data.router, prefix="/api/v1")
 app.include_router(backtest.router, prefix="/api/v1")
 app.include_router(live.router, prefix="/api/v1")
+app.include_router(feed.router, prefix="/api/v1")  # runner 전용 — bearer token, 공개 경로 아님
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)

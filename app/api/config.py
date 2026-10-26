@@ -214,5 +214,11 @@ class Settings(BaseSettings):
     # proxy would read an attacker-supplied value again.
     trusted_proxy_hops: int = 1
 
+    # /api/v1/feed bearer tokens — one per runner container so a single one can
+    # be revoked. JSON list in env: QLIB_API_FEED_TOKENS='["…","…"]'. Empty
+    # (default) disables the feed; tokens under 32 chars are ignored.
+    # 생성: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    feed_tokens: list[str] = []
+
 
 settings = Settings()

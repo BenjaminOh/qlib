@@ -70,6 +70,8 @@ COPY tests/ ./tests/
 # 전략 카탈로그 정합성 테스트가 프론트 목록도 대조한다 — 이 파일이 없으면
 # 그 검사가 skip 되어 게이트에 구멍이 난다(2026-09-07 추가).
 COPY app/frontend/src/lib/strategies.ts ./app/frontend/src/lib/strategies.ts
+# feed 가 공개 도메인에서 막혀 있는지(test_feed_api)를 nginx 설정으로 검사한다.
+COPY infra/nginx ./infra/nginx
 
 # 종료코드를 반드시 먼저 본다. 최초 구현은 `pytest | tee` 를 `;` 로 끝내
 # 종료코드를 버리고 "N passed" 문자열만 grep 했는데, 실패 요약도

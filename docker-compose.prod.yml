@@ -70,9 +70,15 @@ services:
     # 그 컨테이너는 포트를 호스트 127.0.0.1 에만 바인딩하므로 host-gateway 로는
     # 닿지 않는다(실측: Connection refused). default 를 같이 적어야 redis 가
     # 계속 보인다 — networks 를 쓰는 순간 기본 네트워크가 대체되기 때문이다.
+    #
+    # `qlib-hub-api` 별칭은 runner 컨테이너가 /api/v1/feed 를 부르는 고정 주소다
+    # (http://qlib-hub-api:5001). blue/green 둘 다 같은 별칭을 달기 때문에
+    # 전환 중에는 잠깐 양쪽으로 갈 수 있다. feed 는 읽기 전용이라 이것이 허용된다.
     networks:
-      - default
-      - app-network
+      default:
+      app-network:
+        aliases:
+          - qlib-hub-api
     depends_on:
       redis:
         condition: service_healthy
