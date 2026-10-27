@@ -1661,33 +1661,11 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 continue
             if h.code in already_sold:
                 continue
-            # Episode entry = first BUY after the last full SELL (sim episodes
-            # hold exactly one BUY today, but keep this robust to re-entries).
-            # 체결된 매도만 에피소드를 끝낸다. 거부된 매도까지 세면 그 종목은 "이미
-            # 팔렸다"로 읽혀 다시는 판정되지 않는다 — 2026-10 coolreal 6종목이
-            # 손절선 아래에서 그대로 남은 두 번째 원인. 시뮬 매도는 SIMULATED 라 무관.
-            last_sell = (db.query(Order)
-                           .filter(Order.strategy == strategy,
-                                   Order.code == h.code,
-                                   Order.side == "SELL",
-                                   Order.status.in_(EXECUTED_STATUSES))
-                           .order_by(Order.trade_date.desc())
-                           .first())
-            # A BUY row is only an entry if it actually filled. cafeopen keeps
-            # its unfilled reservations (CANCELLED, and PENDING until 10:00
-            # resolves them) instead of deleting them, so without this filter a
-            # stale cancel from an earlier day would win the .asc() ordering
-            # and hand the bracket the wrong entry_date — dating the position
-            # before it existed and skipping the entry-day exclusion below.
-            entry_q = (db.query(Order)
-                         .filter(Order.strategy == strategy,
-                                 Order.code == h.code,
-                                 Order.side == "BUY",
-                                 Order.status.notin_(("CANCELLED", "PENDING",
-                                                      "REJECTED"))))
-            if last_sell is not None:
-                entry_q = entry_q.filter(Order.trade_date > last_sell.trade_date)
-            entry = entry_q.order_by(Order.trade_date.asc()).first()
+            # 에피소드 진입 = 보유가 0 → 양수가 된 시점의 매수(`_episode_entry`, 수량으로 가른다).
+            # 예전에는 "마지막 매도 다음의 첫 매수"였는데, 사다리 부분 매도 뒤에는 그런 매수가 없어
+            # 남은 수량이 다시 판정되지 않았다 — scale 23종목이 8월부터 방치(2026-10-27 발견).
+            # 거부·취소된 매도와 미체결 예약 매수(cafeopen 의 CANCELLED/PENDING)도 여기서 걸러진다.
+            entry = _episode_entry(db, strategy, h.code)
             if entry is None or entry.trade_date >= day:
                 continue  # entered at this day's close — range predates entry
             bar = _day_ohlc_any(h.code, day)
