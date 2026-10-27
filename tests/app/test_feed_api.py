@@ -236,3 +236,14 @@ def test_nginx_hides_feed_from_the_public_host():
     deny = conf.index("location /api/v1/feed/")
     assert deny < conf.index("location /api/ {")
     assert "return 404" in conf[deny:conf.index("}", deny)]
+
+
+def test_nginx_allows_only_the_office_ip_on_https():
+    """2026-10-26 사용자 결정: qlib 은 사무실 IP 에서만. 80(ACME)은 열어 둔다."""
+    conf = (Path(__file__).resolve().parents[2] / "infra/nginx/qlib.tmanager.kr.conf").read_text()
+    http_block = conf[:conf.index("listen 443")]
+    https_block = conf[conf.index("listen 443"):]
+    allow = https_block.index("allow 61.255.176.73;")
+    deny = https_block.index("deny all;")
+    assert allow < deny < https_block.index("location ")
+    assert "deny all" not in http_block
