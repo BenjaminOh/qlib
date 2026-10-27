@@ -172,6 +172,39 @@ def test_bars_rejects_bad_ranges(codes, start, end):
     assert e.value.status_code == 400
 
 
+def test_bars_fall_back_to_kis_for_codes_missing_in_kr_data(monkeypatch):
+    """카페 후보(코스닥 소형주)는 kr_data 에 없다 — runner sim 은 KIS 키가 없어 스스로 못 채운다."""
+    import types
+
+    import pandas as pd
+    import qlib.data
+    from app.api.services import kis_client
+
+    # D 는 qlib.init() 전에는 속성이 없는 Wrapper 다 — 모듈 속성째 바꿔 끼운다.
+    monkeypatch.setattr(qlib.data, "D", types.SimpleNamespace(
+        features=lambda *a, **kw: pd.DataFrame()))
+    calls = []
+
+    class _Client:
+        def get_daily_bars(self, code):
+            calls.append(code)
+            if code == "BAD":
+                raise RuntimeError("KIS down")
+            return [{"date": "2026-10-22", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 5},
+                    {"date": "2026-10-23", "open": 10, "high": 12, "low": 9, "close": 11, "volume": 7},
+                    {"date": "2026-10-26", "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}]
+
+    monkeypatch.setattr(kis_client, "get_kis_client", lambda account=None: _Client())
+
+    res = feed.get_bars(codes="0010F0,BAD", start=D1, end=D2)
+
+    assert calls == ["0010F0", "BAD"]
+    # 범위 밖(10-22)·값 0 인 봉은 버리고, 실패한 종목은 빈 목록으로 남긴다.
+    assert res["bars"]["0010F0"] == [{"date": "2026-10-23", "open": 10.0, "high": 12.0,
+                                      "low": 9.0, "close": 11.0, "volume": 7.0}]
+    assert res["bars"]["BAD"] == []
+
+
 # ─── 카탈로그 ────────────────────────────────────────────────────────
 
 ACCOUNT_SLOTS = {models.STRATEGY_ACCT1, models.STRATEGY_ACCT2,
@@ -222,6 +255,17 @@ def test_twin_presets_differ_only_where_intended():
     assert p["cafereal"]["params"].get("ret20_max") is None
     assert p["flow"]["params"]["flow_overlay"] is True
     assert p["cafeopen"].get("parity") is False  # 재정의 — 병행 검증 대상 아님
+
+
+def test_exit_timing_is_a_strategy_setting_on_every_exit_type():
+    """사용자 요청(2026-10-27): 청산 방식은 전략에서 고른다. 기본값은 허브 실계좌와 같은 next_open."""
+    types = feed_catalog.strategy_types()
+    for t in (feed_catalog.TYPE_CAFE, feed_catalog.TYPE_BRACKET, feed_catalog.TYPE_SURGE):
+        spec = types[t]["params"]["exit_mode"]
+        assert spec["default"] == "next_open" and spec["enum"] == ["next_open", "intraday"]
+        assert types[t]["params"]["intraday_interval_min"]["default"] == 5
+    assert "exit_mode" not in types[feed_catalog.TYPE_RANK]["params"]  # 순위 이탈 매도만
+    assert feed_catalog.catalog()["version"] == 2
 
 
 def test_catalog_ships_flow_config():

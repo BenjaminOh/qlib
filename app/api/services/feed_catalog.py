@@ -21,7 +21,9 @@ from ..db.models import (
     STRATEGY_OPEN, STRATEGY_SCALE, STRATEGY_SURGE, STRATEGY_TRAIL,
 )
 
-CATALOG_VERSION = 1
+# 2: 청산 방식(exit_mode·intraday_interval_min) 추가(2026-10-27 사용자 요청 — "청산 방식은
+#    전략에서 설정할 수 있어야"). 기본값 next_open 은 허브 실계좌가 지금 하는 방식이다.
+CATALOG_VERSION = 2
 
 TYPE_CAFE = "cafe"
 TYPE_RANK = "rank"
@@ -47,6 +49,19 @@ def _int(title: str, default, minimum=None, maximum=None) -> dict:
 
 def _enum(title: str, default: str, values: list[str]) -> dict:
     return {"type": "string", "title": title, "default": default, "enum": values}
+
+
+# 청산 주문을 언제 내는가 — 청산이 있는 세 유형 공통. 판정 규칙(익절·손절선)은 같고
+# 주문 시각만 다르다.
+#   next_open : 장 마감 뒤 그날 봉으로 판정 → 다음 거래일 09:00 시장가. 허브 실계좌와
+#               같아서 병행 검증(P3)이 성립한다. 장중에 선을 뚫어도 다음 날 아침에 판다.
+#   intraday  : 장중 N분마다 현재가를 보고 선을 넘으면 바로 시장가. 손실이 덜 벌어지지만
+#               허브와 판정 시점이 달라 P3 비교 대상이 아니다.
+def _exit_timing() -> dict:
+    return {
+        "exit_mode": _enum("청산 방식", "next_open", ["next_open", "intraday"]),
+        "intraday_interval_min": _int("장중 감시 주기(분) — intraday 일 때", 5, 1, 30),
+    }
 
 
 # 구조적 손절(직전 N일 최저가 × (1−버퍼), 상한 −sl) — bracket·surge 공통.
@@ -76,6 +91,7 @@ def strategy_types() -> dict[str, dict]:
                 "stop_cap": _num("손절 상한(평단 대비)", settings.live_cafe_stop_cap, 0.01, 0.50),
                 "open_discount": _num("next_open_discount 의 시가 할인",
                                       settings.live_cafeopen_discount, 0.0, 0.20),
+                **_exit_timing(),
             },
         },
         TYPE_RANK: {
@@ -106,6 +122,7 @@ def strategy_types() -> dict[str, dict]:
                            "title": "분할 익절 사다리 — 비우면 없음", "default": None},
                 "floor_gap": _num("사다리 바닥 간격", None, 0.01, 0.50, nullable=True),
                 **_structural_stop(),
+                **_exit_timing(),
             },
         },
         TYPE_SURGE: {
@@ -116,6 +133,7 @@ def strategy_types() -> dict[str, dict]:
                 "max_buys": _int("하루 최대 매수", settings.live_surge_max_buys, 1, 10),
                 "tp": _num("익절", 0.10, 0.01, 1.0),
                 **_structural_stop(),
+                **_exit_timing(),
             },
         },
     }

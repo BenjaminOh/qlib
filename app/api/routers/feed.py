@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 # Shorter than this is a placeholder, not a secret — refused like a missing one.
 MIN_TOKEN_LEN = 32
 MAX_BAR_CODES = 50
+# KIS 일봉 대체는 종목당 1회 호출(초당 한도 공유) — 카페 슬롯 수만큼이면 충분하다.
+MAX_BAR_FALLBACK = 20
 MAX_BAR_DAYS = 400
 
 
@@ -207,6 +209,24 @@ def get_bars(codes: str = Query(..., description="comma-separated"),
                 "date": ts.date().isoformat(), "open": float(vals[0]),
                 "high": float(vals[1]), "low": float(vals[2]),
                 "close": float(vals[3]), "volume": float(vals[4])})
+    # kr_data 에 없는 종목(카페 후보 대부분 — 코스닥 소형주)은 허브의 KIS 일봉으로 채운다.
+    # runner 의 sim 모드는 KIS 키가 없어 스스로 채울 수 없다. `_day_ohlc_any` 와 같은 대체.
+    missing = [c for c in code_list if not out.get(c)][:MAX_BAR_FALLBACK]
+    if missing:
+        from ..services.kis_client import get_kis_client
+        client = get_kis_client()
+        lo, hi = start.isoformat(), end.isoformat()
+        for code in missing:
+            try:
+                rows = client.get_daily_bars(code)
+            except Exception as exc:  # noqa: BLE001 — 한 종목 실패가 응답 전체를 막지 않게
+                log.warning("feed/bars KIS fallback %s: %s", code, exc)
+                continue
+            out[code] = [{"date": b["date"], "open": float(b["open"]), "high": float(b["high"]),
+                          "low": float(b["low"]), "close": float(b["close"]),
+                          "volume": float(b.get("volume") or 0)}
+                         for b in rows if lo <= b["date"] <= hi
+                         and all(b[k] > 0 for k in ("open", "high", "low", "close"))]
     return {"start": start.isoformat(), "end": end.isoformat(), "bars": out}
 
 
