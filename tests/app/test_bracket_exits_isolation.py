@@ -12,7 +12,7 @@ pytest.importorskip("sqlalchemy")
 pytest.importorskip("fastapi")
 pytest.importorskip("celery")
 
-from app.api.db import STRATEGY_CAFEREAL
+from app.api.db import STRATEGY_CAFE
 from app.api.services import live_trader as lt
 from app.api.services import notify
 from app.api.services import trading_calendar
@@ -26,7 +26,9 @@ def run(monkeypatch):
 
     def fake_exits(strategy):
         calls["exits"].append(strategy)
-        if strategy == STRATEGY_CAFEREAL:
+        # 2026-09 사고는 cafereal 이었지만 실계좌는 2026-10-27 부터 09:00 슬롯으로
+        # 옮겼다 — 같은 성질을 시뮬 전략 하나로 재현한다.
+        if strategy == STRATEGY_CAFE:
             raise RuntimeError("403 Client Error: Forbidden for url: .../oauth2/tokenP")
         return {"status": "ok", "exits": []}
 
@@ -47,16 +49,17 @@ def run(monkeypatch):
 def test_one_failing_strategy_does_not_stop_the_rest(run):
     task, calls = run
 
-    with pytest.raises(RuntimeError, match=STRATEGY_CAFEREAL):
+    with pytest.raises(RuntimeError, match=STRATEGY_CAFE):
         task.run()
 
-    # 실패한 전략 뒤의 전략도 전부 판정됐다.
-    assert calls["exits"] == list(lt.BRACKET_STRATEGIES)
+    # 실패한 전략 뒤의 전략도 전부 판정됐다(실계좌는 09:00 슬롯이라 여기 없다).
+    assert calls["exits"] == [s for s in lt.BRACKET_STRATEGIES
+                              if s not in lt.REAL_BRACKET_STRATEGIES]
     # limit 매수 판정과 그 스냅샷도 돌았다 — 이번 사고에서 사라졌던 것.
     assert calls["limit"] == 1
     assert "limit" in calls["sync"]
     # 실패한 전략은 스냅샷을 찍지 않는다(반쯤 된 상태로 곡선 점을 남기지 않게).
-    assert STRATEGY_CAFEREAL not in calls["sync"]
+    assert STRATEGY_CAFE not in calls["sync"]
 
 
 def test_no_failure_returns_results(run, monkeypatch):
@@ -66,5 +69,5 @@ def test_no_failure_returns_results(run, monkeypatch):
 
     res = task.run()
 
-    assert set(lt.BRACKET_STRATEGIES) <= set(res)
+    assert set(lt.BRACKET_STRATEGIES) - set(lt.REAL_BRACKET_STRATEGIES) <= set(res)
     assert res["limit_entries"] == {"status": "ok"}

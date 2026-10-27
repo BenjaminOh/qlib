@@ -322,7 +322,7 @@ def notify_order_detail(side: str, code: str, name: str | None, qty: int,
 
 
 def notify_bracket_exits(strategy: str, result: dict) -> None:
-    """15:45 체인(폴백 16:25) 청산 detail — only when something actually sold."""
+    """청산 detail — 시뮬은 15:45 체인(폴백 16:25), 실계좌는 다음 날 09:00. 판 게 있을 때만."""
     exits = result.get("exits") or []
     if not telegram_enabled() or not exits:
         return
@@ -342,6 +342,10 @@ def notify_bracket_exits(strategy: str, result: dict) -> None:
         ])
         if e.get("sl_px"):
             lines.append(f"🛡 손절 기준: {_won(e['sl_px'])}원 ({e.get('sl_kind', '')})")
+        if e.get("status") == "SUBMITTED":
+            lines.append("🕘 시장가 매도 접수 — 위 가격은 판정 기준가, 실제 체결가는 대사에서 확정")
+        elif e.get("status") == "REJECTED":
+            lines.append("❌ <b>KIS 가 주문을 거부함</b> — 보유가 남는다. 내일 09:00 에 다시 판정한다")
         lines.append("")
     send_telegram("\n".join(lines))
 

@@ -1477,7 +1477,8 @@ def _account_for(strategy: str) -> str:
 
 def _sell_bracket(db: Session, trade_date: date, code: str, qty: int,
                   price: float, client, *, strategy: str,
-                  pnl: float | None = None, reasons: dict | None = None) -> None:
+                  pnl: float | None = None, reasons: dict | None = None,
+                  order_date: date | None = None) -> str:
     """Bracket exit — simulated fill, or a REAL sell when `client` is given.
 
     The bracket engine was sim-only: it wrote a paper Order+Fill and never
@@ -1489,26 +1490,33 @@ def _sell_bracket(db: Session, trade_date: date, code: str, qty: int,
     ladder rung). A real order is placed with the account's sell policy, so the
     executed price will differ from that level — the judged level is kept in
     `reasons.exit` for the retro to compare against.
+
+    실주문은 `order_date`(판정한 봉의 다음 거래일 아침)로 기록한다 — 대사(reconcile)가
+    KIS 주문 조회를 주문일로 하기 때문이다. 반환값은 원장 상태(SIMULATED·SUBMITTED·REJECTED).
     """
     if client is None:
         _persist_simulated_fill(db, trade_date, code, "SELL", qty, price,
                                 strategy=strategy, pnl=pnl, reasons=reasons)
-        return
+        return "SIMULATED"
+    od = order_date or trade_date
     account_id = _account_for(strategy)
     sell_pol = get_policies(db, account_id)[1]
     try:
-        sell_px = (order_price(client, code, sell_pol, trade_date)
+        sell_px = (order_price(client, code, sell_pol, od)
                    if sell_pol.is_limit else None)
     except BasePriceUnavailable as exc:
         log.warning("%s SELL %s — 기준가 없음, 시장가로: %s", strategy, code, exc)
         sell_px = None
     res = client.place_order(code, "SELL", qty, price=sell_px)
-    _persist_order(db, trade_date, code, "SELL", qty, sell_px, res,
-                   strategy=strategy, reasons=reasons)
+    # account_id 를 빠뜨리면 기본값 main 으로 기록된다 — 2026-10-13~23 coolreal
+    # 매도 6건이 실제로는 cool 계좌로 나갔는데 장부에는 main 으로 남았다.
+    o = _persist_order(db, od, code, "SELL", qty, sell_px, res,
+                       strategy=strategy, account_id=account_id, reasons=reasons)
     if not res.ok:
         log.warning("%s SELL REJECTED code=%s qty=%d error=%s",
                     strategy, code, qty, res.error)
     time.sleep(KIS_THROTTLE_SECONDS)
+    return o.status
 
 
 # 원장이 "실제로 체결됐다"고 말하는 상태. SUBMITTED 는 여기 없다 —
@@ -1565,7 +1573,8 @@ def _episode_entry(db: Session, strategy: str, code: str) -> Order | None:
 
 
 def evaluate_bracket_exits(trade_date: date | None = None,
-                           strategy: str = STRATEGY_CLOSE) -> dict:
+                           strategy: str = STRATEGY_CLOSE,
+                           order_date: date | None = None) -> dict:
     """Sim exits driven by the per-strategy EXIT_RULES table:
 
       - tp: day high touches avg × (1+tp) → sell in full.
@@ -1589,6 +1598,12 @@ def evaluate_bracket_exits(trade_date: date | None = None,
         counted in `ambiguous`
     Entry-day bars are excluded — the modeled entry is that day's close, so
     the day's intraday range precedes the position.
+
+    실계좌(REAL_BRACKET_STRATEGIES)는 **다음 거래일 09:00 에** 부른다
+    (`evaluate_real_bracket_exits_morning`, `order_date`=오늘, `trade_date`=직전 거래일).
+    판정은 그대로 직전 거래일 봉이고, 주문만 장중에 시장가로 나간다. 2026-10-13~23
+    coolreal 손절·익절 6건이 15:49/16:25 장 마감 뒤에 나가 KIS 가 전부 거부했다
+    ("모의투자 장종료"). 그래서 `order_date` 없이 실계좌를 부르면 주문을 내지 않는다.
     """
     init_db()
     # 하드 가드 — 브래킷 대상이 아닌 전략은 여기 들어오면 안 된다.
@@ -1597,6 +1612,11 @@ def evaluate_bracket_exits(trade_date: date | None = None,
     if strategy not in BRACKET_STRATEGIES:
         log.warning("bracket_exits: %s 는 브래킷 대상이 아니다 — 거부", strategy)
         return {"status": "not_a_bracket_strategy", "strategy": strategy,
+                "trade_date": (trade_date or _last_trading_day()).isoformat(),
+                "exits": []}
+    if strategy in REAL_BRACKET_STRATEGIES and order_date is None:
+        log.info("bracket_exits: %s 는 실계좌 — 다음 날 09:00 청산 슬롯에서 판정한다", strategy)
+        return {"status": "deferred_to_next_open", "strategy": strategy,
                 "trade_date": (trade_date or _last_trading_day()).isoformat(),
                 "exits": []}
     _reset_qlib_caches()
@@ -1628,15 +1648,29 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                         "reason": str(exc)}
         else:
             snapshot = _simulated_balance(db, strategy=strategy)
+        # 같은 날 아침 재실행(재시도·수동)이 같은 종목을 두 번 팔지 않게 한다. 시장가
+        # 매도가 체결돼 잔고에 반영되기 전에 다시 돌면 잔고에는 아직 보유로 보인다.
+        already_sold: set[str] = set()
+        if real_client is not None:
+            already_sold = {o.code for o in db.query(Order).filter(
+                Order.strategy == strategy, Order.side == "SELL",
+                Order.trade_date == order_date,
+                Order.status.notin_(("REJECTED", "CANCELLED")))}
         for h in snapshot.holdings:
             if h.qty <= 0 or h.avg_price <= 0:
                 continue
+            if h.code in already_sold:
+                continue
             # Episode entry = first BUY after the last full SELL (sim episodes
             # hold exactly one BUY today, but keep this robust to re-entries).
+            # 체결된 매도만 에피소드를 끝낸다. 거부된 매도까지 세면 그 종목은 "이미
+            # 팔렸다"로 읽혀 다시는 판정되지 않는다 — 2026-10 coolreal 6종목이
+            # 손절선 아래에서 그대로 남은 두 번째 원인. 시뮬 매도는 SIMULATED 라 무관.
             last_sell = (db.query(Order)
                            .filter(Order.strategy == strategy,
                                    Order.code == h.code,
-                                   Order.side == "SELL")
+                                   Order.side == "SELL",
+                                   Order.status.in_(EXECUTED_STATUSES))
                            .order_by(Order.trade_date.desc())
                            .first())
             # A BUY row is only an entry if it actually filled. cafeopen keeps
@@ -1692,6 +1726,7 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                            .filter(Order.strategy == strategy,
                                    Order.code == h.code,
                                    Order.side == "SELL",
+                                   Order.status.in_(EXECUTED_STATUSES),
                                    Order.trade_date >= entry.trade_date)
                            .count())
 
@@ -1714,10 +1749,11 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                         reasons_s["metrics"] = m_s
                     except Exception as exc:  # noqa: BLE001
                         log.warning("ladder exit reasons failed for %s: %s", h.code, exc)
-                    _sell_bracket(db, day, h.code, qty_s, px_s, real_client,
-                                            strategy=strategy, pnl=realised_s,
-                                            reasons=reasons_s)
+                    status_s = _sell_bracket(db, day, h.code, qty_s, px_s, real_client,
+                                             strategy=strategy, pnl=realised_s,
+                                             reasons=reasons_s, order_date=order_date)
                     exits.append({"code": h.code, "name": _stock_name(h.code),
+                                  "status": status_s,
                                   "kind": kind_s, "qty": qty_s,
                                   "price": round(px_s, 2), "realised": round(realised_s),
                                   "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
@@ -1834,10 +1870,11 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                 reasons["metrics"] = m
             except Exception as exc:  # noqa: BLE001
                 log.warning("bracket exit reasons failed for %s: %s", h.code, exc)
-            _sell_bracket(db, day, h.code, sell_qty, px, real_client,
-                                    strategy=strategy, pnl=realised,
-                                    reasons=reasons)
+            status = _sell_bracket(db, day, h.code, sell_qty, px, real_client,
+                                   strategy=strategy, pnl=realised,
+                                   reasons=reasons, order_date=order_date)
             exits.append({"code": h.code, "name": _stock_name(h.code),
+                          "status": status,
                           "kind": kind, "qty": sell_qty,
                           "price": round(px, 2), "realised": round(realised),
                           "sl_px": round(sl_px, 2), "sl_kind": sl_kind})
@@ -1845,6 +1882,27 @@ def evaluate_bracket_exits(trade_date: date | None = None,
     return {"status": "ok", "trade_date": day.isoformat(), "strategy": strategy,
             "rule": rule, "sl_cap": sl_cap, "low_window": low_window,
             "exits": exits, "ambiguous": ambiguous}
+
+
+def evaluate_real_bracket_exits_morning(today: date | None = None) -> dict:
+    """09:00 — 실계좌 브래킷 청산. 직전 거래일 봉으로 판정하고 오늘 장중에 주문한다.
+
+    판정 규칙·봉은 시뮬과 같다(직전 거래일 진입분은 그 봉을 보지 않는 것도 같다).
+    다른 것은 주문 시각 하나 — 장 마감 뒤에 낸 주문은 KIS 가 받지 않는다.
+    전략 하나가 터져도 나머지는 돈다(`close_bracket_exits` 와 같은 격리).
+    """
+    today = today or date.today()
+    day = _prev_trading_day(today)
+    results: dict[str, dict] = {}
+    for strategy in REAL_BRACKET_STRATEGIES:
+        try:
+            results[strategy] = evaluate_bracket_exits(
+                trade_date=day, strategy=strategy, order_date=today)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("real_bracket_exits_morning: %s 실패 — 다음으로 넘어간다", strategy)
+            results[strategy] = {"status": "error",
+                                 "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    return results
 
 
 def submit_cafeopen_orders(trade_date: date | None = None) -> dict:

@@ -173,6 +173,13 @@ celery_app.conf.beat_schedule = {
     # 찍히는 순간이라 시세의 `open` 이 아직 0 일 수 있어 1분 뒤에 둔다.
     # 두 계좌는 appkey 가 달라 같은 분이어도 초당 한도를 나눠 쓰지 않는다.
     # 키 이름은 옛 `live-orders-at-close-*` 와 겹치지 않게 새로 지었다.
+    # 실계좌 브래킷 청산 — 직전 거래일 봉으로 판정, 오늘 장중 시장가 매도.
+    # 16:25 체인에서 내던 주문이 장 마감 뒤라 전부 거부됐다(2026-10-27 발견).
+    # 09:01 매수보다 먼저 돌아 손절된 자리가 그날 슬롯을 비운다.
+    "real-bracket-exits-morning": {
+        "task": "real_bracket_exits_morning",
+        "schedule": crontab(hour=9, minute=0, day_of_week="mon-fri"),
+    },
     "live-orders-cafereal-open": {
         "task": "live_orders_cafereal",
         "schedule": crontab(hour=9, minute=1, day_of_week="mon-fri"),

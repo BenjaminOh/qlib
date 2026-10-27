@@ -522,6 +522,25 @@ def live_sync_cafeopen_task(self) -> dict:
     return sync_account(strategy="cafeopen")
 
 
+@celery_app.task(bind=True, name="real_bracket_exits_morning")
+@market_day_only
+@kis_retry_until(10, 0)
+def real_bracket_exits_morning_task(self) -> dict:
+    """09:00 KST — 실계좌(cafereal·coolreal·acct1~4) 브래킷 청산.
+
+    직전 거래일 봉으로 판정하고 장중에 주문한다. 예전에는 16:25 체인 안에서
+    시뮬과 함께 돌아 장 마감 뒤 주문이 전부 거부됐다(2026-10-13~23 coolreal 6건).
+    같은 날 재실행은 이미 낸 매도를 건너뛰므로 재시도는 무해하다.
+    """
+    from ..services.live_trader import evaluate_real_bracket_exits_morning
+    from ..services.notify import notify_bracket_exits
+    self.update_state(state="RUNNING")
+    results = evaluate_real_bracket_exits_morning()
+    for strategy, res in results.items():
+        notify_bracket_exits(strategy, res)
+    return results
+
+
 @celery_app.task(bind=True, name="close_bracket_exits")
 @market_day_only
 def close_bracket_exits_task(self) -> dict:
@@ -539,8 +558,8 @@ def close_bracket_exits_task(self) -> dict:
     the refresh — hence no 15:20 buy slot for limit.
     """
     from ..services.live_trader import (
-        BRACKET_STRATEGIES, evaluate_bracket_exits, evaluate_limit_entries,
-        sync_account,
+        BRACKET_STRATEGIES, REAL_BRACKET_STRATEGIES, evaluate_bracket_exits,
+        evaluate_limit_entries, sync_account,
     )
     from ..services.notify import notify_bracket_exits
     self.update_state(state="RUNNING")
@@ -559,6 +578,8 @@ def close_bracket_exits_task(self) -> dict:
             return {"status": "error", "error": failed[key]}
 
     for strategy in BRACKET_STRATEGIES:
+        if strategy in REAL_BRACKET_STRATEGIES:
+            continue   # 실계좌는 다음 날 09:00 `real_bracket_exits_morning` 이 판정·주문한다
         results[strategy] = _isolated(
             strategy, lambda s=strategy: evaluate_bracket_exits(strategy=s))
         if failed.get(strategy):
