@@ -193,3 +193,23 @@ def test_order_is_never_resent_after_a_timeout(client, monkeypatch, alerts):
     res = client.place_order("200350", "BUY", 10, price=4290)
     assert res.ok is False
     assert post.calls == 1
+
+
+def test_rate_limit_500_is_asked_again(client, clock, monkeypatch, alerts):
+    # 2026-10-28 09:00 — KIS 가 초당 한도 초과(EGW00215)를 HTTP 500 으로 답했고, 잔고 조회
+    # 3회(6초)가 모두 이것을 받아 coolreal 청산 판정을 통째로 놓쳤다. 조회는 다시 묻는다.
+    busy = _Resp({"rt_cd": "1", "msg_cd": "EGW00215"}, status_code=500)
+    busy.text = '{"rt_cd":"1","msg1":"원장에서 허용 가능한 초당 거래건수를 초과하였습니다.","msg_cd":"EGW00215"}'
+    get = _Flaky(4, _Resp(BALANCE_OK), bad=busy)
+    monkeypatch.setattr(kc.requests, "get", get)
+    assert client.get_balance().cash == 824970.0
+    assert get.calls == 5
+
+
+def test_other_500_is_still_the_callers_problem():
+    # 업무 오류 500(예: 모의투자 TR 아님)은 다시 물어도 같다 — 재시도 대상이 아니다.
+    r = _Resp({}, status_code=500)
+    r.text = '{"rt_cd":"1","msg_cd":"EGW02006","msg1":"모의투자 TR 이 아닙니다."}'
+    assert kc._is_transient(r) is False
+    r.text = '{"msg_cd":"EGW00215"}'
+    assert kc._is_transient(r) is True

@@ -184,6 +184,21 @@ def _is_token_error(r: "requests.Response") -> bool:
 # 서버를 못 찾는 502/503/504. KIS 의 업무 거부(그 외 상태 코드)는 각 호출부가 다룬다.
 _TRANSIENT_NET = (requests.Timeout, requests.ConnectionError)
 _TRANSIENT_HTTP = (502, 503, 504)
+# KIS 는 초당 한도 초과도 HTTP 500 으로 답한다. 조회라 다시 물어도 무해하다 —
+# 2026-10-28 09:00 coolreal 청산이 잔고 조회 3회(6초) 모두 이것을 받고 그날 판정을 놓쳤다.
+_RATE_LIMIT_MARKERS = ("EGW00215",)
+
+
+def _is_transient(r) -> bool:
+    code = getattr(r, "status_code", None)
+    if code in _TRANSIENT_HTTP:
+        return True
+    if code == 500:
+        try:
+            return any(m in r.text for m in _RATE_LIMIT_MARKERS)
+        except Exception:  # noqa: BLE001
+            return False
+    return False
 
 # 재시도 간격(초). 마지막 값으로 계속 반복한다.
 _RETRY_BACKOFF_S = (5, 10, 20, 30)
@@ -271,7 +286,7 @@ def _send_retrying(send, what: str):
             r = send()
         except _TRANSIENT_NET as exc:
             err = exc
-        if err is None and getattr(r, "status_code", None) not in _TRANSIENT_HTTP:
+        if err is None and not _is_transient(r):
             if alerted:
                 _alert_recovered(what, time.time() - started)
             return r

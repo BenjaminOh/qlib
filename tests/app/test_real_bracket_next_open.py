@@ -177,3 +177,34 @@ def test_morning_beat_runs_before_the_0901_buys():
     sched = slot["schedule"]
     assert sched.hour == {9} and sched.minute == {0}
     assert beat["live-orders-coolreal-open"]["schedule"].minute == {1}
+
+
+def test_catch_up_slots_retry_the_morning_exits_the_same_day():
+    """2026-10-28 09:00 이 KIS 초당 한도로 잔고를 못 읽어 6종목 청산을 놓쳤다 — 같은 날 다시 돈다."""
+    from app.api.workers.celery_app import celery_app
+
+    beat = celery_app.conf.beat_schedule
+    slots = {k: v for k, v in beat.items() if v["task"] == "real_bracket_exits_morning"}
+    hm = sorted((min(v["schedule"].hour), min(v["schedule"].minute)) for v in slots.values())
+    assert hm == [(9, 0), (9, 10), (9, 30), (10, 30), (13, 0)]
+    assert all(v.get("kwargs") == {"catch_up": True}
+               for k, v in slots.items() if k != "real-bracket-exits-morning")
+
+
+def test_failed_judgement_alerts_without_exception_text(monkeypatch):
+    from app.api.services import notify
+    from app.api.workers import tasks
+
+    sent = []
+    monkeypatch.setattr(notify, "telegram_enabled", lambda: True)
+    monkeypatch.setattr(notify, "send_telegram", lambda text: sent.append(text))
+    monkeypatch.setattr(lt, "evaluate_real_bracket_exits_morning", lambda: {
+        STRATEGY_COOLREAL: {"status": "error",
+                            "error": "HTTPError: 500 Server Error for url ...?CANO=50206642"}})
+    monkeypatch.setattr(tasks.real_bracket_exits_morning_task, "update_state", lambda **kw: None)
+    monkeypatch.setattr("app.api.services.trading_calendar.is_market_open", lambda d: True)
+
+    tasks.real_bracket_exits_morning_task.run(catch_up=False)
+
+    assert len(sent) == 1 and "청산 판정 실패" in sent[0] and "09:10" in sent[0]
+    assert "CANO" not in sent[0] and "50206642" not in sent[0]

@@ -525,19 +525,21 @@ def live_sync_cafeopen_task(self) -> dict:
 @celery_app.task(bind=True, name="real_bracket_exits_morning")
 @market_day_only
 @kis_retry_until(10, 0)
-def real_bracket_exits_morning_task(self) -> dict:
-    """09:00 KST — 실계좌(cafereal·coolreal·acct1~4) 브래킷 청산.
+def real_bracket_exits_morning_task(self, catch_up: bool = False) -> dict:
+    """09:00 KST — 실계좌(cafereal·coolreal·acct1~4) 브래킷 청산. 09:10·09:30·10:30·13:00 재시도.
 
     직전 거래일 봉으로 판정하고 장중에 주문한다. 예전에는 16:25 체인 안에서
     시뮬과 함께 돌아 장 마감 뒤 주문이 전부 거부됐다(2026-10-13~23 coolreal 6건).
     같은 날 재실행은 이미 낸 매도를 건너뛰므로 재시도는 무해하다.
     """
     from ..services.live_trader import evaluate_real_bracket_exits_morning
-    from ..services.notify import notify_bracket_exits
+    from ..services.notify import notify_bracket_exits, notify_bracket_exits_failed
     self.update_state(state="RUNNING")
     results = evaluate_real_bracket_exits_morning()
     for strategy, res in results.items():
         notify_bracket_exits(strategy, res)
+        if res.get("status") == "error":
+            notify_bracket_exits_failed(strategy, res, catch_up=catch_up)
     return results
 
 

@@ -345,9 +345,19 @@ def notify_bracket_exits(strategy: str, result: dict) -> None:
         if e.get("status") == "SUBMITTED":
             lines.append("🕘 시장가 매도 접수 — 위 가격은 판정 기준가, 실제 체결가는 대사에서 확정")
         elif e.get("status") == "REJECTED":
-            lines.append("❌ <b>KIS 가 주문을 거부함</b> — 보유가 남는다. 내일 09:00 에 다시 판정한다")
+            lines.append("❌ <b>KIS 가 주문을 거부함</b> — 보유가 남는다. 다음 재시도 슬롯(13:00 까지)에서 다시 낸다")
         lines.append("")
     send_telegram("\n".join(lines))
+
+
+def notify_bracket_exits_failed(strategy: str, result: dict, *, catch_up: bool) -> None:
+    """실계좌 청산 판정 자체가 실패했다(잔고 조회 불가 등). 예외 문구는 싣지 않는다 — 키·계좌번호가 섞일 수 있다."""
+    if not telegram_enabled():
+        return
+    nxt = "13:00 이 마지막 재시도 — 그 뒤엔 직접 확인 필요" if catch_up else "09:10 에 다시 시도한다"
+    err = str(result.get("error") or "").split(":", 1)[0]
+    send_telegram(f"⚠️ <b>{strategy} 실주문 청산 판정 실패</b> ({err or '오류'})\n"
+                  f"보유는 그대로다 — {nxt}")
 
 
 def notify_reconcile(summary: dict, *, strategy: str = "open",

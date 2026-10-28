@@ -180,6 +180,14 @@ celery_app.conf.beat_schedule = {
         "task": "real_bracket_exits_morning",
         "schedule": crontab(hour=9, minute=0, day_of_week="mon-fri"),
     },
+    # 재시도 슬롯 — 09:00 이 KIS 초당 한도(EGW00215)로 잔고를 못 읽어 그날 청산을
+    # 통째로 놓쳤다(2026-10-28). 이미 낸 매도는 건너뛰므로 다시 돌아도 두 번 팔지 않고,
+    # 거부된 매도는 여기서 다시 낸다.
+    **{f"real-bracket-exits-catch-up-{h:02d}{m:02d}": {
+        "task": "real_bracket_exits_morning",
+        "schedule": crontab(hour=h, minute=m, day_of_week="mon-fri"),
+        "kwargs": {"catch_up": True},
+    } for h, m in ((9, 10), (9, 30), (10, 30), (13, 0))},
     "live-orders-cafereal-open": {
         "task": "live_orders_cafereal",
         "schedule": crontab(hour=9, minute=1, day_of_week="mon-fri"),
