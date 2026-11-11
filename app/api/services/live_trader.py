@@ -42,7 +42,7 @@ from .account_policy import (
 )
 from .backtest_service import _extract_recommended_picks, _stock_name
 from .kis_client import (
-    AccountSnapshot, Holding, KISClient, OrderResult, get_kis_client,
+    AccountSnapshot, Holding, KISClient, OrderResult, get_kis_client, get_market_client,
     round_to_tick,
 )
 
@@ -427,7 +427,7 @@ def _is_risky(code: str, client: KISClient | None = None,
     per appkey on paper — paying for it twice per candidate doubles the order
     run for nothing."""
     try:
-        client = client or get_kis_client()
+        client = client or get_market_client()
         if client.is_mock:
             return None
         if quote is None:
@@ -1908,7 +1908,7 @@ def submit_cafeopen_orders(trade_date: date | None = None) -> dict:
     prev = _prev_trading_day(day)
     if prev is None:
         return {"status": "no_calendar", "trade_date": day.isoformat()}
-    client = get_kis_client()
+    client = get_market_client()     # cafeopen 은 시뮬 — 시세만 읽는다
     discount = settings.live_cafeopen_discount
     slots = max(settings.live_cafe_slots, 1)
     rested: list[dict] = []
@@ -2146,7 +2146,7 @@ def resolve_cafeopen_orders(trade_date: date | None = None) -> dict:
     """
     init_db()
     day = trade_date or date.today()
-    client = get_kis_client()
+    client = get_market_client()     # cafeopen 은 시뮬 — 시세만 읽는다
     filled: list[dict] = []
     cancelled: list[dict] = []
     with SessionLocal() as db:
@@ -2469,7 +2469,7 @@ def _sim_fill_price(code: str) -> float | None:
     10,620). Sim data through 2026-08-05 carries that stale-fill bias; from
     8/6 fills use this quote, falling back to _last_close only if KIS fails."""
     try:
-        q = get_kis_client().get_quote(code) or {}
+        q = get_market_client().get_quote(code) or {}
         if q.get("halted"):
             return None
         px = q.get("price")
@@ -2523,7 +2523,7 @@ def _day_ohlc_any(code: str, day: date) -> dict | None:
     if bar:
         return bar
     try:
-        rows = get_kis_client().get_daily_bars(code)
+        rows = get_market_client().get_daily_bars(code)
         iso = day.isoformat()
         for b in rows:
             if b["date"] == iso:

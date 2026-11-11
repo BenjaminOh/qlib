@@ -53,6 +53,8 @@ class _StubClient:
 
 def _stub_kis(monkeypatch, quotes):
     monkeypatch.setattr(live_trader, "get_kis_client", lambda: _StubClient(quotes))
+    # cafeopen 은 시뮬이라 시세 전용 클라이언트를 쓴다(2026-11-12).
+    monkeypatch.setattr(live_trader, "get_market_client", lambda: _StubClient(quotes))
 
 
 def _cafe_buy(session, code="126730", price=20000.0, qty=132, stop_px=17000.0):

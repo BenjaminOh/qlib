@@ -213,8 +213,8 @@ def get_bars(codes: str = Query(..., description="comma-separated"),
     # runner 의 sim 모드는 KIS 키가 없어 스스로 채울 수 없다. `_day_ohlc_any` 와 같은 대체.
     missing = [c for c in code_list if not out.get(c)][:MAX_BAR_FALLBACK]
     if missing:
-        from ..services.kis_client import get_kis_client
-        client = get_kis_client()
+        from ..services.kis_client import get_market_client
+        client = get_market_client()
         lo, hi = start.isoformat(), end.isoformat()
         for code in missing:
             try:

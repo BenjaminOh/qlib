@@ -33,9 +33,9 @@ def _close_series(code: str) -> dict[str, float]:
     except Exception:  # noqa: BLE001
         pass
     try:
-        from .kis_client import get_kis_client
+        from .kis_client import get_market_client
         return {b["date"]: float(b["close"])
-                for b in (get_kis_client().get_daily_bars(code) or [])}
+                for b in (get_market_client().get_daily_bars(code) or [])}
     except Exception:  # noqa: BLE001
         return {}
 

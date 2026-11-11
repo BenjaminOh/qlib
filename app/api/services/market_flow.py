@@ -63,9 +63,9 @@ def ensure_flow_data(db: Session, codes: list[str], as_of: date,
 
     Never raises: per-code failures are collected and reported.
     """
-    from .kis_client import get_kis_client
+    from .kis_client import get_market_client
 
-    client = client or get_kis_client()
+    client = client or get_market_client()
     if client.is_mock:
         return {"status": "skipped", "reason": "mock", "fetched": 0,
                 "rows": 0, "failed": []}

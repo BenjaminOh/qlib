@@ -29,7 +29,7 @@ from ..services.holding_attribution import (
     attribute_holdings, primary_strategy,
 )
 from ..services.kis_client import (
-    ALL_ACCOUNTS, get_kis_client, set_trading_halt, trading_halted,
+    ALL_ACCOUNTS, get_kis_client, get_market_client, set_trading_halt, trading_halted,
 )
 
 log = logging.getLogger(__name__)
@@ -1600,7 +1600,7 @@ def _kis_bars_cached(code: str, cache_day: str) -> tuple:
     keeps the story endpoint at ≤1 gated KIS call per code per day. Only
     reached when the qlib store has no bar (out-of-universe codes)."""
     try:
-        return tuple(get_kis_client().get_daily_bars(code) or ())
+        return tuple(get_market_client().get_daily_bars(code) or ())
     except Exception:  # noqa: BLE001
         return ()
 

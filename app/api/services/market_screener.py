@@ -149,10 +149,10 @@ def _effective(hit: dict, close: float) -> dict | None:
 
 def run_screener(trade_date: date | None = None) -> dict:
     """15:05 — scan KIS ranking pools, classify, store today's candidates."""
-    from .kis_client import get_kis_client
+    from .kis_client import get_market_client
     init_db()
     day = trade_date or date.today()
-    client = get_kis_client()
+    client = get_market_client()
     pool: dict[str, dict] = {}
     for row in client.get_rank_fluctuation() + client.get_rank_volume():
         if row["code"] not in pool and not _excluded(row["name"]):
@@ -235,10 +235,10 @@ def run_scout_scan(slot: str, trade_date: date | None = None) -> dict:
     These rows measure (a) pick overlap vs the 15:05 scan and (b) price drift
     scan → close; the accumulated distribution decides whether cafe entries
     move earlier. Idempotent per (day, slot, code)."""
-    from .kis_client import get_kis_client
+    from .kis_client import get_market_client
     init_db()
     day = trade_date or date.today()
-    client = get_kis_client()
+    client = get_market_client()
     pool: dict[str, dict] = {}
     for row in client.get_rank_fluctuation() + client.get_rank_volume():
         if row["code"] not in pool and not _excluded(row["name"]):
@@ -336,11 +336,11 @@ def run_surge_screen(trade_date: date | None = None) -> dict:
 
 def submit_surge_orders(trade_date: date | None = None) -> dict:
     """15:29 — sim-buy today's top surge picks at the live KIS quote."""
-    from .kis_client import get_kis_client
+    from .kis_client import get_market_client
     from .live_trader import _persist_simulated_fill, _simulated_balance
     init_db()
     day = trade_date or date.today()
-    client = get_kis_client()
+    client = get_market_client()
     seed_slots = max(settings.live_surge_slots, 1)
     bought: list[dict] = []
     with SessionLocal() as db:
@@ -405,10 +405,10 @@ def capture_orderbook(slot: str, trade_date: date | None = None) -> dict:
     Never raises into the caller and never touches a trading path — a failed
     capture costs one row of research data, and that is all it may cost.
     """
-    from .kis_client import get_kis_client
+    from .kis_client import get_market_client
     init_db()
     day = trade_date or date.today()
-    client = get_kis_client()
+    client = get_market_client()
     captured: list[dict] = []
     with SessionLocal() as db:
         cands = (db.query(CafeCandidate)
@@ -530,7 +530,7 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
     여전히 주문일이다.
     """
     from .account_policy import BasePriceUnavailable, get_policies, order_price
-    from .kis_client import AccountNotConfigured, get_kis_client
+    from .kis_client import AccountNotConfigured, get_kis_client, get_market_client
     from .live_trader import (KIS_THROTTLE_SECONDS, _account_for,
                               _persist_order, _persist_simulated_fill,
                               _simulated_balance)
@@ -549,7 +549,7 @@ def _submit_cafe_like(trade_date: date | None, *, strategy: str,
             return {"status": "no_account", "strategy": strategy,
                     "trade_date": day.isoformat(), "reason": str(exc)}
     else:
-        client = get_kis_client()
+        client = get_market_client()     # 시뮬 — 시세만 읽는다
     seed_slots = max(settings.live_cafe_slots, 1)
     bought: list[dict] = []
     skipped_hot: list[dict] = []

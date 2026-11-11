@@ -1793,6 +1793,101 @@ def get_kis_client(account: str = ACCOUNT_MAIN) -> KISClient:
     return c
 
 
+# ─── 시세 전용 클라이언트 (키 거부 시 다른 계좌 키로 폴백) ─────────────
+#
+# 2026-11-12 실사고: 기본 계좌 모의 신청을 해지하자 기본 키가 EGW00103 으로
+# 무효가 됐다(10-29 ~ 11-11). 스크리너·급등 풀·시장 흐름·시뮬 시세가 **전부**
+# 기본 키 하나로 시세를 읽고 있어서, 냉각 계좌 키가 멀쩡히 살아 있는데도 열흘
+# 넘게 카페 후보 0건·급등 풀 0종목이었다.
+#
+# 시세는 계좌와 무관하다(토큰만 있으면 된다). 그래서 **시세 경로만** 살아 있는
+# 다른 키로 넘어간다. 주문·잔고 경로는 절대 이 함수를 쓰지 않는다 — 남의 계좌
+# 키로 주문이 나가면 안 된다.
+#
+# 폴백은 **키 거부(AccountRejected)일 때만** 한다. 타임아웃·한도 초과는 KIS 쪽
+# 일시 장애라 다른 키로 가도 같고, 오히려 그 계좌의 주문 한도를 깎는다.
+
+_MARKET_FALLBACK_TTL_S = 600.0
+# 냉각이 카페보다 먼저다 — 카페 계좌는 몇 주씩 비어 있거나 거부된 날이 많았다.
+_MARKET_FALLBACK_ORDER: tuple[str, ...] = (ACCOUNT_COOL, ACCOUNT_CAFE) + EXTRA_ACCOUNTS
+# (계좌 id, 이 시각까지 유효). 프로세스별 — 10분 뒤 기본 키를 다시 시도한다.
+_market_pick: tuple[str, float] | None = None
+
+
+def _market_fallback_candidates() -> list[str]:
+    """폴백 후보 순서: 냉각 → 카페 → acct1~4 → DB 에만 있는 계좌."""
+    out = list(_MARKET_FALLBACK_ORDER)
+    for aid in all_accounts():
+        if aid != ACCOUNT_MAIN and aid not in out:
+            out.append(aid)
+    return out
+
+
+def _alert_market_fallback(label: str, reason: str) -> None:
+    """시세를 다른 키로 대체 중임을 알린다 — 대체 계좌별 하루 1회."""
+    try:
+        r = _accounts_redis()
+        if r is not None:
+            key = f"kis:alert:market_fallback:{label}:{date.today().isoformat()}"
+            if not r.set(key, "1", nx=True, ex=86400):
+                return
+    except Exception as exc:  # noqa: BLE001
+        log.warning("시세 폴백 알림 중복 확인 실패: %s", exc)
+    try:
+        from .notify import notify_market_fallback
+        notify_market_fallback(label, reason)
+    except Exception as exc:  # noqa: BLE001 — 알림 실패가 시세 조회를 막으면 안 된다
+        log.warning("시세 폴백 알림 전송 실패: %s", exc)
+
+
+def get_market_client() -> KISClient:
+    """**시세 조회 전용** 클라이언트. 기본 키가 거부되면 살아 있는 다른 키를 쓴다.
+
+    주문·잔고에는 쓰지 말 것 — 돌려받는 클라이언트의 계좌는 기본 계좌가 아닐 수 있다.
+    모든 키가 거부되면 기본 클라이언트를 그대로 돌려줘, 호출부는 예전과 같은
+    오류(AccountRejected)를 본다.
+    """
+    global _market_pick
+    now = time.time()
+    pick = _market_pick
+    if pick is not None and pick[1] > now:
+        try:
+            return get_kis_client(pick[0])
+        except (AccountNotConfigured, ValueError):
+            _market_pick = None
+
+    main = get_kis_client()
+    ensure = getattr(main, "_ensure_token", None)
+    if getattr(main, "is_mock", False) or ensure is None:
+        return main                 # 자격증명 없음(테스트·로컬) — 예전 동작 그대로
+    try:
+        ensure()
+        _market_pick = None
+        return main
+    except AccountRejected as exc:
+        main_reason = str(exc)
+    except Exception:  # noqa: BLE001 — 일시 장애는 폴백 사유가 아니다
+        return main
+
+    for acct in _market_fallback_candidates():
+        try:
+            c = get_kis_client(acct)
+            if c.is_mock:
+                continue
+            c._ensure_token()
+        except (AccountNotConfigured, ValueError):
+            continue                # 미설정·거부된 계좌는 건너뛴다
+        except Exception as exc:  # noqa: BLE001
+            log.warning("시세 폴백 후보 %s 토큰 실패: %s", acct, exc)
+            continue
+        _market_pick = (acct, now + _MARKET_FALLBACK_TTL_S)
+        label = _ACCOUNT_LABEL.get(acct, acct)
+        log.warning("기본 키 거부 — 시세를 %s 계좌 키로 대체한다: %s", label, main_reason)
+        _alert_market_fallback(label, main_reason)
+        return c
+    return main
+
+
 # 테스트 전용 — 프로덕션 호출자 없음 (2026-09-07 실측).
 def cafe_account_configured() -> bool:
     """True if the cafe account can be built — cheap check for schedulers."""

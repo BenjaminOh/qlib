@@ -199,8 +199,8 @@ def is_market_open(day: date | None = None) -> bool | None:
 
     fetched: dict[str, bool] = {}
     try:
-        from .kis_client import get_kis_client
-        client = get_kis_client()
+        from .kis_client import get_market_client
+        client = get_market_client()
         if not client.is_mock:      # no credentials — nothing to ask
             fetched = client.get_open_days(day)
     except Exception as exc:  # noqa: BLE001

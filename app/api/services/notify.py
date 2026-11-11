@@ -97,6 +97,15 @@ def notify_account_rejected(label: str, reason: str) -> bool:
         "이 계좌 매매·대사가 중단됐다. KIS 에서 앱키·시크릿과 모의투자 기간을 확인할 것.")
 
 
+def notify_market_fallback(label: str, reason: str) -> bool:
+    """기본 키가 거부돼 시세 조회를 다른 계좌 키로 대체하고 있다."""
+    return send_telegram(
+        f"🔁 <b>시세 조회를 {_esc(label)} 계좌 키로 대체 중</b>\n"
+        f"{_esc(reason[:200])}\n"
+        "스크리너·급등·시뮬 시세는 계속 돈다. 주문은 대체하지 않는다 — "
+        "기본 계좌 키를 고칠 것.")
+
+
 _once_redis = None
 
 
@@ -249,6 +258,13 @@ def notify_open_orders(result: dict) -> None:
     strategy = result.get("strategy", "open")
     head = (f"🌅 <b>qlib 아침 주문</b> ({as_of}) · "
             f"{STRATEGY_TITLES.get(strategy, strategy)}")
+    # 계좌를 못 쓴 날(키 거부·미설정)은 '제출 0 · 거부 0' 이 아니다. 예전에는 그렇게
+    # 찍혀 정상인 날처럼 보였고, 10-29 ~ 11-11 기본 계좌가 키 거부로 주문을 한 건도
+    # 못 낸 것을 사람이 열흘 넘게 알아채지 못했다. 09:20 대사 예고도 거짓이다.
+    if result.get("status") == "no_account":
+        reason = result.get("reason") or "계좌를 쓸 수 없음"
+        send_telegram(f"{head}\n\n⛔ <b>오늘 주문 못 함</b> — {_esc(str(reason)[:200])}")
+        return
     lines = [head, ""]
     try:
         from datetime import date as _date
