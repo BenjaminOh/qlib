@@ -3,14 +3,9 @@
 version: 2
 updates:
   # upstream qlib(qlib/·examples/·scripts/)은 보지 않는다 — 운영하는 앱만.
+  # app/frontend 는 2026-11-12 웹서비스 종료로 배포하지 않아 감시에서 뺐다.
   - package-ecosystem: pip
     directory: /app/api
-    schedule: { interval: weekly, day: monday, time: "07:00", timezone: Asia/Seoul }
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch: { update-types: [minor, patch] }
-  - package-ecosystem: npm
-    directory: /app/frontend
     schedule: { interval: weekly, day: monday, time: "07:00", timezone: Asia/Seoul }
     open-pull-requests-limit: 5
     groups:

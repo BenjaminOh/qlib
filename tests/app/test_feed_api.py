@@ -275,19 +275,30 @@ def test_catalog_ships_flow_config():
 
 # ─── 공개 경로 차단 ───────────────────────────────────────────────────
 
-def test_nginx_hides_feed_from_the_public_host():
-    conf = (Path(__file__).resolve().parents[2] / "infra/nginx/qlib.tmanager.kr.conf").read_text()
-    deny = conf.index("location /api/v1/feed/")
-    assert deny < conf.index("location /api/ {")
-    assert "return 404" in conf[deny:conf.index("}", deny)]
+def _qlib_conf() -> str:
+    return (Path(__file__).resolve().parents[2] / "infra/nginx/qlib.tmanager.kr.conf").read_text()
 
 
-def test_nginx_allows_only_the_office_ip_on_https():
-    """2026-10-26 사용자 결정: qlib 은 사무실 IP 에서만. 80(ACME)은 열어 둔다."""
-    conf = (Path(__file__).resolve().parents[2] / "infra/nginx/qlib.tmanager.kr.conf").read_text()
+def _code_lines(conf: str) -> list[str]:
+    return [l.split("#", 1)[0].strip() for l in conf.splitlines() if l.split("#", 1)[0].strip()]
+
+
+def test_public_host_serves_nothing():
+    """2026-11-12 사용자 결정: 웹서비스 종료 — qlib.tmanager.kr 은 어떤 경로도 프록시하지 않는다.
+
+    예전에는 feed 만 404 로 숨기고 사무실 IP 만 열었다(2026-10-26). 이제 도메인 전체를 닫으므로
+    feed 를 포함한 모든 경로가 444(응답 없이 끊음)여야 한다. runner 는 app-network 의
+    qlib-hub-api:5001 로 feed 를 읽으니 영향이 없다.
+    """
+    lines = _code_lines(_qlib_conf())
+    assert not [l for l in lines if l.startswith("proxy_pass")], "공개 도메인이 다시 무언가를 프록시한다"
+    https = lines[next(i for i, l in enumerate(lines) if l.startswith("listen 443")):]
+    assert "location / {" in https and "return 444;" in https
+
+
+def test_http_keeps_only_the_acme_path():
+    """80 은 인증서 갱신 경로만 남긴다 — 공용 certbot renew 가 이 도메인에서 실패하지 않게."""
+    conf = _qlib_conf()
     http_block = conf[:conf.index("listen 443")]
-    https_block = conf[conf.index("listen 443"):]
-    allow = https_block.index("allow 61.255.176.73;")
-    deny = https_block.index("deny all;")
-    assert allow < deny < https_block.index("location ")
-    assert "deny all" not in http_block
+    assert "location /.well-known/acme-challenge/" in http_block
+    assert "return 444;" in http_block and "return 301" not in http_block

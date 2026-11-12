@@ -62,8 +62,10 @@ services:
     volumes:
       - /home/qlib/data/qlib:/root/.qlib
       - /home/qlib/data/db:/app/db
+    # 2026-11-12: 127.0.0.1 로만 연다. 공개 도메인이 닫혀(웹서비스 종료) 외부에서 이 포트를 부를 이유가 없고,
+    # 방화벽 하나에만 기대지 않는다. deploy.sh 헬스체크는 localhost 로 부르고, runner 는 app-network 별칭을 쓴다.
     ports:
-      - "${API_PORT}:5001"
+      - "127.0.0.1:${API_PORT}:5001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # app-network 는 공용 PostgreSQL(global_shared_db)이 사는 네트워크다.
@@ -179,7 +181,10 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  # ⛔ 2026-11-12 웹서비스 종료(infra/nginx/qlib.tmanager.kr.conf 머리말). 코드는 남기고 배포만 멈춘다 —
+  # profile 이 있어 `--profile web` 을 주지 않으면 뜨지 않는다. deploy.sh 도 web 을 부르지 않는다.
   web:
+    profiles: ["web"]
     image: 127.0.0.1:5000/qlib-web:${IMAGE_TAG:-latest}
     build:
       context: .

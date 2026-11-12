@@ -12,13 +12,13 @@
 | `QLIB_API_KIS_COOL_APP_KEY`·`_SECRET` | 냉각 계좌(coolreal) 주문·잔고, 시세 폴백 1순위 | KIS Developers(**다른 고객 ID**) | 2026-09-15 무렵 | **모의투자 3개월 — 12월 중순 추정, 확인 필요** | coolreal 매매 전체 |
 | 카페 계좌 키 (DB `trading_accounts.app_key_enc`·`app_secret_enc`, Fernet) | 카페 계좌(cafereal) | KIS Developers(다른 고객 ID) | ? | **2026-11 현재 EGW00105 거부 중** | cafereal 매매 |
 | `QLIB_API_SECRETS_KEY` | DB 의 계좌 자격증명 암호화(Fernet) | 직접 생성 | ? | 없음 | **바꾸면 DB 에 저장된 계좌 키를 못 푼다** — 새 키로 재암호화 스크립트 먼저 |
-| `QLIB_API_JWT_SECRET` | 웹 로그인 JWT 서명 | 직접 생성 | 2026-10-27 교체 | 없음 | 모든 로그인 세션 무효(재로그인) |
+| `QLIB_API_JWT_SECRET` | 로그인 JWT 서명(PyJWT, 2026-11-12). **웹서비스 종료로 외부 로그인 경로 없음** — 내부 API 만 | 직접 생성 | 2026-10-27 교체 | 없음 | 모든 로그인 세션 무효(재로그인) |
 | `QLIB_API_ADMIN_PASSWORD` | 관리자 `benadmin` 초기 비번 | 직접 생성 | ? | 없음 | 로그인 |
 | `QLIB_API_FEED_TOKENS` | runner 가 허브 feed 를 읽는 토큰 | 직접 생성 | 2026-10-27 | 없음 | **runner 의 `RUNNER_FEED_TOKEN` 과 짝** — 둘을 같이 바꾼다 |
 | `QLIB_API_TELEGRAM_BOT_TOKEN` | 운영 알림 | BotFather | ? | 없음 | 알림 |
 | `LIVE_DB_URL` | 운영 PostgreSQL `qlib_live` 접속(비번 포함) | 직접 생성 | 2026-09-21 | 없음 | 전체 — DB 롤 비번과 같이 |
 | `REDIS_URL` | Celery·토큰 캐시(app-network 내부, 비번 없음) | — | — | — | — |
-| `/root/deploy/nginx-waf/conf.d/qlib.htpasswd` | 웹 앞단 기본 인증 | 직접 생성 | ? | 없음 | 웹 접속 |
+| `/root/deploy/nginx-waf/conf.d/qlib.htpasswd` | (안 씀) 옛 웹 앞단 기본 인증 — 2026-11-12 웹 종료로 참조 없음, 지워도 됨 | — | — | — | 없음 |
 
 ## 만료 알림
 - KIS 모의투자 참가 기간(3개월)이 가장 위험하다 — 2026-10-28 기본 계좌가 이렇게 끊겼다. **허브 2027-01-30, 냉각 확인 필요.** 7일 전 알림: 캘린더 또는 서버 cron(미설정 — 과제).

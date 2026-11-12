@@ -1,7 +1,6 @@
 # 버전 고정(2026-11-12, web-app-security-audit ai-era-threats §2): 운영 컨테이너(qlib_api_blue)의
 # pip freeze 값 그대로 — 동작은 바뀌지 않고, 빌드할 때마다 다른 버전이 들어오는 것만 막는다.
 # 올릴 때는 이 파일을 고쳐 테스트 게이트(pytest tests/app)를 통과시킨 뒤 배포한다.
-# ⚠ python-jose 3.5.0 은 PYSEC-2026-4298(수정 버전 없음) — PyJWT 로 옮기는 별도 과제.
 # ⚠ pandas 상한 (2026-09-08). pyproject.toml 에도 같은 상한이 있지만 **이 파일이 먼저
 # 설치된다**(Dockerfile.prod: requirements → pyqlib 순서). yfinance·catboost 가 pandas 를
 # 끌어오므로 여기서 막지 않으면 3.x 가 먼저 깔리고 pyqlib 설치 때 다운그레이드에 기대게 된다.
@@ -20,4 +19,4 @@ catboost==1.2.10
 requests==2.34.2
 psycopg2-binary==2.9.13
 bcrypt==5.0.0
-python-jose[cryptography]==3.5.0
+PyJWT==2.15.1

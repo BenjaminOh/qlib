@@ -40,7 +40,8 @@ ACTIVE_INCLUDE=${ACTIVE_INCLUDE:-${WAF_CONF_DIR}/qlib-url.inc}
 # ─────────────────────────────────────────────────────────────
 # 1. Detect active slot via running container name
 # ─────────────────────────────────────────────────────────────
-IS_BLUE=$(docker ps --format "{{.Names}}" | grep -c "qlib_web_blue" || true)
+# 2026-11-12: 웹서비스 종료로 web 컨테이너가 없다 — 활성 색은 api 로 판별한다.
+IS_BLUE=$(docker ps --format "{{.Names}}" | grep -c "^qlib_api_blue$" || true)
 
 if [ "$IS_BLUE" -eq "1" ]; then
   TARGET_COLOR="green"; CURRENT_COLOR="blue"
@@ -113,10 +114,10 @@ mkdir -p /home/qlib/data/qlib /home/qlib/data/db /home/qlib/data/redis
 
 if [ -n "${IMAGE_TAG}" ] && [ "${IMAGE_TAG}" != "local" ]; then
   echo "📥 Registry에서 이미지 pull (IMAGE_TAG=${IMAGE_TAG})..."
-  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} pull api web
+  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} pull api
 else
-  echo "📦 Docker 이미지 병렬 빌드 중 (api + web)..."
-  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} build --parallel api web
+  echo "📦 Docker 이미지 빌드 중 (api)..."
+  docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} build api
 fi
 
 # ─────────────────────────────────────────────────────────────
@@ -151,9 +152,10 @@ docker rm -f qlib_redis 2>/dev/null || true
 docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} up -d redis
 
 # Critical: ONLY ONE scheduler may run at a time (Celery beat singleton).
-# Start api+worker+web in target slot, but defer scheduler until traffic flips.
-echo "🚀 컨테이너 실행 (api + worker + web)..."
-docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} up -d api worker web
+# Start api+worker in target slot, but defer scheduler until traffic flips.
+# 2026-11-12: web 은 띄우지 않는다(웹서비스 종료 — infra/nginx/qlib.tmanager.kr.conf 머리말).
+echo "🚀 컨테이너 실행 (api + worker)..."
+docker compose -p qlib-${TARGET_COLOR} -f docker-compose.prod.yml --env-file .env.${TARGET_COLOR} up -d api worker
 
 # ─────────────────────────────────────────────────────────────
 # 5. Health checks
@@ -174,21 +176,7 @@ if [ "$API_HEALTHY" = "false" ]; then
   exit 1
 fi
 
-echo "🏥 ${TARGET_COLOR} Web 헬스체크..."
-WEB_HEALTHY=false
-for i in {1..40}; do
-  HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${WEB_PORT}/ 2>/dev/null || true)
-  if [ "$HTTP" = "200" ] || [ "$HTTP" = "302" ] || [ "$HTTP" = "307" ]; then
-    echo "✅ Web healthy (HTTP $HTTP, attempt ${i})"
-    WEB_HEALTHY=true; break
-  fi
-  echo "  대기... ($i/40, HTTP $HTTP)"; sleep 2
-done
-if [ "$WEB_HEALTHY" = "false" ]; then
-  echo "❌ Web 헬스체크 실패. 컨테이너 로그:"
-  docker logs qlib_web_${TARGET_COLOR} --tail 50 2>&1 || true
-  exit 1
-fi
+# (2026-11-12) Web 헬스체크 제거 — 웹서비스 종료.
 
 # ─────────────────────────────────────────────────────────────
 # 6. nginx-waf traffic flip (current → target)

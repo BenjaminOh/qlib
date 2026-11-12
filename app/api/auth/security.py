@@ -13,7 +13,9 @@ from hashlib import sha256
 from typing import Any
 
 import bcrypt
-from jose import jwt
+# PyJWT(2026-11-12): python-jose 3.5.0 에 수정 버전 없는 취약점(PYSEC-2026-4298)과
+# 의존성 ecdsa 의 타이밍 부채널이 있어 옮겼다. qrunner 도 PyJWT 를 쓴다.
+import jwt
 
 from ..config import settings
 
@@ -47,5 +49,8 @@ def create_access_token(sub: str, expires_delta: timedelta | None = None) -> str
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    """Verify signature + expiry. Raises JWTError on any failure."""
+    """Verify signature + expiry. Raises jwt.InvalidTokenError on any failure.
+
+    algorithms 를 하나로 고정한다 — "none"·RS/HS 혼동 공격을 막는다.
+    """
     return jwt.decode(token, settings.jwt_secret, algorithms=[_ALGO])

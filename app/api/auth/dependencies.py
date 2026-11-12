@@ -1,7 +1,7 @@
 """FastAPI dependency: extract session cookie → decode JWT → load User."""
 
 from fastapi import Cookie, HTTPException, status
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 
 from ..config import settings
 from ..db import SessionLocal, User
