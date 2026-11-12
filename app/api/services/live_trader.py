@@ -1136,7 +1136,7 @@ def sync_account(client: KISClient | None = None,
                               PositionSnapshot.account_id == account_id)
                       .first())
         holdings_json = json.dumps([
-            {"code": h.code, "name": _stock_name(h.code),
+            {"code": h.code, "name": _resolve_name(h.code, h.name, db),
              "qty": h.qty, "avg": h.avg_price,
              "eval_price": h.eval_price, "eval_value": h.eval_value,
              "pnl": h.pnl, "pnl_pct": h.pnl_pct}
@@ -1217,6 +1217,52 @@ def sync_account(client: KISClient | None = None,
 # ─── Helpers ────────────────────────────────────────────────────────
 
 
+def _resolve_name(code: str, hint: str | None = None,
+                  db: Session | None = None) -> str:
+    """종목명. 못 찾으면 코드를 돌려준다.
+
+    `_stock_name` 의 고정 파일은 코스피200·코스닥150·ETF 뿐이라, 카페·냉각이 사는
+    코스닥 소형주는 이름 자리에 **코드**가 들어갔다(2026-11-12 coolreal 청산 알림
+    `051630 (051630)`, 매도 주문 행 name='051630'). 매수 행에는 스크리너가 넘긴
+    이름이 이미 있으므로, 그것과 카페 후보에서 찾는다.
+
+    순서: 호출자가 아는 이름(KIS prdt_name 등) → 고정 파일 → 같은 종목의 주문 행 →
+    카페 후보. 고정 파일을 DB 보다 먼저 보는 것은 대형주에서 DB 왕복을 아끼려는 것뿐이다.
+    """
+    if hint and hint != code:
+        return hint
+    name = _stock_name(code)
+    if name != code:
+        return name
+    try:
+        from ..db import CafeCandidate
+
+        def _lookup(s: Session) -> str | None:
+            row = (s.query(Order.name)
+                     .filter(Order.code == code, Order.name.isnot(None),
+                             Order.name != code)
+                     .order_by(Order.id.desc()).first())
+            if row:
+                return row[0]
+            row = (s.query(CafeCandidate.name)
+                     .filter(CafeCandidate.code == code,
+                             CafeCandidate.name.isnot(None),
+                             CafeCandidate.name != code)
+                     .order_by(CafeCandidate.trade_date.desc()).first())
+            return row[0] if row else None
+
+        if db is not None:
+            found = _lookup(db)
+        else:
+            with SessionLocal() as s:
+                found = _lookup(s)
+        if found:
+            return found
+    except Exception as exc:  # noqa: BLE001 — 이름 때문에 주문·알림이 멈추면 안 된다
+        log.warning("종목명 조회 실패 %s: %s", code, exc)
+    return code
+
+
 def _persist_order(db: Session, trade_date: date, code: str, side: str,
                    qty: int, price: float | None, res: OrderResult,
                    *, strategy: str = STRATEGY_OPEN,
@@ -1227,7 +1273,7 @@ def _persist_order(db: Session, trade_date: date, code: str, side: str,
         strategy=strategy,
         account_id=account_id,
         code=code,
-        name=_stock_name(code),
+        name=_resolve_name(code, db=db),
         side=side,
         qty=qty,
         price=price,
@@ -1730,7 +1776,7 @@ def evaluate_bracket_exits(trade_date: date | None = None,
                     status_s = _sell_bracket(db, day, h.code, qty_s, px_s, real_client,
                                              strategy=strategy, pnl=realised_s,
                                              reasons=reasons_s, order_date=order_date)
-                    exits.append({"code": h.code, "name": _stock_name(h.code),
+                    exits.append({"code": h.code, "name": _resolve_name(h.code, h.name, db),
                                   "status": status_s,
                                   "kind": kind_s, "qty": qty_s,
                                   "price": round(px_s, 2), "realised": round(realised_s),
@@ -1851,7 +1897,7 @@ def evaluate_bracket_exits(trade_date: date | None = None,
             status = _sell_bracket(db, day, h.code, sell_qty, px, real_client,
                                    strategy=strategy, pnl=realised,
                                    reasons=reasons, order_date=order_date)
-            exits.append({"code": h.code, "name": _stock_name(h.code),
+            exits.append({"code": h.code, "name": _resolve_name(h.code, h.name, db),
                           "status": status,
                           "kind": kind, "qty": sell_qty,
                           "price": round(px, 2), "realised": round(realised),
