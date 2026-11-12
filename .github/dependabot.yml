@@ -1,0 +1,17 @@
+# 2026-11-12 web-app-security-audit ai-era-threats §1 — 보안 업데이트는 즉시(저장소 설정), 버전 업은 주 1회 묶음.
+# 자동 병합 없음: 테스트 게이트 통과 후 사람이 병합한다.
+version: 2
+updates:
+  # upstream qlib(qlib/·examples/·scripts/)은 보지 않는다 — 운영하는 앱만.
+  - package-ecosystem: pip
+    directory: /app/api
+    schedule: { interval: weekly, day: monday, time: "07:00", timezone: Asia/Seoul }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch: { update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /app/frontend
+    schedule: { interval: weekly, day: monday, time: "07:00", timezone: Asia/Seoul }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch: { update-types: [minor, patch] }
