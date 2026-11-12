@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # (토큰·쿨다운·API 슬롯 redis 키는 이미 appkey 해시로 분리돼 있다.)
     kis_cafe_env: str = ""          # 비우면 kis_env 를 따름
     kis_cafe_app_key: str = ""
+    # 2026-11-12 사용자 결정: 모의 3개월 테스트 종료. open 전략(기본 계좌 실주문·잔고 동기화)을 끈다.
+    # 기본 계좌(옛 모의 50199531)가 해지돼 매일 09:00·09:30·15:40 에 계좌 거부 경고만 나가고 있었다.
+    # 시세 키는 그대로 쓴다(스크리너·시뮬). 실계좌 매매는 runner(qrunner)가 한다.
+    live_open_enabled: bool = True
     kis_cafe_app_secret: str = ""
     kis_cafe_account_no: str = ""   # "12345678-01" 형태
     kis_cafe_account_product: str = ""

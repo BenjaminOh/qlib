@@ -101,6 +101,9 @@ def live_orders_task(self) -> dict:
     """09:00 KST — open strategy: read today's Signal, submit KIS orders."""
     from ..services.live_trader import submit_daily_orders
     from ..services.notify import notify_open_orders
+    from ..config import settings
+    if not settings.live_open_enabled:
+        return {"status": "disabled", "strategy": "open", "reason": "open 전략 종료(QLIB_API_LIVE_OPEN_ENABLED=false)"}
     self.update_state(state="RUNNING")
     result = submit_daily_orders(strategy="open", simulated=False, late_open_guard=True)
     notify_open_orders(result)
@@ -149,7 +152,10 @@ def live_sync_task(self) -> dict:
     not idempotent (a retry after a partial run would double-buy); its
     failure modes are handled inside the token layer instead.
     """
+    from ..config import settings
     from ..services.live_trader import sync_account
+    if not settings.live_open_enabled:
+        return {"status": "disabled", "strategy": "open", "reason": "open 전략 종료(QLIB_API_LIVE_OPEN_ENABLED=false)"}
     self.update_state(state="RUNNING")
     return sync_account(strategy="open")
 
